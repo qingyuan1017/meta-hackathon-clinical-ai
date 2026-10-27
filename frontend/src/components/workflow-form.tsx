@@ -22,12 +22,12 @@ const formSchema = z.object({
 
 type FormValues = z.infer<typeof formSchema>;
 
-export function WorkflowForm({ workflow, enabled, onCreated }: { workflow: Workflow; enabled: boolean; onCreated: (job: Job) => void }) {
+export function WorkflowForm({ workflow, enabled, onCreated, discipline = "biostats" }: { workflow: Workflow; enabled: boolean; onCreated: (job: Job) => void; discipline?: string }) {
   const definition = workflowById[workflow];
   const [files, setFiles] = useState<File[]>([]);
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { studyBrief: "", documentType: "protocol-synopsis", generateR: true, generateSas: true, acknowledged: false },
+    defaultValues: { studyBrief: "", documentType: discipline === "data-management" ? "data-management-plan" : "protocol-synopsis", generateR: true, generateSas: true, acknowledged: false },
   });
   const values = form.watch();
   const mutation = useMutation({

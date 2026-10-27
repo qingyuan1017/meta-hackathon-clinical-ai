@@ -1,21 +1,26 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, Server } from "lucide-react";
+import { AlertTriangle, CheckCircle2, LoaderCircle, Server, Unplug } from "lucide-react";
 import { api } from "@/lib/api";
 
-export function ConfigStatus({ compact = false }: { compact?: boolean }) {
+export function ConfigStatus({ compact = false, tone = "light" }: { compact?: boolean; tone?: "light" | "dark" }) {
   const query = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 30_000 });
-  const configured = query.data?.meta_configured;
+  const configured = query.data?.meta_configured === true;
+  const loading = query.isPending;
+  const failed = query.isError;
+  const title = loading ? "Checking Meta configuration" : failed ? "Backend connection unavailable" : configured ? "Meta generation is ready" : "Meta configuration required";
+  const Icon = loading ? LoaderCircle : failed ? Unplug : configured ? CheckCircle2 : AlertTriangle;
+  const dark = tone === "dark";
   return (
-    <div className={`rounded-xl border p-4 ${configured ? "border-emerald-200 bg-emerald-50/70" : "border-amber-200 bg-amber-50/80"}`}>
+    <div className={`rounded-xl border p-4 ${dark ? "border-white/10 bg-white/[0.04]" : configured ? "border-emerald-200 bg-emerald-50/70" : failed ? "border-rose-200 bg-rose-50" : "border-amber-200 bg-amber-50/80"}`}>
       <div className="flex items-start gap-3">
-        {configured ? <CheckCircle2 className="mt-0.5 text-emerald-700" size={19} /> : <AlertTriangle className="mt-0.5 text-amber-700" size={19} />}
+        <Icon className={`mt-0.5 ${loading ? "animate-spin" : ""} ${configured ? "text-emerald-500" : failed ? "text-rose-500" : "text-amber-500"}`} size={18} />
         <div className="min-w-0">
-          <p className="text-sm font-extrabold text-ink">{configured ? "Meta generation is ready" : "Meta configuration required"}</p>
+          <p className={`text-xs font-bold ${dark ? "text-zinc-200" : "text-ink"}`}>{title}</p>
           {!compact && (
-            <p className="mt-1 text-xs leading-5 text-slate-600">
-              {configured
+            <p className={`mt-1 text-xs leading-5 ${dark ? "text-zinc-500" : "text-slate-600"}`}>
+              {loading ? "Reading the API service status…" : failed ? "The browser could not reach the API health endpoint." : configured
                 ? <><Server className="mr-1 inline" size={13} /> Model: {query.data?.meta_model}</>
                 : "Set META_API_KEY and META_MODEL on the API service. Generation is disabled until both are present."}
             </p>

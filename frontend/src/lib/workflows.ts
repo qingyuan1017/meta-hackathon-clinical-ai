@@ -1,4 +1,4 @@
-import { Braces, FileOutput, Files, LayoutDashboard, TableProperties, type LucideIcon } from "lucide-react";
+import { Braces, ClipboardList, FileOutput, Files, LayoutDashboard, TableProperties, type LucideIcon } from "lucide-react";
 import type { Workflow } from "./types";
 
 export interface WorkflowDefinition {
@@ -66,6 +66,33 @@ export const workflows: WorkflowDefinition[] = [
 ];
 
 export const workflowById = Object.fromEntries(workflows.map((item) => [item.id, item])) as Record<Workflow, WorkflowDefinition>;
+
+export const workspaceGroups = [
+  {
+    id: "biostats",
+    title: "Biostats",
+    items: [
+      { label: "Protocol extraction", href: "/workflows/protocol-extraction", pathname: "/workflows/protocol-extraction", discipline: "biostats", icon: Braces },
+      { label: "Document generation", href: "/workflows/clinical-document?discipline=biostats", pathname: "/workflows/clinical-document", discipline: "biostats", icon: FileOutput },
+    ],
+  },
+  {
+    id: "data-management",
+    title: "Data management",
+    items: [
+      { label: "EDC design", href: "/workflows/edc-design", pathname: "/workflows/edc-design", discipline: "data-management", icon: LayoutDashboard },
+      { label: "Document generation", href: "/workflows/clinical-document?discipline=data-management", pathname: "/workflows/clinical-document", discipline: "data-management", icon: ClipboardList },
+    ],
+  },
+  {
+    id: "stats-programming",
+    title: "Stats programming",
+    items: [
+      { label: "SDTM", href: "/workflows/sdtm", pathname: "/workflows/sdtm", discipline: "stats-programming", icon: Files },
+      { label: "TLF", href: "/workflows/tlf", pathname: "/workflows/tlf", discipline: "stats-programming", icon: TableProperties },
+    ],
+  },
+] as const;
 
 export const documentTypes = [
   ["protocol-synopsis", "Protocol Synopsis"],
