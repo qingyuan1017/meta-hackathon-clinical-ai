@@ -13,6 +13,20 @@ services:
       - "127.0.0.1:8001:8001"
     restart: unless-stopped
 
+  clinicalgov-mcp:
+    build:
+      context: ./clinicalgov-mcp
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CLINICALGOV_MCP_TRANSPORT: streamable-http
+      CLINICALGOV_MCP_HOST: 0.0.0.0
+      CLINICALGOV_MCP_PORT: 8003
+    ports:
+      - "127.0.0.1:8003:8003"
+    restart: unless-stopped
+
   api:
     build:
       context: ./backend
@@ -22,10 +36,14 @@ services:
     environment:
       DATA_DIR: /data
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      CLINICALGOV_MCP_URL: http://clinicalgov-mcp:8003/mcp
     ports:
       - "8000:8000"
     volumes:
       - clinical-ai-data:/data
+    depends_on:
+      clinicalgov-mcp:
+        condition: service_healthy
     restart: unless-stopped
 
   workbench-mcp:

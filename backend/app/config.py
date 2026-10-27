@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     meta_api_key: str = ""
     meta_api_base_url: str = "https://api.llama.com/compat/v1/"
     meta_model: str = ""
+    clinicalgov_mcp_enabled: bool = True
+    clinicalgov_mcp_url: str = "http://127.0.0.1:8003/mcp"
+    clinicalgov_max_tool_rounds: int = 3
     max_file_mb: int = 25
     max_pdf_pages: int = 200
     ai_timeout_seconds: int = 180

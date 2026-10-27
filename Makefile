@@ -6,6 +6,7 @@ dev:
 test:
 	cd backend && pytest
 	cd cdisc-mcp && pytest
+	cd clinicalgov-mcp && pytest
 	cd workbench-mcp && pytest
 	cd frontend && npm test
 

@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clinical-ai-clinicalgov-mcp"
+version = "0.1.0"
+description = "Standalone read-only ClinicalTrials.gov MCP service"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "httpx>=0.27,<1",
+  "mcp>=2,<3",
+  "pydantic-settings>=2.6,<3",
+]
+
+[project.scripts]
+clinicalgov-mcp = "clinicalgov_mcp.server:main"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+]
+
+[tool.setuptools.packages.find]
+include = ["clinicalgov_mcp*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
