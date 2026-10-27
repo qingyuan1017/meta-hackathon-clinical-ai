@@ -35,7 +35,11 @@ include = ["app*"]
 
 [tool.setuptools.package-data]
 "app.agents" = ["*.md"]
-"app.agents.*" = ["*.md"]
+"app.agents.protocol_extraction" = ["*.md"]
+"app.agents.clinical_document" = ["*.md"]
+"app.agents.edc_design" = ["*.md"]
+"app.agents.sdtm" = ["*.md"]
+"app.agents.tlf" = ["*.md"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
