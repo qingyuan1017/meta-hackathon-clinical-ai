@@ -46,15 +46,15 @@ function WorkspaceNavigation({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function Brand({ onDark = true }: { onDark?: boolean }) {
+function Brand() {
   return (
     <Link href="/" className="focus-ring flex items-center gap-3 rounded-lg" aria-label="Clinical AI Workbench home">
       <span className="grid h-9 w-9 place-items-center rounded-lg bg-gradient-to-br from-clinical-500 to-violet-400 text-white shadow-lg shadow-violet-950/30">
         <FlaskConical size={18} aria-hidden="true" />
       </span>
       <span>
-        <span className={`block text-sm font-semibold tracking-tight ${onDark ? "text-white" : "text-zinc-950"}`}>Clinical AI</span>
-        <span className={`block text-[10px] font-semibold uppercase tracking-[0.15em] ${onDark ? "text-zinc-500" : "text-zinc-500"}`}>Artifact workbench</span>
+        <span className="block text-sm font-semibold tracking-tight text-white">Clinical AI</span>
+        <span className="block text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-500">Artifact workbench</span>
       </span>
     </Link>
   );
@@ -79,13 +79,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </aside>
 
       <div className="min-w-0">
-        <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-zinc-200 bg-white/90 px-4 backdrop-blur-xl lg:px-8">
-          <div className="lg:hidden"><Brand onDark={false} /></div>
-          <div className="hidden items-center gap-2 text-sm text-zinc-500 lg:flex">
+        <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-white/10 bg-[#111113]/90 px-4 backdrop-blur-xl lg:px-8">
+          <div className="lg:hidden"><Brand /></div>
+          <div className="hidden items-center gap-2 text-sm text-zinc-400 lg:flex">
             <PanelLeftClose size={16} />
             <span>Clinical development workspace</span>
           </div>
-          <div className="hidden items-center gap-2 text-xs font-medium text-zinc-500 sm:flex">
+          <div className="hidden items-center gap-2 text-xs font-medium text-zinc-400 sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
             Local artifact environment
           </div>
@@ -94,7 +94,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             aria-label={mobileOpen ? "Close navigation" : "Open navigation"}
             aria-expanded={mobileOpen}
             onClick={() => setMobileOpen((value) => !value)}
-            className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-zinc-200 text-zinc-700 lg:hidden"
+            className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-zinc-200 lg:hidden"
           >
             {mobileOpen ? <X size={18} /> : <Menu size={18} />}
           </button>
@@ -111,7 +111,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         )}
 
         <main>{children}</main>
-        <footer className="border-t border-zinc-200 bg-white px-5 py-6 text-xs leading-5 text-zinc-500 lg:px-8">
+        <footer className="border-t border-white/10 bg-[#111113] px-5 py-6 text-xs leading-5 text-zinc-500 lg:px-8">
           Draft outputs are not validated for clinical or regulatory use. Qualified experts must review all content.
         </footer>
       </div>

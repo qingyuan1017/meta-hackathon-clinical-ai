@@ -20,20 +20,20 @@ const summaryCards = [
 export default function HomePage() {
   return (
     <div className="mx-auto max-w-[1440px] px-5 py-8 lg:px-10 lg:py-10">
-      <section className="flex flex-col justify-between gap-6 border-b border-zinc-200 pb-8 xl:flex-row xl:items-end">
+      <section className="flex flex-col justify-between gap-6 border-b border-white/10 pb-8 xl:flex-row xl:items-end">
         <div>
           <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-clinical-700"><Sparkles size={14} /> Clinical AI workspace</p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-zinc-950 sm:text-4xl">Build reviewable clinical artifacts.</h1>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-600">Choose a functional area to run a specialist agent, review its structured result, and export deterministic draft artifacts.</p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-white sm:text-4xl">Build reviewable clinical artifacts.</h1>
+          <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">Choose a functional area to run a specialist agent, review its structured result, and export deterministic draft artifacts.</p>
         </div>
         <div className="w-full xl:w-[340px]"><ConfigStatus /></div>
       </section>
 
       <section className="mt-8 grid gap-3 sm:grid-cols-3" aria-label="Workspace summary">
         {summaryCards.map(({ icon: Icon, value, label }) => (
-          <div key={label} className="flex items-center gap-4 rounded-xl border border-zinc-200 bg-white px-5 py-4 shadow-sm">
-            <span className="grid h-9 w-9 place-items-center rounded-lg bg-clinical-50 text-clinical-700"><Icon size={17} /></span>
-            <div><p className="text-sm font-semibold text-zinc-950">{value}</p><p className="text-xs text-zinc-500">{label}</p></div>
+          <div key={label} className="flex items-center gap-4 rounded-xl border border-white/10 bg-white/[0.035] px-5 py-4 shadow-sm">
+            <span className="grid h-9 w-9 place-items-center rounded-lg bg-clinical-500/15 text-violet-300"><Icon size={17} /></span>
+            <div><p className="text-sm font-semibold text-zinc-100">{value}</p><p className="text-xs text-zinc-500">{label}</p></div>
           </div>
         ))}
       </section>
@@ -41,22 +41,22 @@ export default function HomePage() {
       <section className="mt-10" aria-labelledby="workspaces-heading">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Functional areas</p>
-          <h2 id="workspaces-heading" className="mt-1 text-xl font-semibold tracking-tight text-zinc-950">Clinical development workbenches</h2>
+          <h2 id="workspaces-heading" className="mt-1 text-xl font-semibold tracking-tight text-zinc-100">Clinical development workbenches</h2>
         </div>
         <div className="mt-5 grid gap-4 xl:grid-cols-3">
           {workspaceGroups.map((group, groupIndex) => (
-            <div key={group.id} className="overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-sm">
-              <div className="border-b border-zinc-100 px-5 py-5">
+            <div key={group.id} className="overflow-hidden rounded-xl border border-white/10 bg-[#18181b] shadow-sm">
+              <div className="border-b border-white/[0.08] px-5 py-5">
                 <div className="flex items-center justify-between"><span className="text-xs font-semibold text-clinical-700">0{groupIndex + 1}</span><span className="h-2 w-2 rounded-full bg-clinical-500" /></div>
-                <h3 className="mt-5 text-lg font-semibold text-zinc-950">{group.title}</h3>
-                <p className="mt-2 min-h-10 text-sm leading-5 text-zinc-500">{groupCopy[group.id]}</p>
+                <h3 className="mt-5 text-lg font-semibold text-zinc-100">{group.title}</h3>
+                <p className="mt-2 min-h-10 text-sm leading-5 text-zinc-400">{groupCopy[group.id]}</p>
               </div>
               <div className="p-2">
                 {group.items.map((item) => {
                   const Icon = item.icon;
                   return (
-                    <Link key={item.label} href={item.href} className="focus-ring group flex items-center justify-between rounded-lg px-3 py-3 transition hover:bg-zinc-50">
-                      <span className="flex items-center gap-3 text-sm font-medium text-zinc-800"><span className="grid h-8 w-8 place-items-center rounded-md border border-zinc-200 bg-white text-zinc-500"><Icon size={15} /></span>{item.label}</span>
+                    <Link key={item.label} href={item.href} className="focus-ring group flex items-center justify-between rounded-lg px-3 py-3 transition hover:bg-white/[0.05]">
+                      <span className="flex items-center gap-3 text-sm font-medium text-zinc-200"><span className="grid h-8 w-8 place-items-center rounded-md border border-white/10 bg-white/[0.03] text-zinc-400"><Icon size={15} /></span>{item.label}</span>
                       <ArrowUpRight size={15} className="text-zinc-400 transition group-hover:text-clinical-600" />
                     </Link>
                   );
@@ -69,7 +69,7 @@ export default function HomePage() {
 
       <div className="mt-10 grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <RecentJobs />
-        <section className="rounded-xl border border-zinc-200 bg-[#161618] p-5 text-white shadow-sm" aria-labelledby="samples-heading">
+        <section className="rounded-xl border border-white/10 bg-[#18181b] p-5 text-white shadow-sm" aria-labelledby="samples-heading">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-300">Safe starting points</p>
           <h2 id="samples-heading" className="mt-2 text-lg font-semibold">Synthetic sample inputs</h2>
           <p className="mt-2 text-sm leading-5 text-zinc-400">Fictional files for exercising every workflow without sensitive data.</p>
