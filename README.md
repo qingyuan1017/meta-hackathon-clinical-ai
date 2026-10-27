@@ -33,7 +33,7 @@ This keeps agent-driven skill runs and direct user/API work on the same schemas 
    docker compose up --build
    ```
 
-3. Open http://localhost:3000. The API and interactive OpenAPI documentation are available at http://localhost:8000/docs. MCP endpoints are available at `http://localhost:8001/mcp` for CDISC Library, `http://localhost:8002/mcp` for the workbench, and `http://localhost:8003/mcp` for ClinicalTrials.gov. Synthetic inputs, including a generated blank CRF PDF, are downloadable from the dashboard. If port 3000 is already occupied, set another free port such as `WEB_PORT=3300` before starting Compose.
+3. Open http://localhost:3000. The API and interactive OpenAPI documentation are available at http://localhost:8000/docs. MCP endpoints are available at `http://localhost:8001/mcp` for CDISC Library, `http://localhost:8002/mcp` for the workbench, `http://localhost:8003/mcp` for ClinicalTrials.gov, and `http://localhost:8765/mcp` for openFDA. Synthetic inputs, including a generated blank CRF PDF, are downloadable from the dashboard. If port 3000 is already occupied, set another free port such as `WEB_PORT=3300` before starting Compose.
 
 Generated files and SQLite history are kept in the `clinical-ai-data` Docker volume until a job is deleted.
 
@@ -73,6 +73,9 @@ The frontend defaults to `http://localhost:8000`; override it with `NEXT_PUBLIC_
 | `CLINICALGOV_MCP_ENABLED` | Allow Meta generation to use the separate ClinicalTrials.gov MCP service |
 | `CLINICALGOV_MCP_URL` | Backend connection URL; defaults to `http://127.0.0.1:8003/mcp` |
 | `CLINICALGOV_MAX_TOOL_ROUNDS` | Maximum registry tool-call rounds per model completion; defaults to 3 |
+| `OPENFDA_MCP_ENABLED` | Allow Meta generation to query the read-only openFDA MCP service |
+| `OPENFDA_MCP_URL` | Backend connection URL; defaults to `http://127.0.0.1:8765/mcp` |
+| `OPENFDA_MAX_TOOL_ROUNDS` | Maximum openFDA tool-call rounds per model completion; defaults to 3 |
 | `FRONTEND_ORIGIN` | Allowed browser origin |
 | `MAX_FILE_MB` / `MAX_PDF_PAGES` | Upload safety limits |
 
@@ -159,6 +162,24 @@ docker compose up --build clinicalgov-mcp
 
 When enabled, the model may derive study-search terms from submitted source material and send them to the public ClinicalTrials.gov API. The UI acknowledgement discloses this behavior; keep confidential identifiers out of inputs as well as PHI.
 
+## openFDA MCP server
+
+`openfda_mcp` is a standalone, read-only service for public FDA drug, device, food,
+cosmetic, tobacco, and animal/veterinary datasets. Docker Compose exposes it locally
+at `http://localhost:8765/mcp` and gives the API container the internal URL
+`http://openfda-mcp:8000/mcp`. The Meta model can discover datasets, search records,
+perform exact lookups, and aggregate field values through its five allowlisted tools.
+
+Set `OPENFDA_API_KEY` in the root `.env` for regular use, then start the service:
+
+```powershell
+docker compose up --build -d openfda-mcp
+```
+
+See [`openfda_mcp/README.md`](openfda_mcp/README.md) for tool, security, and local
+development details. openFDA data is untrusted reference material, not medical
+advice; adverse-event counts do not establish causality, incidence, or risk.
+
 ## Workbench MCP server and direct editing API
 
 The standalone `workbench-mcp` package presents the five registered use cases to MCP clients. Its tools discover contracts, submit synthetic/de-identified text jobs, poll history, and apply complete structured-result revisions. PDF, DOCX, and XLSX submissions remain on the web UI or multipart API so the MCP service never receives host file paths.
@@ -187,6 +208,9 @@ pytest
 
 cd ..\clinicalgov-mcp
 pytest
+
+cd ..\openfda_mcp
+uv run pytest
 ```
 
 Set `RUN_META_INTEGRATION=1` to opt into the live API smoke test. Normal automated tests use an injected test double that is not available in the running application.

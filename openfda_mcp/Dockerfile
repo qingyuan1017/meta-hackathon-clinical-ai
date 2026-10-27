@@ -7,7 +7,7 @@ FROM python:3.13-slim AS builder
 COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /app
 
-COPY pyproject.toml uv.lock README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md ./
 COPY openfda_mcp ./openfda_mcp
 
 RUN uv sync --frozen --no-dev --no-editable

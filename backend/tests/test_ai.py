@@ -1,6 +1,7 @@
-import pytest
+import json
 from types import SimpleNamespace
 
+import pytest
 from app.ai import MetaAIClient
 from app.config import Settings
 
@@ -15,7 +16,7 @@ def test_decode_json_rejects_array() -> None:
 
 
 async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch) -> None:
-    tools = [
+    clinicalgov_tools = [
         SimpleNamespace(
             name=name,
             description=f"Description for {name}",
@@ -28,10 +29,28 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
             "clinicalgov_read_endpoint",
         )
     ]
+    openfda_tools = [
+        SimpleNamespace(
+            name=name,
+            description=f"Description for {name}",
+            input_schema={"type": "object", "properties": {}},
+        )
+        for name in (
+            "list_openfda_endpoints",
+            "describe_openfda_endpoint",
+            "search_openfda",
+            "lookup_openfda",
+            "count_openfda",
+        )
+    ]
 
     class FakeMCPClient:
         def __init__(self, url: str):
-            assert url == "http://clinicalgov.test/mcp"
+            assert url in {
+                "http://clinicalgov.test/mcp",
+                "http://openfda.test/mcp",
+            }
+            self.url = url
 
         async def __aenter__(self):
             return self
@@ -40,9 +59,15 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
             return None
 
         async def list_tools(self):
+            tools = (
+                clinicalgov_tools
+                if self.url == "http://clinicalgov.test/mcp"
+                else openfda_tools
+            )
             return SimpleNamespace(tools=tools)
 
         async def call_tool(self, name: str, arguments: dict):
+            assert self.url == "http://clinicalgov.test/mcp"
             assert name == "clinicalgov_search_studies"
             assert arguments == {"condition": "asthma", "page_size": 1}
             return SimpleNamespace(
@@ -116,6 +141,8 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
         meta_model="test-model",
         clinicalgov_mcp_enabled=True,
         clinicalgov_mcp_url="http://clinicalgov.test/mcp",
+        openfda_mcp_enabled=True,
+        openfda_mcp_url="http://openfda.test/mcp",
     )
     ai = MetaAIClient(settings)
     ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
@@ -128,8 +155,49 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
         "clinicalgov_search_studies",
         "clinicalgov_get_study",
         "clinicalgov_get_api_info",
+        "list_openfda_endpoints",
+        "describe_openfda_endpoint",
+        "search_openfda",
+        "lookup_openfda",
+        "count_openfda",
     }
     tool_messages = [
         message for message in completions.calls[1]["messages"] if message["role"] == "tool"
     ]
     assert "NCT01234567" in tool_messages[0]["content"]
+
+
+async def test_meta_client_routes_openfda_tool_to_its_mcp_client() -> None:
+    class FakeOpenFDAClient:
+        async def call_tool(self, name: str, arguments: dict):
+            assert name == "lookup_openfda"
+            assert arguments == {
+                "endpoint": "drug/ndc",
+                "field": "brand_name.exact",
+                "value": "Lipitor",
+            }
+            return SimpleNamespace(
+                is_error=False,
+                structured_content={"results": [{"brand_name": "Lipitor"}]},
+                content=[],
+            )
+
+    tool_call = SimpleNamespace(
+        function=SimpleNamespace(
+            name="lookup_openfda",
+            arguments=(
+                '{"endpoint":"drug/ndc","field":"brand_name.exact",'
+                '"value":"Lipitor"}'
+            ),
+        )
+    )
+
+    payload = await MetaAIClient._call_mcp_tool(
+        {"lookup_openfda": FakeOpenFDAClient()},  # type: ignore[dict-item]
+        tool_call,
+    )
+
+    assert json.loads(payload) == {
+        "ok": True,
+        "result": {"results": [{"brand_name": "Lipitor"}]},
+    }

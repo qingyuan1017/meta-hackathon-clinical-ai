@@ -27,6 +27,19 @@ services:
       - "127.0.0.1:8003:8003"
     restart: unless-stopped
 
+  openfda-mcp:
+    build:
+      context: ./openfda_mcp
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      OPENFDA_MCP_ALLOWED_HOSTS: >-
+        openfda-mcp:8000,localhost:${OPENFDA_MCP_PORT:-8765},127.0.0.1:${OPENFDA_MCP_PORT:-8765}
+    ports:
+      - "127.0.0.1:${OPENFDA_MCP_PORT:-8765}:8000"
+    restart: unless-stopped
+
   api:
     build:
       context: ./backend
@@ -37,12 +50,15 @@ services:
       DATA_DIR: /data
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
       CLINICALGOV_MCP_URL: http://clinicalgov-mcp:8003/mcp
+      OPENFDA_MCP_URL: http://openfda-mcp:8000/mcp
     ports:
       - "8000:8000"
     volumes:
       - clinical-ai-data:/data
     depends_on:
       clinicalgov-mcp:
+        condition: service_healthy
+      openfda-mcp:
         condition: service_healthy
     restart: unless-stopped
 
