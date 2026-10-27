@@ -56,7 +56,51 @@ def test_use_case_registry_is_exposed() -> None:
     }
     protocol = next(item for item in definitions if item["id"] == "protocol-extraction")
     assert protocol["skill_name"] == "clinical-protocol-extraction"
+    assert protocol["agent_id"] == "clinical-protocol-extraction-agent"
     assert "properties" in protocol["result_schema"]
+
+
+def test_agent_registry_is_exposed() -> None:
+    with TestClient(app) as client:
+        response = client.get("/api/v1/agents")
+    assert response.status_code == 200
+    agents = response.json()
+    assert {item["workflow"] for item in agents} == {
+        "protocol-extraction",
+        "clinical-document",
+        "edc-design",
+        "sdtm",
+        "tlf",
+    }
+    assert all("submit_result" in item["tools"] for item in agents)
+
+
+def test_queued_job_has_safe_agent_progress_summary() -> None:
+    with TestClient(app) as client:
+        with SessionLocal() as session:
+            job = Job(
+                workflow="protocol-extraction",
+                title="Agent progress",
+                status="queued",
+                options_json='{"deidentified_acknowledged": true}',
+                input_files_json='[]',
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+        try:
+            response = client.get(f"/api/v1/jobs/{job_id}/agent")
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["agent_id"] == "clinical-protocol-extraction-agent"
+            assert payload["status"] == "queued"
+            assert payload["events"] == []
+        finally:
+            with SessionLocal() as session:
+                stored = session.get(Job, job_id)
+                if stored:
+                    session.delete(stored)
+                    session.commit()
 
 
 def test_completed_result_can_be_revised_and_rerendered() -> None:

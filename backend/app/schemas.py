@@ -191,6 +191,8 @@ class UseCaseRead(BaseModel):
     title: str
     description: str
     skill_name: str
+    agent_id: str
+    agent_name: str
     accepted_extensions: list[str]
     required_inputs: list[str]
     output_formats: list[str]
@@ -198,6 +200,34 @@ class UseCaseRead(BaseModel):
     supports_languages: bool
     supports_result_editing: bool
     result_schema: dict[str, Any]
+
+
+class AgentRead(BaseModel):
+    id: str
+    workflow: str
+    name: str
+    description: str
+    tools: list[str]
+    max_turns: int
+
+
+class AgentEventRead(BaseModel):
+    turn: int
+    type: str
+    name: str | None = None
+    ok: bool | None = None
+    error: str | None = None
+
+
+class AgentProgressRead(BaseModel):
+    agent_id: str
+    workflow: str
+    status: str
+    turn: int
+    max_turns: int
+    total_source_chunks: int
+    read_source_chunks: list[int]
+    events: list[AgentEventRead]
 
 
 class HealthRead(BaseModel):

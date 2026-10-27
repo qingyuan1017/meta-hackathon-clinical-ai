@@ -13,13 +13,14 @@ from reportlab.pdfgen import canvas
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .agents import AGENTS, get_agent
 from .artifacts import artifact_record
 from .config import get_settings
 from .db import get_db, initialize_database
 from .jobs import runner
 from .models import Artifact, Job
 from .parsers import parse_source
-from .schemas import DISCLAIMER, ArtifactRead, HealthRead, JobList, JobRead, JobResultUpdate, UseCaseRead
+from .schemas import AgentEventRead, AgentProgressRead, AgentRead, DISCLAIMER, ArtifactRead, HealthRead, JobList, JobRead, JobResultUpdate, UseCaseRead
 from .security import detect_identifiers, validate_upload_metadata, verify_signature
 from .use_cases import USE_CASES, get_use_case
 from .workflows import DOCUMENT_TYPES, WORKFLOWS, WorkflowService
@@ -83,6 +84,25 @@ def read_use_case(use_case_id: str) -> UseCaseRead:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Use case not found.") from exc
     return UseCaseRead.model_validate(use_case.public_definition())
+
+
+@app.get(f"{settings.api_prefix}/agents", response_model=list[AgentRead])
+def list_agents() -> list[AgentRead]:
+    """List the five tool-driven agents that execute the registered use cases."""
+
+    return [
+        AgentRead.model_validate(agent.public_definition(settings.agent_max_turns))
+        for agent in AGENTS.values()
+    ]
+
+
+@app.get(f"{settings.api_prefix}/agents/{{workflow}}", response_model=AgentRead)
+def read_agent(workflow: str) -> AgentRead:
+    try:
+        agent = get_agent(workflow)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Agent not found.") from exc
+    return AgentRead.model_validate(agent.public_definition(settings.agent_max_turns))
 
 
 @app.get(f"{settings.api_prefix}/samples/{{sample_name}}")
@@ -202,6 +222,53 @@ def get_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     return _job_read(job)
+
+
+@app.get(f"{settings.api_prefix}/jobs/{{job_id}}/agent", response_model=AgentProgressRead)
+def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentProgressRead:
+    """Return a source-free summary of the specialist agent's persisted tool trace."""
+
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    definition = get_agent(job.workflow)
+    path = settings.jobs_dir / job.id / "agent" / "progress.json"
+    if not path.is_file():
+        return AgentProgressRead(
+            agent_id=definition.id,
+            workflow=job.workflow,
+            status=job.status,
+            turn=0,
+            max_turns=settings.agent_max_turns,
+            total_source_chunks=0,
+            read_source_chunks=[],
+            events=[],
+        )
+    try:
+        progress = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail="The saved agent trace is unavailable.") from exc
+    events = [
+        AgentEventRead(
+            turn=int(event.get("turn", 0)),
+            type=str(event.get("type", "unknown")),
+            name=str(event["name"]) if event.get("name") else None,
+            ok=event.get("ok") if isinstance(event.get("ok"), bool) else None,
+            error=str(event["error"])[:500] if event.get("error") else None,
+        )
+        for event in progress.get("events", [])
+        if isinstance(event, dict)
+    ]
+    return AgentProgressRead(
+        agent_id=definition.id,
+        workflow=job.workflow,
+        status=str(progress.get("status", job.status)),
+        turn=int(progress.get("turn", 0)),
+        max_turns=int(progress.get("max_turns", settings.agent_max_turns)),
+        total_source_chunks=int(progress.get("total_source_chunks", 0)),
+        read_source_chunks=[int(item) for item in progress.get("read_source_chunks", [])],
+        events=events,
+    )
 
 
 @app.post(f"{settings.api_prefix}/jobs/{{job_id}}/retry", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)

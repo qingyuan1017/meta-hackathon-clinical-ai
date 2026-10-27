@@ -46,6 +46,20 @@ async def workbench_get_use_case(use_case: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def workbench_list_agents() -> list[dict[str, Any]]:
+    """List the five backend agents, their workflows, bounded tools, and turn limits."""
+
+    return await _client().request("GET", "/agents")
+
+
+@mcp.tool()
+async def workbench_get_agent(use_case: str) -> dict[str, Any]:
+    """Get the agent contract that executes one use case."""
+
+    return await _client().request("GET", f"/agents/{use_case}")
+
+
+@mcp.tool()
 async def workbench_submit_text_job(
     use_case: str,
     inputs: list[TextInput],
@@ -77,6 +91,13 @@ async def workbench_get_job(job_id: str) -> dict[str, Any]:
     """Read job status, structured result, warnings, and artifact metadata."""
 
     return await _client().request("GET", f"/jobs/{job_id}")
+
+
+@mcp.tool()
+async def workbench_get_agent_progress(job_id: str) -> dict[str, Any]:
+    """Read a source-free summary of agent turns, tool outcomes, and source coverage."""
+
+    return await _client().request("GET", f"/jobs/{job_id}/agent")
 
 
 @mcp.tool()
