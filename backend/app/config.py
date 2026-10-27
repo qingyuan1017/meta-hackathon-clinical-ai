@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     frontend_origin: str = "http://localhost:3000"
     meta_api_key: str = ""
-    meta_api_base_url: str = "https://api.llama.com/compat/v1/"
+    meta_api_base_url: str = "https://api.meta.ai/v1"
     meta_model: str = ""
     clinicalgov_mcp_enabled: bool = True
     clinicalgov_mcp_url: str = "http://127.0.0.1:8003/mcp"

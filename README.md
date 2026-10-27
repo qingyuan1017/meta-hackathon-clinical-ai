@@ -68,7 +68,7 @@ The frontend defaults to `http://localhost:8000`; override it with `NEXT_PUBLIC_
 | Variable | Purpose |
 | --- | --- |
 | `META_API_KEY` | Server-side Meta API credential |
-| `META_API_BASE_URL` | OpenAI-compatible endpoint; defaults to `https://api.llama.com/compat/v1/` |
+| `META_API_BASE_URL` | OpenAI-compatible Meta Model API endpoint; defaults to `https://api.meta.ai/v1` |
 | `META_MODEL` | Exact model ID enabled for the account |
 | `CLINICALGOV_MCP_ENABLED` | Allow Meta generation to use the separate ClinicalTrials.gov MCP service |
 | `CLINICALGOV_MCP_URL` | Backend connection URL; defaults to `http://127.0.0.1:8003/mcp` |
