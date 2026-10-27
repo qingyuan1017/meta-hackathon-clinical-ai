@@ -54,6 +54,20 @@ services:
       - "127.0.0.1:8004:8004"
     restart: unless-stopped
 
+  pubmed-mcp:
+    build:
+      context: ./pubmed-mcp
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PUBMED_MCP_TRANSPORT: streamable-http
+      PUBMED_MCP_HOST: 0.0.0.0
+      PUBMED_MCP_PORT: 8005
+    ports:
+      - "127.0.0.1:8005:8005"
+    restart: unless-stopped
+
   api:
     build:
       context: ./backend
@@ -66,6 +80,7 @@ services:
       CLINICALGOV_MCP_URL: http://clinicalgov-mcp:8003/mcp
       OPENFDA_MCP_URL: http://openfda-mcp:8000/mcp
       BIOPORTAL_MCP_URL: http://bioportal-mcp:8004/mcp
+      PUBMED_MCP_URL: http://pubmed-mcp:8005/mcp
     ports:
       - "8000:8000"
     volumes:
@@ -76,6 +91,8 @@ services:
       openfda-mcp:
         condition: service_healthy
       bioportal-mcp:
+        condition: service_healthy
+      pubmed-mcp:
         condition: service_healthy
     restart: unless-stopped
 

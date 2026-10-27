@@ -68,7 +68,7 @@ export function WorkflowForm({ workflow, enabled, onCreated }: { workflow: Workf
           )}
           <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
             <input type="checkbox" className="mt-1 h-4 w-4 accent-amber-700" {...form.register("acknowledged")} />
-            <span><span className="flex items-center gap-1.5 font-extrabold"><ShieldCheck size={16} /> Synthetic/de-identified data only</span>I confirm these files contain no PHI or directly identifying patient data and may be sent to the configured Meta endpoint. When the ClinicalTrials.gov MCP is enabled, the model may also send derived study-search terms to the public ClinicalTrials.gov API.</span>
+            <span><span className="flex items-center gap-1.5 font-extrabold"><ShieldCheck size={16} /> Synthetic/de-identified data only</span>I confirm these files contain no PHI or directly identifying patient data and may be sent to the configured Meta endpoint. When public-data MCPs are enabled, the model may also send derived search terms to ClinicalTrials.gov, openFDA, NCBO BioPortal, or PubMed.</span>
           </label>
           {form.formState.errors.acknowledged && <p className="text-sm font-semibold text-rose-700">{form.formState.errors.acknowledged.message}</p>}
           {mutation.error && <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800"><AlertCircle size={17} className="mt-0.5 shrink-0" />{mutation.error.message}</div>}

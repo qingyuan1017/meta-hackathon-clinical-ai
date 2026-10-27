@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     bioportal_mcp_enabled: bool = True
     bioportal_mcp_url: str = "http://127.0.0.1:8004/mcp"
     bioportal_max_tool_rounds: int = 3
+    pubmed_mcp_enabled: bool = True
+    pubmed_mcp_url: str = "http://127.0.0.1:8005/mcp"
+    pubmed_max_tool_rounds: int = 3
     max_file_mb: int = 25
     max_pdf_pages: int = 200
     ai_timeout_seconds: int = 180
