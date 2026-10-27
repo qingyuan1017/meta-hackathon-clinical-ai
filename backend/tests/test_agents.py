@@ -73,10 +73,19 @@ def test_every_workflow_has_distinct_agent_instructions() -> None:
         "tlf",
     }
     assert len({agent.id for agent in AGENTS.values()}) == 5
+    package_names = {
+        "protocol-extraction": "protocol_extraction",
+        "clinical-document": "clinical_document",
+        "edc-design": "edc_design",
+        "sdtm": "sdtm",
+        "tlf": "tlf",
+    }
     for agent in AGENTS.values():
         instructions = agent.instructions()
         assert "Call exactly one tool per turn" in instructions
         assert agent.workflow in get_agent(agent.workflow).workflow
+        assert agent.instruction_file.name == "instructions.md"
+        assert agent.instruction_file.parent.name == package_names[agent.workflow]
 
 
 async def test_agent_reads_contract_and_source_then_submits_valid_result(tmp_path) -> None:

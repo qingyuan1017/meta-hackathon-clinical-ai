@@ -13,13 +13,13 @@ from pydantic import BaseModel, ValidationError
 from ..ai import AIResponseError, MetaAIClient
 from ..config import Settings
 from ..parsers import chunk_text
-from .definitions import (
+from .base import AgentDefinition
+from .tool_catalog import (
     BIOPORTAL_TOOLS,
     CDISC_TOOLS,
     CLINICALGOV_TOOLS,
     OPENFDA_TOOLS,
     PUBMED_TOOLS,
-    AgentDefinition,
 )
 
 
