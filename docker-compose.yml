@@ -1,0 +1,64 @@
+services:
+  cdisc-mcp:
+    build:
+      context: ./cdisc-mcp
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      CDISC_MCP_TRANSPORT: streamable-http
+      CDISC_MCP_HOST: 0.0.0.0
+      CDISC_MCP_PORT: 8001
+    ports:
+      - "127.0.0.1:8001:8001"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /data
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+    ports:
+      - "8000:8000"
+    volumes:
+      - clinical-ai-data:/data
+    restart: unless-stopped
+
+  workbench-mcp:
+    build:
+      context: ./workbench-mcp
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      WORKBENCH_API_URL: http://api:8000/api/v1
+      WORKBENCH_MCP_TRANSPORT: streamable-http
+      WORKBENCH_MCP_HOST: 0.0.0.0
+      WORKBENCH_MCP_PORT: 8002
+    ports:
+      - "127.0.0.1:8002:8002"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  clinical-ai-data:
