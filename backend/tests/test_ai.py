@@ -43,12 +43,21 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
             "count_openfda",
         )
     ]
+    pubmed_tools = [
+        SimpleNamespace(
+            name=name,
+            description=f"Description for {name}",
+            input_schema={"type": "object", "properties": {}},
+        )
+        for name in ("pubmed_search", "pubmed_get_articles")
+    ]
 
     class FakeMCPClient:
         def __init__(self, url: str):
             assert url in {
                 "http://clinicalgov.test/mcp",
                 "http://openfda.test/mcp",
+                "http://pubmed.test/mcp",
             }
             self.url = url
 
@@ -59,11 +68,12 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
             return None
 
         async def list_tools(self):
-            tools = (
-                clinicalgov_tools
-                if self.url == "http://clinicalgov.test/mcp"
-                else openfda_tools
-            )
+            if self.url == "http://clinicalgov.test/mcp":
+                tools = clinicalgov_tools
+            elif self.url == "http://openfda.test/mcp":
+                tools = openfda_tools
+            else:
+                tools = pubmed_tools
             return SimpleNamespace(tools=tools)
 
         async def call_tool(self, name: str, arguments: dict):
@@ -143,6 +153,8 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
         clinicalgov_mcp_url="http://clinicalgov.test/mcp",
         openfda_mcp_enabled=True,
         openfda_mcp_url="http://openfda.test/mcp",
+        pubmed_mcp_enabled=True,
+        pubmed_mcp_url="http://pubmed.test/mcp",
     )
     ai = MetaAIClient(settings)
     ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
@@ -160,6 +172,8 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
         "search_openfda",
         "lookup_openfda",
         "count_openfda",
+        "pubmed_search",
+        "pubmed_get_articles",
     }
     tool_messages = [
         message for message in completions.calls[1]["messages"] if message["role"] == "tool"
@@ -200,4 +214,35 @@ async def test_meta_client_routes_openfda_tool_to_its_mcp_client() -> None:
     assert json.loads(payload) == {
         "ok": True,
         "result": {"results": [{"brand_name": "Lipitor"}]},
+    }
+
+
+async def test_meta_client_routes_pubmed_tool_to_its_mcp_client() -> None:
+    class FakePubMedClient:
+        async def call_tool(self, name: str, arguments: dict):
+            assert name == "pubmed_search"
+            assert arguments == {"query": "asthma[Title]", "limit": 1}
+            return SimpleNamespace(
+                is_error=False,
+                structured_content={
+                    "articles": [{"pmid": "12345678", "title": "Example"}]
+                },
+                content=[],
+            )
+
+    tool_call = SimpleNamespace(
+        function=SimpleNamespace(
+            name="pubmed_search",
+            arguments='{"query":"asthma[Title]","limit":1}',
+        )
+    )
+
+    payload = await MetaAIClient._call_mcp_tool(
+        {"pubmed_search": FakePubMedClient()},  # type: ignore[dict-item]
+        tool_call,
+    )
+
+    assert json.loads(payload) == {
+        "ok": True,
+        "result": {"articles": [{"pmid": "12345678", "title": "Example"}]},
     }

@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     openfda_mcp_enabled: bool = True
     openfda_mcp_url: str = "http://127.0.0.1:8765/mcp"
     openfda_max_tool_rounds: int = 3
+    pubmed_mcp_enabled: bool = True
+    pubmed_mcp_url: str = "http://127.0.0.1:8004/mcp"
+    pubmed_max_tool_rounds: int = 3
     max_file_mb: int = 25
     max_pdf_pages: int = 200
     ai_timeout_seconds: int = 180
