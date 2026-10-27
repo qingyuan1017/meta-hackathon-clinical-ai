@@ -27,16 +27,14 @@ class TLFUseCase(ClinicalUseCase):
 
     async def generate(self, context: UseCaseContext) -> GeneratedContent:
         source = self.join_sources(context.inputs)
-        result = await context.ai.generate_structured(
-            schema=TLFPlan,
-            task=(
+        return await self.generate_with_agent(
+            context,
+            objective=(
                 "Create draft table, listing, and figure specifications from the SAP/protocol and optional ADaM "
                 "metadata. Use TODO markers where populations, variables, methods, or display details are missing."
             ),
-            source=self.bounded_source(source, context.settings),
-            context=context.options,
+            source=source,
         )
-        return GeneratedContent(value=result, warnings=result.unresolved_items)
 
     def render(self, result: BaseModel, *, inputs: list[Path], options: dict[str, Any], output_dir: Path) -> list[Path]:
         return render_tlf(cast(TLFPlan, result), output_dir, normalize_languages(options.get("languages")))

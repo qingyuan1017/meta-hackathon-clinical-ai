@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ..agents import ClinicalAgentRunner, get_agent
 from ..ai import MetaAIClient
 from ..config import Settings
 from ..parsers import chunk_text, parse_source
@@ -32,6 +33,7 @@ class UseCaseContext:
     options: dict[str, Any]
     ai: MetaAIClient
     settings: Settings
+    agent_progress_path: Path | None = None
 
 
 @dataclass
@@ -76,11 +78,14 @@ class ClinicalUseCase(ABC):
 
     def public_definition(self) -> dict[str, Any]:
         descriptor = self.descriptor
+        agent = get_agent(descriptor.id)
         return {
             "id": descriptor.id,
             "title": descriptor.title,
             "description": descriptor.description,
             "skill_name": descriptor.skill_name,
+            "agent_id": agent.id,
+            "agent_name": agent.name,
             "accepted_extensions": list(descriptor.accepted_extensions),
             "required_inputs": list(descriptor.required_inputs),
             "output_formats": list(descriptor.output_formats),
@@ -89,6 +94,25 @@ class ClinicalUseCase(ABC):
             "supports_result_editing": descriptor.supports_result_editing,
             "result_schema": self.result_model.model_json_schema(),
         }
+
+    async def generate_with_agent(
+        self,
+        context: UseCaseContext,
+        *,
+        objective: str,
+        source: str,
+    ) -> GeneratedContent:
+        outcome = await ClinicalAgentRunner(
+            definition=get_agent(self.descriptor.id),
+            result_model=self.result_model,
+            ai=context.ai,
+            settings=context.settings,
+            progress_path=context.agent_progress_path,
+        ).run(objective=objective, source=source, options=context.options)
+        return GeneratedContent(
+            value=outcome.value,
+            warnings=[*outcome.warnings, *self.result_warnings(outcome.value)],
+        )
 
     @staticmethod
     def join_sources(inputs: list[Path]) -> str:

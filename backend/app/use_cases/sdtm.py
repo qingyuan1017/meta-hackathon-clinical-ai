@@ -35,16 +35,14 @@ class SDTMUseCase(ClinicalUseCase):
         crf, edc = self._required_inputs(context.inputs)
         context_inputs = [path for path in context.inputs if path not in {crf, edc}]
         source = f"EDC SPECIFICATION\n{parse_source(edc)}\n\nOPTIONAL CONTEXT\n{self.join_sources(context_inputs)}"
-        result = await context.ai.generate_structured(
-            schema=SDTMPlan,
-            task=(
+        return await self.generate_with_agent(
+            context,
+            objective=(
                 "Create a draft SDTMIG 3.4 mapping plan for the supplied EDC fields. Use plausible domain and "
                 "variable names, explain derived mappings, and place uncertainty in unresolved_mappings."
             ),
-            source=self.bounded_source(source, context.settings),
-            context=context.options,
+            source=source,
         )
-        return GeneratedContent(value=result, warnings=result.unresolved_mappings)
 
     def render(self, result: BaseModel, *, inputs: list[Path], options: dict[str, Any], output_dir: Path) -> list[Path]:
         crf, _ = self._required_inputs(inputs)

@@ -45,6 +45,7 @@ class WorkflowService:
                 options=options,
                 ai=self.ai or MetaAIClient(),
                 settings=self.settings,
+                agent_progress_path=output_dir.parent / "agent" / "progress.json",
             )
         )
         paths = use_case.render(generated.value, inputs=inputs, options=options, output_dir=output_dir)

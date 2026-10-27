@@ -13,6 +13,10 @@ class Settings(BaseSettings):
     meta_api_key: str = ""
     meta_api_base_url: str = "https://api.meta.ai/v1"
     meta_model: str = ""
+    agent_max_turns: int = 20
+    agent_max_remote_tool_calls: int = 6
+    cdisc_mcp_enabled: bool = True
+    cdisc_mcp_url: str = "http://127.0.0.1:8001/mcp"
     clinicalgov_mcp_enabled: bool = True
     clinicalgov_mcp_url: str = "http://127.0.0.1:8003/mcp"
     clinicalgov_max_tool_rounds: int = 3

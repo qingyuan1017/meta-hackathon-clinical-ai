@@ -77,6 +77,7 @@ services:
     environment:
       DATA_DIR: /data
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:3000}
+      CDISC_MCP_URL: http://cdisc-mcp:8001/mcp
       CLINICALGOV_MCP_URL: http://clinicalgov-mcp:8003/mcp
       OPENFDA_MCP_URL: http://openfda-mcp:8000/mcp
       BIOPORTAL_MCP_URL: http://bioportal-mcp:8004/mcp
@@ -86,6 +87,8 @@ services:
     volumes:
       - clinical-ai-data:/data
     depends_on:
+      cdisc-mcp:
+        condition: service_healthy
       clinicalgov-mcp:
         condition: service_healthy
       openfda-mcp:

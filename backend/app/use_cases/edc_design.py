@@ -25,17 +25,15 @@ class EDCDesignUseCase(ClinicalUseCase):
 
     async def generate(self, context: UseCaseContext) -> GeneratedContent:
         source = self.join_sources(context.inputs)
-        result = await context.ai.generate_structured(
-            schema=EDCDesign,
-            task=(
+        return await self.generate_with_agent(
+            context,
+            objective=(
                 "Design a pragmatic EDC build specification from the supplied protocol material. Include visits, "
                 "forms, atomic fields, codelists, derivations, and actionable edit checks. Do not collect data "
                 "that is not justified by the source."
             ),
-            source=self.bounded_source(source, context.settings),
-            context=context.options,
+            source=source,
         )
-        return GeneratedContent(value=result, warnings=result.assumptions)
 
     def render(self, result: BaseModel, *, inputs: list[Path], options: dict[str, Any], output_dir: Path) -> list[Path]:
         return render_edc(cast(EDCDesign, result), output_dir)

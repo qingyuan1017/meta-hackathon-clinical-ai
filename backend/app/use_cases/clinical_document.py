@@ -50,16 +50,14 @@ class ClinicalDocumentUseCase(ClinicalUseCase):
         source = self.join_sources(context.inputs)
         brief = str(context.options.get("study_brief", "")).strip()
         combined = f"STUDY BRIEF\n{brief}\n\nREFERENCE MATERIAL\n{source}".strip()
-        result = await context.ai.generate_structured(
-            schema=ClinicalDocument,
-            task=(
+        return await self.generate_with_agent(
+            context,
+            objective=(
                 f"Draft a structured {document_type}. Include a useful section outline and substantive draft text. "
                 "Mark missing facts for review; do not fabricate patient-level information."
             ),
-            source=self.bounded_source(combined, context.settings),
-            context={**context.options, "document_type": document_type},
+            source=combined,
         )
-        return GeneratedContent(value=result, warnings=result.unresolved_items)
 
     def render(self, result: BaseModel, *, inputs: list[Path], options: dict[str, Any], output_dir: Path) -> list[Path]:
         return render_clinical_document(cast(ClinicalDocument, result), output_dir)
