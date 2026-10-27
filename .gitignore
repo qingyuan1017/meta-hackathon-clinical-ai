@@ -16,6 +16,8 @@ eggs/
 .eggs/
 lib/
 lib64/
+!frontend/src/lib/
+!frontend/src/lib/**
 parts/
 sdist/
 var/
@@ -158,6 +160,13 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Frontend and local workbench state
+node_modules/
+.next/
+backend/data/
+frontend/coverage/
+samples/blank-crf.pdf
 
 # Spyder project settings
 .spyderproject

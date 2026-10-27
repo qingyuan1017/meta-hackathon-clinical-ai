@@ -1,0 +1,11 @@
+{
+  "study": "SYN-101",
+  "forms": [
+    {"form_id": "DM", "fields": [
+      {"field_id": "SUBJID", "label": "Subject Identifier", "type": "text"},
+      {"field_id": "RFICDTC", "label": "Informed Consent Date", "type": "date"},
+      {"field_id": "AGE", "label": "Age", "type": "integer"},
+      {"field_id": "SEX", "label": "Sex", "type": "coded"}
+    ]}
+  ]
+}

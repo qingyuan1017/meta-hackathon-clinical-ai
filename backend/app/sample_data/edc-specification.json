@@ -1,0 +1,30 @@
+{
+  "study": "SYN-101",
+  "forms": [
+    {
+      "form_id": "DM",
+      "name": "Demographics",
+      "fields": [
+        {"field_id": "SUBJID", "label": "Subject Identifier", "type": "text"},
+        {"field_id": "RFICDTC", "label": "Informed Consent Date", "type": "date"},
+        {"field_id": "BRTHYR", "label": "Birth Year", "type": "integer"},
+        {"field_id": "AGE", "label": "Age", "type": "integer"},
+        {"field_id": "SEX", "label": "Sex", "type": "coded"},
+        {"field_id": "RACE", "label": "Race", "type": "coded"},
+        {"field_id": "ETHNIC", "label": "Ethnicity", "type": "coded"}
+      ]
+    },
+    {
+      "form_id": "VS",
+      "name": "Vital Signs",
+      "fields": [
+        {"field_id": "VSDTC", "label": "Visit Date", "type": "date"},
+        {"field_id": "HEIGHT", "label": "Height", "type": "decimal"},
+        {"field_id": "WEIGHT", "label": "Weight", "type": "decimal"},
+        {"field_id": "SYSBP", "label": "Systolic Blood Pressure", "type": "integer"},
+        {"field_id": "DIABP", "label": "Diastolic Blood Pressure", "type": "integer"},
+        {"field_id": "PULSE", "label": "Pulse Rate", "type": "integer"}
+      ]
+    }
+  ]
+}

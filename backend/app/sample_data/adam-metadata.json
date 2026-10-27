@@ -1,0 +1,8 @@
+{
+  "study": "SYN-101",
+  "datasets": {
+    "ADSL": ["STUDYID", "USUBJID", "TRT01P", "TRT01A", "ITTFL", "SAFFL", "AGE", "SEX", "RACE"],
+    "ADEFF": ["STUDYID", "USUBJID", "PARAMCD", "PARAM", "AVISIT", "AVISITN", "BASE", "AVAL", "CHG", "ANL01FL"],
+    "ADAE": ["STUDYID", "USUBJID", "TRTA", "AEDECOD", "AEBODSYS", "AESER", "ASTDT", "AENDT", "TRTEMFL"]
+  }
+}

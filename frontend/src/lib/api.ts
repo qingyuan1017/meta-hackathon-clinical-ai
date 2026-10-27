@@ -1,0 +1,41 @@
+import type { Health, Job, JobList, UseCaseContract, Workflow } from "./types";
+
+export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_URL}${path}`, { ...init, cache: "no-store" });
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`;
+    try {
+      const body = await response.json();
+      message = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
+    } catch { /* keep the HTTP fallback */ }
+    throw new Error(message);
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
+export const api = {
+  health: () => request<Health>("/api/v1/health"),
+  useCases: () => request<UseCaseContract[]>("/api/v1/use-cases"),
+  useCase: (id: Workflow) => request<UseCaseContract>(`/api/v1/use-cases/${id}`),
+  jobs: (workflow?: Workflow) => request<JobList>(`/api/v1/jobs${workflow ? `?workflow=${workflow}` : ""}`),
+  job: (id: string) => request<Job>(`/api/v1/jobs/${id}`),
+  createJob: (workflow: Workflow, options: Record<string, unknown>, files: File[]) => {
+    const data = new FormData();
+    data.set("options", JSON.stringify(options));
+    files.forEach((file) => data.append("files", file));
+    return request<Job>(`/api/v1/jobs/${workflow}`, { method: "POST", body: data });
+  },
+  retryJob: (id: string) => request<Job>(`/api/v1/jobs/${id}/retry`, { method: "POST" }),
+  updateJobResult: (id: string, result: Record<string, unknown>) =>
+    request<Job>(`/api/v1/jobs/${id}/result`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ result }),
+    }),
+  deleteJob: (id: string) => request<void>(`/api/v1/jobs/${id}`, { method: "DELETE" }),
+  artifactUrl: (path: string) => `${API_URL}${path}`,
+  bundleUrl: (id: string) => `${API_URL}/api/v1/jobs/${id}/bundle`,
+};
