@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, CheckCircle2, Circle, Info } from "lucide-react";
+import { ArrowLeft, Bot, CheckCircle2, Circle, Info } from "lucide-react";
 import { ConfigStatus } from "@/components/config-status";
 import { ResultView } from "@/components/result-view";
 import { WorkflowForm } from "@/components/workflow-form";
@@ -50,12 +50,13 @@ export default function WorkflowPage() {
           </div>
           <div className="mt-4"><ConfigStatus compact /></div>
           <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-            <p className="flex items-center gap-2 text-xs font-extrabold text-ink"><Info size={15} className="text-clinical-700" /> Processing contract</p>
-            <ol className="mt-4 space-y-3 text-xs text-slate-600">{["Validate and scan input", "Draft structured content", "Render review files"].map((step, index) => <li key={step} className="flex items-center gap-2">{jobId && ((jobQuery.data?.status === "succeeded") || index === 0) ? <CheckCircle2 size={14} className="text-clinical-600" /> : <Circle size={14} className="text-slate-300" />}{step}</li>)}</ol>
+            <p className="flex items-center gap-2 text-xs font-extrabold text-ink"><Info size={15} className="text-clinical-700" /> Agent execution contract</p>
+            <ol className="mt-4 space-y-3 text-xs text-slate-600">{["Validate and scan input", "Inspect workflow contract", "Investigate all source chunks", "Validate and render artifacts"].map((step, index) => <li key={step} className="flex items-center gap-2">{jobId && ((jobQuery.data?.status === "succeeded") || index === 0) ? <CheckCircle2 size={14} className="text-clinical-600" /> : <Circle size={14} className="text-slate-300" />}{step}</li>)}</ol>
           </div>
           {contract.data && (
             <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
               <p className="text-xs font-extrabold text-ink">Shared use-case contract</p>
+              <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-slate-600"><Bot size={14} className="mt-0.5 shrink-0 text-clinical-700" /><span>Agent: <span className="font-semibold text-ink">{contract.data.agent_name}</span><br /><span className="font-mono text-[11px] text-clinical-700">{contract.data.agent_id}</span></span></p>
               <p className="mt-2 text-xs leading-5 text-slate-600">Skill: <span className="font-mono text-clinical-700">{contract.data.skill_name}</span></p>
               <p className="mt-2 text-xs leading-5 text-slate-600">Outputs: {contract.data.output_formats.join(", ").toUpperCase()}</p>
               <p className="mt-2 text-xs leading-5 text-slate-600">Result editing: {contract.data.supports_result_editing ? "schema-validated" : "disabled"}</p>

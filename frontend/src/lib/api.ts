@@ -1,4 +1,4 @@
-import type { Health, Job, JobList, UseCaseContract, Workflow } from "./types";
+import type { AgentProgress, Health, Job, JobList, UseCaseContract, Workflow } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -22,6 +22,7 @@ export const api = {
   useCase: (id: Workflow) => request<UseCaseContract>(`/api/v1/use-cases/${id}`),
   jobs: (workflow?: Workflow) => request<JobList>(`/api/v1/jobs${workflow ? `?workflow=${workflow}` : ""}`),
   job: (id: string) => request<Job>(`/api/v1/jobs/${id}`),
+  agentProgress: (id: string) => request<AgentProgress>(`/api/v1/jobs/${id}/agent`),
   createJob: (workflow: Workflow, options: Record<string, unknown>, files: File[]) => {
     const data = new FormData();
     data.set("options", JSON.stringify(options));

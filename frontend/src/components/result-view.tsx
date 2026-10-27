@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Download, FileArchive, FileText, RotateCcw, Save, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Job } from "@/lib/types";
@@ -11,10 +11,15 @@ import { Card, CardContent, CardHeader } from "./ui/card";
 import { StatusBadge } from "./status-badge";
 
 export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) {
-  const [tab, setTab] = useState<"preview" | "edit" | "artifacts" | "warnings">("preview");
+  const [tab, setTab] = useState<"preview" | "edit" | "agent" | "artifacts" | "warnings">("preview");
   const [draft, setDraft] = useState(() => JSON.stringify(job.result, null, 2));
   const [draftError, setDraftError] = useState<string | null>(null);
   const client = useQueryClient();
+  const agentQuery = useQuery({
+    queryKey: ["agent-progress", job.id],
+    queryFn: () => api.agentProgress(job.id),
+    refetchInterval: job.status === "queued" || job.status === "running" ? 2_000 : false,
+  });
   useEffect(() => setDraft(JSON.stringify(job.result, null, 2)), [job.id, job.result]);
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteJob(job.id),
@@ -58,12 +63,12 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
         )}
         {(job.status === "queued" || job.status === "running") && (
           <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-5">
-            <div className="flex items-center gap-3"><span className="h-3 w-3 animate-pulse rounded-full bg-blue-600" /><p className="text-sm font-bold text-blue-900">{job.status === "queued" ? "Waiting to start…" : "Meta is drafting and renderers are preparing files…"}</p></div>
-            <p className="mt-2 pl-6 text-xs text-blue-700">You can leave this page; local history will retain the job.</p>
+            <div className="flex items-center gap-3"><span className="h-3 w-3 animate-pulse rounded-full bg-blue-600" /><p className="text-sm font-bold text-blue-900">{job.status === "queued" ? "Waiting to start…" : "The specialist agent is reviewing sources, using approved tools, and validating its draft…"}</p></div>
+            <p className="mt-2 pl-6 text-xs text-blue-700">{agentQuery.data ? `Turn ${agentQuery.data.turn}/${agentQuery.data.max_turns} · source chunks ${agentQuery.data.read_source_chunks.length}/${agentQuery.data.total_source_chunks}` : "You can leave this page; local history will retain the job."}</p>
           </div>
         )}
         <div className="flex flex-wrap gap-2 border-b border-slate-200" role="tablist">
-          {(["preview", ...(job.status === "succeeded" ? ["edit" as const] : []), "artifacts", "warnings"] as const).map((item) => (
+          {(["preview", ...(job.status === "succeeded" ? ["edit" as const] : []), "agent", "artifacts", "warnings"] as const).map((item) => (
             <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold capitalize ${tab === item ? "border-b-2 border-clinical-600 text-clinical-700" : "text-slate-500"}`}>{item}</button>
           ))}
         </div>
@@ -77,6 +82,17 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
               <Button variant="clinical" onClick={saveDraft} disabled={updateMutation.isPending}><Save size={16} />{updateMutation.isPending ? "Validating and rebuilding…" : "Save revision and rebuild artifacts"}</Button>
             </div>
           )}
+          {tab === "agent" && (agentQuery.data ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <AgentMetric label="Agent" value={agentQuery.data.agent_id} />
+                <AgentMetric label="Turns" value={`${agentQuery.data.turn} / ${agentQuery.data.max_turns}`} />
+                <AgentMetric label="Sources reviewed" value={`${agentQuery.data.read_source_chunks.length} / ${agentQuery.data.total_source_chunks}`} />
+              </div>
+              <ol className="space-y-2">{agentQuery.data.events.map((event, index) => <li key={`${event.turn}-${event.name ?? event.type}-${index}`} className="rounded-xl border border-slate-200 px-4 py-3"><div className="flex items-center justify-between gap-3"><span className="font-mono text-xs font-bold text-clinical-700">TURN {event.turn}</span><span className={`text-xs font-bold ${event.ok === false ? "text-rose-700" : "text-emerald-700"}`}>{event.ok === false ? "REFUSED" : "COMPLETED"}</span></div><p className="mt-1 text-sm font-bold text-ink">{event.name ?? event.type.replaceAll("_", " ")}</p>{event.error && <p className="mt-1 text-xs leading-5 text-rose-700">{event.error}</p>}</li>)}</ol>
+              {!agentQuery.data.events.length && <EmptyState text="The agent has not started a tool turn yet." />}
+            </div>
+          ) : <EmptyState text="Loading the sanitized agent trace…" />)}
           {tab === "artifacts" && (job.artifacts.length ? (
             <div className="space-y-2">
               {job.artifacts.map((artifact) => (
@@ -110,3 +126,5 @@ function StructuredPreview({ value, depth = 0 }: { value: unknown; depth?: numbe
 }
 
 function EmptyState({ text }: { text: string }) { return <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-slate-300 bg-slate-50 text-center text-sm text-slate-500">{text}</div>; }
+
+function AgentMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-slate-200 bg-slate-50 p-4"><p className="text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">{label}</p><p className="mt-1 break-words text-sm font-extrabold text-ink">{value}</p></div>; }
