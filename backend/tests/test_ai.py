@@ -43,12 +43,29 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
             "count_openfda",
         )
     ]
+    bioportal_tools = [
+        SimpleNamespace(
+            name=name,
+            description=f"Description for {name}",
+            input_schema={"type": "object", "properties": {}},
+        )
+        for name in (
+            "bioportal_get_ontology",
+            "bioportal_search_classes",
+            "bioportal_get_class",
+            "bioportal_get_class_related",
+            "bioportal_annotate_text",
+            "bioportal_recommend_ontologies",
+            "bioportal_status",
+        )
+    ]
 
     class FakeMCPClient:
         def __init__(self, url: str):
             assert url in {
                 "http://clinicalgov.test/mcp",
                 "http://openfda.test/mcp",
+                "http://bioportal.test/mcp",
             }
             self.url = url
 
@@ -59,11 +76,12 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
             return None
 
         async def list_tools(self):
-            tools = (
-                clinicalgov_tools
-                if self.url == "http://clinicalgov.test/mcp"
-                else openfda_tools
-            )
+            if self.url == "http://clinicalgov.test/mcp":
+                tools = clinicalgov_tools
+            elif self.url == "http://openfda.test/mcp":
+                tools = openfda_tools
+            else:
+                tools = bioportal_tools
             return SimpleNamespace(tools=tools)
 
         async def call_tool(self, name: str, arguments: dict):
@@ -143,6 +161,8 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
         clinicalgov_mcp_url="http://clinicalgov.test/mcp",
         openfda_mcp_enabled=True,
         openfda_mcp_url="http://openfda.test/mcp",
+        bioportal_mcp_enabled=True,
+        bioportal_mcp_url="http://bioportal.test/mcp",
     )
     ai = MetaAIClient(settings)
     ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
@@ -160,6 +180,12 @@ async def test_meta_client_executes_remote_clinicalgov_mcp_tool_call(monkeypatch
         "search_openfda",
         "lookup_openfda",
         "count_openfda",
+        "bioportal_get_ontology",
+        "bioportal_search_classes",
+        "bioportal_get_class",
+        "bioportal_get_class_related",
+        "bioportal_annotate_text",
+        "bioportal_recommend_ontologies",
     }
     tool_messages = [
         message for message in completions.calls[1]["messages"] if message["role"] == "tool"

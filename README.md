@@ -33,7 +33,7 @@ This keeps agent-driven skill runs and direct user/API work on the same schemas 
    docker compose up --build
    ```
 
-3. Open http://localhost:3000. The API and interactive OpenAPI documentation are available at http://localhost:8000/docs. MCP endpoints are available at `http://localhost:8001/mcp` for CDISC Library, `http://localhost:8002/mcp` for the workbench, `http://localhost:8003/mcp` for ClinicalTrials.gov, and `http://localhost:8765/mcp` for openFDA. Synthetic inputs, including a generated blank CRF PDF, are downloadable from the dashboard. If port 3000 is already occupied, set another free port such as `WEB_PORT=3300` before starting Compose.
+3. Open http://localhost:3000. The API and interactive OpenAPI documentation are available at http://localhost:8000/docs. MCP endpoints are available at `http://localhost:8001/mcp` for CDISC Library, `http://localhost:8002/mcp` for the workbench, `http://localhost:8003/mcp` for ClinicalTrials.gov, `http://localhost:8004/mcp` for NCBO BioPortal, and `http://localhost:8765/mcp` for openFDA. Synthetic inputs, including a generated blank CRF PDF, are downloadable from the dashboard. If port 3000 is already occupied, set another free port such as `WEB_PORT=3300` before starting Compose.
 
 Generated files and SQLite history are kept in the `clinical-ai-data` Docker volume until a job is deleted.
 
@@ -76,6 +76,9 @@ The frontend defaults to `http://localhost:8000`; override it with `NEXT_PUBLIC_
 | `OPENFDA_MCP_ENABLED` | Allow Meta generation to query the read-only openFDA MCP service |
 | `OPENFDA_MCP_URL` | Backend connection URL; defaults to `http://127.0.0.1:8765/mcp` |
 | `OPENFDA_MAX_TOOL_ROUNDS` | Maximum openFDA tool-call rounds per model completion; defaults to 3 |
+| `BIOPORTAL_MCP_ENABLED` | Allow Meta generation to query the read-only NCBO BioPortal MCP service |
+| `BIOPORTAL_MCP_URL` | Backend connection URL; defaults to `http://127.0.0.1:8004/mcp` |
+| `BIOPORTAL_MAX_TOOL_ROUNDS` | Maximum BioPortal tool-call rounds per model completion; defaults to 3 |
 | `FRONTEND_ORIGIN` | Allowed browser origin |
 | `MAX_FILE_MB` / `MAX_PDF_PAGES` | Upload safety limits |
 
@@ -180,6 +183,34 @@ See [`openfda_mcp/README.md`](openfda_mcp/README.md) for tool, security, and loc
 development details. openFDA data is untrusted reference material, not medical
 advice; adverse-event counts do not establish causality, incidence, or risk.
 
+## NCBO BioPortal MCP server
+
+`bioportal-mcp` is a standalone, read-only service for the official [NCBO BioPortal REST API](https://data.bioontology.org/documentation). It exposes focused tools for ontology metadata, class search and lookup, hierarchy and mapping traversal, text annotation, and ontology recommendation. The backend advertises those focused tools to the Meta model but does not expose the service's status tool.
+
+Create a BioPortal account, copy the API key shown on the account page, and set it in the root `.env` file:
+
+```dotenv
+BIOPORTAL_API_KEY=your-bioportal-api-key
+```
+
+Then run the network service with the stack or by itself:
+
+```powershell
+docker compose up --build bioportal-mcp
+```
+
+MCP clients connect at `http://localhost:8004/mcp`. BioPortal requires its documented `Authorization: apikey token=...` header; the key remains in the service process and is never returned by a tool. Class lookups require the full class `@id` IRI returned by search. The service percent-encodes that IRI as one path segment, as required by BioPortal's class endpoints.
+
+| Variable | Purpose |
+| --- | --- |
+| `BIOPORTAL_API_KEY` | BioPortal account API key; required for data requests |
+| `BIOPORTAL_API_BASE_URL` | REST base URL; defaults to `https://data.bioontology.org` |
+| `BIOPORTAL_API_TIMEOUT_SECONDS` | Outbound request timeout; defaults to 30 seconds |
+| `BIOPORTAL_MCP_TRANSPORT` | `stdio` locally or `streamable-http` for a network service |
+| `BIOPORTAL_MCP_HOST` / `BIOPORTAL_MCP_PORT` | HTTP bind address and port; local defaults are `127.0.0.1:8004` |
+
+Only send synthetic or de-identified text to the annotation tool. BioPortal results are external reference data: labels, mappings, and annotations do not establish clinical truth, regulatory suitability, or semantic equivalence.
+
 ## Workbench MCP server and direct editing API
 
 The standalone `workbench-mcp` package presents the five registered use cases to MCP clients. Its tools discover contracts, submit synthetic/de-identified text jobs, poll history, and apply complete structured-result revisions. PDF, DOCX, and XLSX submissions remain on the web UI or multipart API so the MCP service never receives host file paths.
@@ -211,6 +242,9 @@ pytest
 
 cd ..\openfda_mcp
 uv run pytest
+
+cd ..\bioportal-mcp
+pytest
 ```
 
 Set `RUN_META_INTEGRATION=1` to opt into the live API smoke test. Normal automated tests use an injected test double that is not available in the running application.
@@ -218,6 +252,8 @@ Set `RUN_META_INTEGRATION=1` to opt into the live API smoke test. Normal automat
 Set `RUN_CDISC_INTEGRATION=1` to opt into a live `/mdr/products` smoke test. It also requires `CDISC_LIBRARY_API_KEY`. Normal tests use a mock HTTP transport and do not call CDISC Library.
 
 Set `RUN_CLINICALGOV_INTEGRATION=1` to opt into live API version and known-study checks. ClinicalTrials.gov does not require credentials; normal tests use a mock HTTP transport.
+
+Set `RUN_BIOPORTAL_INTEGRATION=1` to opt into a live NCIT ontology metadata check. It also requires `BIOPORTAL_API_KEY`; normal tests use a mock HTTP transport.
 
 The standalone `samples/generate_blank_crf.py` helper can also create `samples/blank-crf.pdf` for use outside the running application.
 
