@@ -5,17 +5,17 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        ink: "#10233d",
+        ink: "#18181b",
         clinical: {
-          50: "#eefbf9",
-          100: "#d5f5ef",
-          500: "#11a98f",
-          600: "#078a76",
-          700: "#096f61"
+          50: "#f3f1ff",
+          100: "#e5e0ff",
+          500: "#7765e9",
+          600: "#6553d8",
+          700: "#5140bb"
         }
       },
       boxShadow: {
-        soft: "0 18px 50px rgba(16, 35, 61, 0.08)"
+        soft: "0 12px 35px rgba(24, 24, 27, 0.07)"
       }
     }
   },
