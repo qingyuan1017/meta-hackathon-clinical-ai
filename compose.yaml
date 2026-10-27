@@ -1,0 +1,33 @@
+name: openfda-mcp
+
+services:
+  openfda-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openfda-mcp:local
+    environment:
+      OPENFDA_API_KEY: ${OPENFDA_API_KEY:-}
+      OPENFDA_TIMEOUT_SECONDS: ${OPENFDA_TIMEOUT_SECONDS:-30}
+      OPENFDA_MAX_RESULTS: ${OPENFDA_MAX_RESULTS:-100}
+      OPENFDA_MAX_RETRIES: ${OPENFDA_MAX_RETRIES:-2}
+      OPENFDA_MCP_ALLOWED_HOSTS: >-
+        openfda-mcp:8000,localhost:${OPENFDA_MCP_PORT:-8765},127.0.0.1:${OPENFDA_MCP_PORT:-8765}
+    ports:
+      - "127.0.0.1:${OPENFDA_MCP_PORT:-8765}:8000"
+    networks:
+      - clinical-ai
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+networks:
+  clinical-ai:
+    name: clinical-ai
+
