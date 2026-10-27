@@ -1,0 +1,20 @@
+interface:
+  display_name: "Clinical EDC Design"
+  short_description: "Design editable EDC build specifications"
+  default_prompt: "Use $clinical-edc-design to create an EDC specification from this synthetic or de-identified protocol."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "clinical-ai-workbench"
+      description: "Submit and revise EDC-design jobs through the Clinical AI Workbench backend"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8002/mcp"
+    - type: "mcp"
+      value: "cdisc-library"
+      description: "Read versioned CDISC Library metadata when standards context is required"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8001/mcp"
+
+policy:
+  allow_implicit_invocation: true

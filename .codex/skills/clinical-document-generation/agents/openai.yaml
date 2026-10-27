@@ -1,0 +1,15 @@
+interface:
+  display_name: "Clinical Document Generation"
+  short_description: "Draft supported clinical study documents"
+  default_prompt: "Use $clinical-document-generation to draft a clinical document from this synthetic study material."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "clinical-ai-workbench"
+      description: "Submit and revise clinical-document jobs through the Clinical AI Workbench backend"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8002/mcp"
+
+policy:
+  allow_implicit_invocation: true

@@ -1,0 +1,15 @@
+interface:
+  display_name: "Clinical Protocol Extraction"
+  short_description: "Extract structured facts from a clinical protocol"
+  default_prompt: "Use $clinical-protocol-extraction to extract a structured summary from this synthetic or de-identified protocol."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "clinical-ai-workbench"
+      description: "Submit and revise protocol-extraction jobs through the Clinical AI Workbench backend"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8002/mcp"
+
+policy:
+  allow_implicit_invocation: true

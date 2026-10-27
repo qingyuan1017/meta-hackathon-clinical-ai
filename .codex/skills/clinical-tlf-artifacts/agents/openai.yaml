@@ -1,0 +1,20 @@
+interface:
+  display_name: "Clinical TLF Artifacts"
+  short_description: "Generate draft TLF shells and program scaffolds"
+  default_prompt: "Use $clinical-tlf-artifacts to generate draft TLF shells and program scaffolds from this SAP."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "clinical-ai-workbench"
+      description: "Submit and revise TLF jobs through the Clinical AI Workbench backend"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8002/mcp"
+    - type: "mcp"
+      value: "cdisc-library"
+      description: "Read versioned CDISC Library metadata when ADaM context is required"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8001/mcp"
+
+policy:
+  allow_implicit_invocation: true

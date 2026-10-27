@@ -244,7 +244,19 @@ The corresponding REST interfaces are:
 - `GET /api/v1/jobs/{id}` for status and results
 - `PUT /api/v1/jobs/{id}/result` for human revision and deterministic artifact rebuilding
 
-Repository-local skills under `skills/` describe how an agent coordinates these Workbench MCP tools with the read-only CDISC Library MCP tools where standards metadata is needed.
+Repository-local Codex skills under `.codex/skills/` describe how an agent coordinates these Workbench MCP tools with the read-only CDISC Library MCP tools where standards metadata is needed. Each skill includes `agents/openai.yaml` metadata that declares its local MCP dependencies.
+
+After the Compose services are running, reload the repository in Codex and invoke a workflow directly:
+
+```text
+Use $clinical-protocol-extraction to extract this synthetic protocol.
+Use $clinical-document-generation to draft a statistical analysis plan.
+Use $clinical-edc-design to design an EDC specification from this protocol.
+Use $clinical-sdtm-artifacts to generate draft SDTM artifacts.
+Use $clinical-tlf-artifacts to generate TLF shells and R/SAS scaffolds.
+```
+
+Text inputs can be submitted through the Workbench MCP adapter. Workflows that require PDF, DOCX, or XLSX files continue to use the multipart REST API or web interface; the skill still uses MCP to discover the live backend contract, monitor the job, and apply schema-validated revisions.
 
 ## Tests
 

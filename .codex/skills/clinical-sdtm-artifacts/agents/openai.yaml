@@ -1,0 +1,20 @@
+interface:
+  display_name: "Clinical SDTM Artifacts"
+  short_description: "Generate draft SDTM submission artifacts"
+  default_prompt: "Use $clinical-sdtm-artifacts to generate draft SDTM artifacts from this blank CRF and EDC specification."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "clinical-ai-workbench"
+      description: "Submit and revise SDTM jobs through the Clinical AI Workbench backend"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8002/mcp"
+    - type: "mcp"
+      value: "cdisc-library"
+      description: "Read versioned SDTM and controlled-terminology metadata"
+      transport: "streamable_http"
+      url: "http://127.0.0.1:8001/mcp"
+
+policy:
+  allow_implicit_invocation: true
