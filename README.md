@@ -14,18 +14,32 @@ A local, single-user hackathon application that uses Meta's OpenAI-compatible AP
 
 ## Use-case architecture
 
-Each workflow is a first-class use case with one shared contract:
+Each workflow is a first-class use case with one shared contract. The agent and use-case layers have different responsibilities:
 
-- `backend/app/use_cases/` owns its input rules, model schema, source preparation, deterministic renderer, output formats, and MCP dependencies.
-- `backend/app/agents/` contains five specialist agent definitions, separate system-instruction files, the bounded tool loop, progress traces, and deterministic submission checks.
+- `backend/app/agents/<agent>/` owns that specialist's identity, model instructions, and tool selection. Shared agent infrastructure is limited to the registry, tool catalog, and bounded execution loop.
+- `backend/app/use_cases/` is the model-independent application layer: it owns input rules, result schemas, source preparation, deterministic rendering, output formats, and MCP dependencies.
 - `.codex/skills/` contains the Codex-facing operating skill for each use case.
 - FastAPI exposes the same registry through `GET /api/v1/use-cases` and `GET /api/v1/use-cases/{id}`.
 - The Workbench MCP adapter on port 8002 delegates to those APIs; it does not duplicate prompts or persistence logic.
 - Users can edit a completed structured result in the web UI or with `PUT /api/v1/jobs/{id}/result`. The backend validates the use-case schema and rebuilds all artifacts without another model call.
 
+```text
+backend/app/
+├── agents/
+│   ├── protocol_extraction/  # agent.py + instructions.md
+│   ├── clinical_document/    # agent.py + instructions.md
+│   ├── edc_design/           # agent.py + instructions.md
+│   ├── sdtm/                 # agent.py + instructions.md
+│   ├── tlf/                  # agent.py + instructions.md
+│   ├── registry.py
+│   ├── runtime.py
+│   └── tool_catalog.py
+└── use_cases/                # schemas, inputs, rendering, artifact contracts
+```
+
 Every `POST /api/v1/jobs/{workflow}` call now runs the workflow's specialist agent. The agent must inspect the live contract, read every available source chunk, use at most one tool per turn, and submit a schema-valid result before deterministic rendering begins. Agent progress is saved under `data/jobs/<job-id>/agent/progress.json`; it contains no API credential and is removed when the job is deleted.
 
-This keeps agent-driven skill runs and direct user/API work on the same schemas and rendering path.
+This separation is intentional: an agent is a probabilistic planner that calls tools and drafts structured content, while a use case is the deterministic contract that validates, persists, edits, and renders that content. It keeps agent-driven runs and direct user/API edits on the same schemas and artifact path; removing `use_cases` would either couple rendering to the model loop or duplicate that logic in the API.
 
 ## Quick start
 
