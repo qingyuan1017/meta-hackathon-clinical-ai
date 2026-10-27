@@ -16,11 +16,14 @@ A local, single-user hackathon application that uses Meta's OpenAI-compatible AP
 
 Each workflow is a first-class use case with one shared contract:
 
-- `backend/app/use_cases/` owns its input rules, model schema, generation logic, deterministic renderer, output formats, and MCP dependencies.
-- `skills/` contains the model-facing operating skill for the use case.
+- `backend/app/use_cases/` owns its input rules, model schema, source preparation, deterministic renderer, output formats, and MCP dependencies.
+- `backend/app/agents/` contains five specialist agent definitions, separate system-instruction files, the bounded tool loop, progress traces, and deterministic submission checks.
+- `.codex/skills/` contains the Codex-facing operating skill for each use case.
 - FastAPI exposes the same registry through `GET /api/v1/use-cases` and `GET /api/v1/use-cases/{id}`.
 - The Workbench MCP adapter on port 8002 delegates to those APIs; it does not duplicate prompts or persistence logic.
 - Users can edit a completed structured result in the web UI or with `PUT /api/v1/jobs/{id}/result`. The backend validates the use-case schema and rebuilds all artifacts without another model call.
+
+Every `POST /api/v1/jobs/{workflow}` call now runs the workflow's specialist agent. The agent must inspect the live contract, read every available source chunk, use at most one tool per turn, and submit a schema-valid result before deterministic rendering begins. Agent progress is saved under `data/jobs/<job-id>/agent/progress.json`; it contains no API credential and is removed when the job is deleted.
 
 This keeps agent-driven skill runs and direct user/API work on the same schemas and rendering path.
 
@@ -70,6 +73,10 @@ The frontend defaults to `http://localhost:8000`; override it with `NEXT_PUBLIC_
 | `META_API_KEY` | Server-side Meta API credential |
 | `META_API_BASE_URL` | OpenAI-compatible Meta Model API endpoint; defaults to `https://api.meta.ai/v1` |
 | `META_MODEL` | Exact model ID enabled for the account |
+| `AGENT_MAX_TURNS` | Maximum turns for one specialist-agent run; defaults to 20 |
+| `AGENT_MAX_REMOTE_TOOL_CALLS` | Maximum optional MCP calls per agent run; defaults to 6 |
+| `CDISC_MCP_ENABLED` | Allow the EDC, SDTM, and TLF agents to use CDISC Library tools |
+| `CDISC_MCP_URL` | Backend connection URL; defaults to `http://127.0.0.1:8001/mcp` |
 | `CLINICALGOV_MCP_ENABLED` | Allow Meta generation to use the separate ClinicalTrials.gov MCP service |
 | `CLINICALGOV_MCP_URL` | Backend connection URL; defaults to `http://127.0.0.1:8003/mcp` |
 | `CLINICALGOV_MAX_TOOL_ROUNDS` | Maximum registry tool-call rounds per model completion; defaults to 3 |
@@ -240,8 +247,10 @@ The standalone `workbench-mcp` package presents the five registered use cases to
 The corresponding REST interfaces are:
 
 - `GET /api/v1/use-cases` and `GET /api/v1/use-cases/{id}` for metadata and JSON Schema
+- `GET /api/v1/agents` and `GET /api/v1/agents/{use-case}` for specialist agent and tool contracts
 - `POST /api/v1/jobs/{use-case}` for generation
 - `GET /api/v1/jobs/{id}` for status and results
+- `GET /api/v1/jobs/{id}/agent` for a sanitized agent-turn and source-coverage trace
 - `PUT /api/v1/jobs/{id}/result` for human revision and deterministic artifact rebuilding
 
 Repository-local Codex skills under `.codex/skills/` describe how an agent coordinates these Workbench MCP tools with the read-only CDISC Library MCP tools where standards metadata is needed. Each skill includes `agents/openai.yaml` metadata that declares its local MCP dependencies.
