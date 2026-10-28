@@ -75,6 +75,18 @@ class JobRunner:
                     return
                 job.status = "failed"
                 job.error = safe_error
+                result_data = getattr(exc, "result_data", None)
+                if isinstance(result_data, dict):
+                    job.result_json = json.dumps(result_data, ensure_ascii=False)
+                for path in getattr(exc, "artifact_paths", []):
+                    if not isinstance(path, Path) or not path.is_file():
+                        continue
+                    try:
+                        path.resolve().relative_to(job_dir.resolve())
+                    except ValueError:
+                        logger.warning("Ignoring failure artifact outside job directory: %s", path)
+                        continue
+                    job.artifacts.append(Artifact(**artifact_record(path, job_dir)))
                 job.updated_at = datetime.now(timezone.utc)
                 job.completed_at = job.updated_at
                 session.commit()

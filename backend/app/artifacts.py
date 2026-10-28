@@ -27,6 +27,14 @@ from .schemas import (
     StudySummary,
     TLFPlan,
 )
+from .core_conformance import (
+    CORE_ENGINE_VERSION,
+    CORE_USDM4_RULE_COUNT,
+    CoreConformanceError,
+    CoreConformanceResult,
+    run_core_conformance,
+)
+from .usdm import USDM_VERSION, build_usdm
 
 
 MEDIA_TYPES = {
@@ -60,10 +68,33 @@ def artifact_record(path: Path, job_dir: Path) -> dict:
     }
 
 
-def render_protocol(result: StudySummary, output_dir: Path) -> list[Path]:
+def render_protocol(
+    result: StudySummary,
+    output_dir: Path,
+    *,
+    conformance_validator=None,
+) -> list[Path]:
     json_path = output_dir / "protocol-extraction.json"
     json_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
-    markdown = [f"# {result.study_title}", "", f"> {DISCLAIMER}", ""]
+    usdm = build_usdm(result)
+    usdm_path = output_dir / "usdm.json"
+    usdm_path.write_text(usdm.model_dump_json(indent=2), encoding="utf-8")
+    validator = conformance_validator or run_core_conformance
+    conformance: CoreConformanceResult = validator(usdm_path, output_dir)
+    status = (
+        f"passed all applicable rules in the complete {CORE_USDM4_RULE_COUNT}-rule USDM 4.0 "
+        f"ruleset bundled with CDISC CORE {CORE_ENGINE_VERSION}"
+        if conformance.conformant
+        else "did not pass the strict CDISC CORE conformance gate"
+    )
+    markdown = [
+        f"# {result.study_title}",
+        "",
+        f"> {DISCLAIMER}",
+        "",
+        f"> `usdm.json` passed structural validation against CDISC USDM {USDM_VERSION} and {status}. See `core-report.json` and `core-conformance.json`.",
+        "",
+    ]
     for label, value in [
         ("Protocol", result.protocol_number),
         ("Phase", result.phase),
@@ -90,7 +121,19 @@ def render_protocol(result: StudySummary, output_dir: Path) -> list[Path]:
         markdown.extend(f"- {value}" for value in values)
     md_path = output_dir / "protocol-extraction.md"
     md_path.write_text("\n".join(markdown), encoding="utf-8")
-    return [json_path, md_path]
+    paths = [json_path, usdm_path, md_path, conformance.decision_path]
+    if conformance.report_path is not None:
+        paths.append(conformance.report_path)
+    if not conformance.conformant:
+        counts = ", ".join(
+            f"{name.lower()}={count}" for name, count in conformance.status_counts.items()
+        ) or "CORE did not produce rule counts"
+        raise CoreConformanceError(
+            f"USDM 4.0 CORE conformance failed ({counts}). Review core-conformance.json and core-report.json.",
+            artifact_paths=paths,
+            result_data=result.model_dump(mode="json"),
+        )
+    return paths
 
 
 def _document_header(document: Document, title: str) -> None:

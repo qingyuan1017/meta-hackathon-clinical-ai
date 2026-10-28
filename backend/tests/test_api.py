@@ -4,6 +4,7 @@ import shutil
 from fastapi.testclient import TestClient
 
 from app.db import SessionLocal
+from app.core_conformance import CoreConformanceResult
 from app.main import app, settings
 from app.models import Job
 from app.schemas import StudySummary
@@ -103,7 +104,23 @@ def test_queued_job_has_safe_agent_progress_summary() -> None:
                     session.commit()
 
 
-def test_completed_result_can_be_revised_and_rerendered() -> None:
+def test_completed_result_can_be_revised_and_rerendered(monkeypatch) -> None:
+    def conformant_core(usdm_path, output_dir):
+        report = output_dir / "core-report.json"
+        decision = output_dir / "core-conformance.json"
+        report.write_text('{"Rules_Report": []}', encoding="utf-8")
+        decision.write_text('{"conformant": true}', encoding="utf-8")
+        return CoreConformanceResult(
+            conformant=True,
+            report_path=report,
+            decision_path=decision,
+            status_counts={"SUCCESS": 207},
+            blocking_rules=(),
+            allowed_skipped_rules=(),
+            reported_rule_count=207,
+        )
+
+    monkeypatch.setattr("app.artifacts.run_core_conformance", conformant_core)
     result = StudySummary(study_title="Original synthetic study")
     with SessionLocal() as session:
         job = Job(

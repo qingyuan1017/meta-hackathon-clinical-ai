@@ -17,7 +17,7 @@ export const workflows: WorkflowDefinition[] = [
     id: "protocol-extraction",
     title: "Clinical protocol extraction",
     shortTitle: "Protocol extraction",
-    description: "Turn a protocol into traceable study design, objectives, endpoints, visits, criteria, and unresolved questions.",
+    description: "Turn a protocol into traceable study facts and a CDISC USDM 4.0 artifact gated by the complete published CORE ruleset.",
     eyebrow: "01 · UNDERSTAND",
     icon: Braces,
     accepts: ".pdf,.docx,.txt,.md",

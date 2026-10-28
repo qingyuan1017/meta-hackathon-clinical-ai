@@ -1,11 +1,15 @@
+import asyncio
 import json
 from types import SimpleNamespace
 
-from app.agents import AGENTS, ClinicalAgentRunner, get_agent
+from app.agents import AGENTS, AgentOutcome, ClinicalAgentRunner, get_agent
+from app.agents.protocol_extraction import PERSPECTIVE_AGENTS
 from app.agents.runtime import verify_result
 from app.ai import MetaAIClient
 from app.config import Settings
 from app.schemas import EDCDesign, EDCForm, EDCVisit, StudySummary
+from app.use_cases.base import UseCaseContext
+from app.use_cases.protocol_extraction import ProtocolExtractionUseCase
 
 
 class FakeMessage:
@@ -88,6 +92,15 @@ def test_every_workflow_has_distinct_agent_instructions() -> None:
         assert agent.instruction_file.parent.name == package_names[agent.workflow]
 
 
+def test_every_protocol_agent_loads_the_shared_extraction_policy() -> None:
+    agents = [get_agent("protocol-extraction"), *(definition for _, definition in PERSPECTIVE_AGENTS)]
+    for agent in agents:
+        instructions = agent.instructions()
+        assert "# Shared clinical protocol extraction policy" in instructions
+        assert "agreement among agents" in instructions
+        assert agent.policy_files and agent.policy_files[0].name == "extraction_policy.md"
+
+
 async def test_agent_reads_contract_and_source_then_submits_valid_result(tmp_path) -> None:
     actions = [
         ("inspect_workflow_contract", {}),
@@ -154,6 +167,66 @@ async def test_agent_refuses_submission_until_every_source_chunk_is_read(tmp_pat
     assert early_submit["name"] == "submit_result"
     assert early_submit["ok"] is False
     assert "Read every source chunk" in early_submit["error"]
+
+
+async def test_protocol_extraction_runs_parallel_perspectives_then_reconciles(
+    tmp_path, monkeypatch
+) -> None:
+    source_path = tmp_path / "synthetic-protocol.md"
+    source_path.write_text("# Synthetic protocol\nPrimary endpoint: response at Week 12.", encoding="utf-8")
+    calls = []
+    active_perspectives = 0
+    max_active_perspectives = 0
+
+    class FakeRunner:
+        def __init__(self, *, definition, result_model, ai, settings, progress_path):
+            self.definition = definition
+            self.progress_path = progress_path
+
+        async def run(self, *, objective, source, options):
+            nonlocal active_perspectives, max_active_perspectives
+            is_lead = self.definition.id == "clinical-protocol-extraction-agent"
+            if not is_lead:
+                active_perspectives += 1
+                max_active_perspectives = max(max_active_perspectives, active_perspectives)
+                await asyncio.sleep(0)
+                active_perspectives -= 1
+            calls.append(
+                {
+                    "id": self.definition.id,
+                    "objective": objective,
+                    "source": source,
+                    "progress_path": self.progress_path,
+                }
+            )
+            title = "Reconciled protocol" if is_lead else self.definition.name
+            return AgentOutcome(value=StudySummary(study_title=title), warnings=[])
+
+    monkeypatch.setattr("app.use_cases.protocol_extraction.ClinicalAgentRunner", FakeRunner)
+    progress_path = tmp_path / "agent" / "progress.json"
+    generated = await ProtocolExtractionUseCase().generate(
+        UseCaseContext(
+            inputs=[source_path],
+            options={"deidentified_acknowledged": True},
+            ai=SimpleNamespace(),
+            settings=agent_settings(),
+            agent_progress_path=progress_path,
+        )
+    )
+
+    assert max_active_perspectives == 3
+    assert [call["id"] for call in calls[-1:]] == ["clinical-protocol-extraction-agent"]
+    assert {call["id"] for call in calls[:-1]} == {
+        "protocol-design-endpoints-agent",
+        "protocol-conduct-eligibility-agent",
+        "protocol-safety-ambiguity-agent",
+    }
+    assert all(call["progress_path"].name.startswith("perspective-") for call in calls[:-1])
+    assert calls[-1]["progress_path"] == progress_path
+    assert "Protocol Design and Endpoints Specialist" in calls[-1]["objective"]
+    assert "Protocol Conduct and Eligibility Specialist" in calls[-1]["objective"]
+    assert "Protocol Safety and Ambiguity Specialist" in calls[-1]["objective"]
+    assert generated.value.study_title == "Reconciled protocol"
 
 
 def test_edc_agent_verification_rejects_broken_form_references() -> None:

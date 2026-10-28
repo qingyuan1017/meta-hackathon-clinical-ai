@@ -3,6 +3,18 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
+ARG CORE_COMMIT=2a90a3872a7e3b07c15abe84744026c94a7a04b0
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git \
+    && git init /opt/cdisc-core \
+    && git -C /opt/cdisc-core remote add origin https://github.com/cdisc-org/cdisc-rules-engine.git \
+    && git -C /opt/cdisc-core fetch --depth 1 origin ${CORE_COMMIT} \
+    && git -C /opt/cdisc-core checkout --detach FETCH_HEAD \
+    && rm -rf /opt/cdisc-core/.git \
+    && apt-get purge -y --auto-remove git \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY pyproject.toml ./
 COPY app ./app

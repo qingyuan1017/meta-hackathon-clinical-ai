@@ -1,23 +1,96 @@
 import json
 import zipfile
 
+import pytest
 from docx import Document
 from lxml import etree
 from openpyxl import load_workbook
 from reportlab.pdfgen import canvas
 
 from app.artifacts import add_manifest_and_bundle, render_clinical_document, render_edc, render_protocol, render_sdtm, render_tlf
+from app.core_conformance import CoreConformanceError, CoreConformanceResult
 from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMPlan, SDTMVariable, StudySummary, TLFColumn, TLFPlan, TLFSpec
+from app.usdm import USDM_VERSION, validate_usdm
 
 
 def test_protocol_and_bundle(tmp_path) -> None:
-    result = StudySummary(study_title="Synthetic study", objectives=[Objective(objective="Assess efficacy")])
-    paths = add_manifest_and_bundle(render_protocol(result, tmp_path), tmp_path, "protocol-extraction")
+    result = StudySummary(
+        study_title="Synthetic study",
+        protocol_number="SYN-101",
+        sponsor="Synthetic Sponsor",
+        objectives=[Objective(objective="Assess efficacy")],
+        inclusion_criteria=["Adults aged 18 years or older"],
+        exclusion_criteria=["Prior prohibited therapy"],
+    )
+    def conformant_core(usdm_path, output_dir):
+        report = output_dir / "core-report.json"
+        decision = output_dir / "core-conformance.json"
+        report.write_text('{"Rules_Report": []}', encoding="utf-8")
+        decision.write_text('{"conformant": true}', encoding="utf-8")
+        return CoreConformanceResult(
+            conformant=True,
+            report_path=report,
+            decision_path=decision,
+            status_counts={"SUCCESS": 207},
+            blocking_rules=(),
+            allowed_skipped_rules=(),
+            reported_rule_count=207,
+        )
+
+    paths = add_manifest_and_bundle(
+        render_protocol(result, tmp_path, conformance_validator=conformant_core),
+        tmp_path,
+        "protocol-extraction",
+    )
+    usdm_payload = json.loads((tmp_path / "usdm.json").read_text(encoding="utf-8"))
+    usdm = validate_usdm(usdm_payload)
+    assert usdm.usdmVersion == USDM_VERSION
+    assert usdm.study.versions[0].titles[0].text == "Synthetic study"
+    assert len(usdm.study.versions[0].eligibilityCriterionItems) == 2
+    assert usdm.study.versions[0].studyIdentifiers[0].text == "SYN-101"
+    assert usdm.study.versions[0].roles[0].code.code == "C70793"
+    assert usdm.study.versions[0].organizations[0].name == "Synthetic Sponsor"
     bundle = next(path for path in paths if path.suffix == ".zip")
     with zipfile.ZipFile(bundle) as archive:
         assert "protocol-extraction.json" in archive.namelist()
+        assert "usdm.json" in archive.namelist()
+        assert "core-report.json" in archive.namelist()
+        assert "core-conformance.json" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json"))
         assert manifest["workflow"] == "protocol-extraction"
+
+
+def test_protocol_core_failure_exposes_diagnostics_without_claiming_conformance(tmp_path) -> None:
+    def failing_core(usdm_path, output_dir):
+        report = output_dir / "core-report.json"
+        decision = output_dir / "core-conformance.json"
+        report.write_text('{"Rules_Report": [{"status": "ISSUE REPORTED"}]}', encoding="utf-8")
+        decision.write_text('{"conformant": false}', encoding="utf-8")
+        return CoreConformanceResult(
+            conformant=False,
+            report_path=report,
+            decision_path=decision,
+            status_counts={"ISSUE REPORTED": 1, "SUCCESS": 206},
+            blocking_rules=({"core_id": "CORE-000001", "status": "ISSUE REPORTED", "reason": "test"},),
+            allowed_skipped_rules=(),
+            reported_rule_count=207,
+        )
+
+    with pytest.raises(CoreConformanceError) as captured:
+        render_protocol(
+            StudySummary(study_title="Nonconformant synthetic study"),
+            tmp_path,
+            conformance_validator=failing_core,
+        )
+
+    assert {path.name for path in captured.value.artifact_paths} == {
+        "protocol-extraction.json",
+        "protocol-extraction.md",
+        "usdm.json",
+        "core-report.json",
+        "core-conformance.json",
+    }
+    assert "did not pass" in (tmp_path / "protocol-extraction.md").read_text(encoding="utf-8")
 
 
 def test_document_and_edc_files_are_readable(tmp_path) -> None:

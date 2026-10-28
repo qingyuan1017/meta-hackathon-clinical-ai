@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     ai_timeout_seconds: int = 180
     max_source_chunks: int = 8
     chunk_characters: int = 12_000
+    core_cli_path: Path = Path("/opt/cdisc-core/core.py")
+    core_timeout_seconds: int = 600
+    core_pool_size: int = 2
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

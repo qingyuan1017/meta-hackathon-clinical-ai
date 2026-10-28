@@ -6,7 +6,7 @@ A local, single-user hackathon application that uses Meta's OpenAI-compatible AP
 
 ## Included workflows
 
-- Protocol extraction to structured JSON and Markdown
+- Protocol extraction to structured JSON, Markdown, and CDISC USDM 4.0 JSON accepted only after the complete CORE conformance gate passes
 - Ten clinical document templates with DOCX and PDF output
 - EDC build specifications and edit checks in JSON and XLSX
 - SDTM mapping, R/SAS programs, annotated CRF, and draft Define-XML 2.1
@@ -37,7 +37,11 @@ backend/app/
 └── use_cases/                # schemas, inputs, rendering, artifact contracts
 ```
 
-Every `POST /api/v1/jobs/{workflow}` call now runs the workflow's specialist agent. The agent must inspect the live contract, read every available source chunk, use at most one tool per turn, and submit a schema-valid result before deterministic rendering begins. Agent progress is saved under `data/jobs/<job-id>/agent/progress.json`; it contains no API credential and is removed when the job is deleted.
+Every `POST /api/v1/jobs/{workflow}` call runs the workflow's specialist agent. Protocol extraction first runs three parallel sub-agents for design/endpoints, conduct/eligibility, and safety/ambiguities; its lead agent then rereads the original source and reconciles their drafts into the only accepted result. The Codex skill and all four backend protocol agents use `backend/app/agents/protocol_extraction/extraction_policy.md` as their shared clinical extraction policy. Other workflows use one specialist loop. Every agent must inspect the live contract, read every available source chunk, use at most one tool per turn, and submit a schema-valid result before deterministic rendering begins. The lead progress is saved under `data/jobs/<job-id>/agent/progress.json`, while protocol perspective traces use `perspective-*.json` beside it; traces contain no API credential and are removed when the job is deleted.
+
+Protocol rendering maps the reviewed summary into the official CDISC USDM 4.0 API model and first validates it with CDISC's pinned `usdm` reference package. It then runs the full 207-rule USDM 4.0 set bundled with the official CDISC CORE 0.17.1 release. The gate fails closed for findings, execution errors, unknown statuses, incomplete reports, runtime failures, and technical skips; only raw skips explicitly reported as `Outside scope` are accepted as non-applicable. A successful bundle contains `usdm.json`, the unmodified official `core-report.json`, and the Workbench policy result `core-conformance.json`. A failed job retains those diagnostics for review but never labels the USDM conformant.
+
+The API image fetches the official CORE v0.17.1 source at pinned release commit `2a90a3872a7e3b07c15abe84744026c94a7a04b0`, including its release cache, and installs `cdisc-rules-engine==0.17.1`. Local non-container runs must set `CORE_CLI_PATH` to the matching checked-out `core.py`. Changing the engine or cache requires an explicit ruleset-count and policy review; silently updating the cache would make conformance results non-reproducible.
 
 This separation is intentional: an agent is a probabilistic planner that calls tools and drafts structured content, while a use case is the deterministic contract that validates, persists, edits, and renders that content. It keeps agent-driven runs and direct user/API edits on the same schemas and artifact path; removing `use_cases` would either couple rendering to the model loop or duplicate that logic in the API.
 

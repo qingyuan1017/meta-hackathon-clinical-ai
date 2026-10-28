@@ -1,7 +1,7 @@
 interface:
   display_name: "Clinical Protocol Extraction"
-  short_description: "Extract structured facts from a clinical protocol"
-  default_prompt: "Use $clinical-protocol-extraction to extract a structured summary from this synthetic or de-identified protocol."
+  short_description: "Extract protocol facts and CORE-gated USDM 4.0 JSON"
+  default_prompt: "Use $clinical-protocol-extraction to extract a structured summary and CDISC USDM 4.0 JSON that passes the complete CDISC CORE conformance gate from this synthetic or de-identified protocol."
 
 dependencies:
   tools:

@@ -13,6 +13,7 @@ class AgentDefinition:
     name: str
     description: str
     instruction_file: Path
+    policy_files: tuple[Path, ...] = ()
     remote_tools: tuple[str, ...] = ()
 
     @property
@@ -21,8 +22,10 @@ class AgentDefinition:
 
     def instructions(self) -> str:
         shared = (Path(__file__).parent / "shared_instructions.md").read_text(encoding="utf-8")
+        policies = [path.read_text(encoding="utf-8") for path in self.policy_files]
         specific = self.instruction_file.read_text(encoding="utf-8")
-        return f"{shared.rstrip()}\n\n{specific.strip()}\n"
+        sections = [shared, *policies, specific]
+        return "\n\n".join(section.strip() for section in sections) + "\n"
 
     def public_definition(self, max_turns: int) -> dict:
         return {
