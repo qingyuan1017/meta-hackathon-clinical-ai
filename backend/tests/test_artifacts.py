@@ -9,7 +9,7 @@ from reportlab.pdfgen import canvas
 
 from app.artifacts import add_manifest_and_bundle, render_clinical_document, render_edc, render_protocol, render_sdtm, render_tlf
 from app.core_conformance import CoreConformanceError, CoreConformanceResult
-from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMPlan, SDTMVariable, StudySummary, TLFColumn, TLFPlan, TLFSpec
+from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMDomainMapping, SDTMDomainRuleAugmentation, SDTMPlan, SDTMRuleAugmentation, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFPlan, TLFSpec
 from app.usdm import USDM_VERSION, validate_usdm
 
 
@@ -111,13 +111,21 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
     pdf.save()
     sdtm = SDTMPlan(
         study_name="SYN-101",
-        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", source_field="Age")])],
+        domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Demographics source")],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", source_dataset="RAW_DM", source_field="AGE", crf_source_label="Age", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGEU = 'YEARS'", label="Age in years", data_type="Num", mapping_expression="Direct")])])],
+        domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Use demographics source", logic="Read the raw demographics dataset", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
+        rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", source_dependencies=["RAW_DM.AGE"], description="Copy collected age", logic="Direct assignment", r_expression='.data[["AGE"]]', sas_expression="AGE")],
     )
     sdtm_paths = render_sdtm(sdtm, crf, tmp_path, ["r", "sas"])
     define_path = next(path for path in sdtm_paths if path.name == "define.xml")
     tree = etree.parse(str(define_path))
     assert tree.getroot().tag.endswith("ODM")
     assert (tmp_path / "annotated-crf.pdf").stat().st_size > 0
+    workbook = load_workbook(tmp_path / "sdtm-mapping.xlsx")
+    assert {"Domain Mappings", "Variable Mappings", "Value Level Metadata", "Domain Rule Augmentation", "Variable Rule Augmentation"} <= set(workbook.sheetnames)
+    assert "dm <- raw_dm %>%" in (tmp_path / "build-sdtm.R").read_text(encoding="utf-8")
+    assert '.data[["AGE"]]' in (tmp_path / "build-sdtm.R").read_text(encoding="utf-8")
+    assert "AGE = AGE;" in (tmp_path / "build-sdtm.sas").read_text(encoding="utf-8")
 
     tlf = TLFPlan(study_name="SYN-101", outputs=[TLFSpec(output_id="T-01", output_type="table", title="Disposition", columns=[TLFColumn(heading="Treatment")])])
     tlf_paths = render_tlf(tlf, tmp_path, ["r", "sas"])

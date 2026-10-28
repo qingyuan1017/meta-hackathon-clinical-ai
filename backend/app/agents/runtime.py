@@ -27,6 +27,7 @@ from .tool_catalog import (
 class AgentOutcome:
     value: BaseModel
     warnings: list[str]
+    events: list[dict[str, Any]]
 
 
 class ClinicalAgentRunner:
@@ -47,7 +48,18 @@ class ClinicalAgentRunner:
         self.settings = settings
         self.progress_path = progress_path
 
-    async def run(self, *, objective: str, source: str, options: dict[str, Any]) -> AgentOutcome:
+    async def run(
+        self,
+        *,
+        objective: str,
+        source: str,
+        options: dict[str, Any],
+        stage: str | None = None,
+        stage_index: int = 1,
+        stage_count: int = 1,
+        completed_stages: list[str] | None = None,
+        prior_events: list[dict[str, Any]] | None = None,
+    ) -> AgentOutcome:
         all_chunks = chunk_text(source, self.settings.chunk_characters)
         chunks = all_chunks[: self.settings.max_source_chunks]
         warnings: list[str] = []
@@ -77,13 +89,17 @@ class ClinicalAgentRunner:
             "model": self.settings.meta_model,
             "status": "running",
             "turn": 0,
-            "max_turns": self.settings.agent_max_turns,
+            "max_turns": self.settings.agent_max_turns * stage_count,
+            "stage": stage,
+            "stage_index": stage_index,
+            "stage_count": stage_count,
+            "completed_stages": list(completed_stages or []),
             "total_source_chunks": len(chunks),
             "read_source_chunks": [],
             "started_at": self._now(),
             "updated_at": self._now(),
             "messages": messages,
-            "events": [],
+            "events": list(prior_events or []),
         }
         self._save_trace(trace)
 
@@ -117,7 +133,7 @@ class ClinicalAgentRunner:
                 message = response.choices[0].message
                 assistant = message.model_dump(exclude_none=True)
                 messages.append(assistant)
-                trace["turn"] = turn
+                trace["turn"] = ((stage_index - 1) * self.settings.agent_max_turns) + turn
                 trace["messages"] = messages
 
                 calls = list(message.tool_calls or [])
@@ -128,7 +144,9 @@ class ClinicalAgentRunner:
                             "content": "Plain text is not accepted. Call exactly one available tool.",
                         }
                     )
-                    trace["events"].append({"turn": turn, "type": "plain_text_rejected"})
+                    trace["events"].append(
+                        {"turn": trace["turn"], "type": "plain_text_rejected", "stage": stage}
+                    )
                     trace["updated_at"] = self._now()
                     self._save_trace(trace)
                     continue
@@ -144,7 +162,12 @@ class ClinicalAgentRunner:
                             }
                         )
                     trace["events"].append(
-                        {"turn": turn, "type": "multiple_tools_rejected", "count": len(calls)}
+                        {
+                            "turn": trace["turn"],
+                            "type": "multiple_tools_rejected",
+                            "count": len(calls),
+                            "stage": stage,
+                        }
                     )
                     trace["updated_at"] = self._now()
                     self._save_trace(trace)
@@ -179,9 +202,10 @@ class ClinicalAgentRunner:
                 trace["read_source_chunks"] = sorted(state["read_chunks"])
                 trace["events"].append(
                     {
-                        "turn": turn,
+                        "turn": trace["turn"],
                         "type": "tool",
                         "name": call.function.name,
+                        "stage": stage,
                         "ok": bool(result.get("ok")),
                         "error": result.get("error"),
                     }
@@ -189,9 +213,15 @@ class ClinicalAgentRunner:
                 trace["updated_at"] = self._now()
                 if state["submitted"] is not None:
                     trace["status"] = "completed"
+                    if stage and stage not in trace["completed_stages"]:
+                        trace["completed_stages"].append(stage)
                     trace["completed_at"] = self._now()
                     self._save_trace(trace)
-                    return AgentOutcome(value=state["submitted"], warnings=warnings)
+                    return AgentOutcome(
+                        value=state["submitted"],
+                        warnings=warnings,
+                        events=trace["events"],
+                    )
                 self._save_trace(trace)
 
         trace["status"] = "paused"
@@ -429,7 +459,16 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
                 problems.append(f"Edit check {check.check_id} references unknown form {check.form}.")
             elif check.field not in known_forms[check.form]:
                 problems.append(f"Edit check {check.check_id} references unknown field {check.form}.{check.field}.")
-    elif workflow == "sdtm":
+    elif workflow == "sdtm-domain-mapping":
+        mappings = [
+            (mapping.source_dataset.casefold(), mapping.target_domain.upper())
+            for mapping in value.domain_mappings
+        ]
+        if len(mappings) != len(set(mappings)):
+            problems.append("Source dataset to target domain mappings must be unique.")
+        if "3.4" not in value.standard:
+            problems.append("The draft must identify SDTMIG 3.4 as its baseline.")
+    elif workflow in {"sdtm-variable-mapping", "sdtm"}:
         domains = [dataset.domain.upper() for dataset in value.datasets]
         if len(domains) != len(set(domains)):
             problems.append("SDTM domain identifiers must be unique.")
@@ -441,6 +480,84 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
             problems.append("The draft must identify SDTMIG 3.4 as its baseline.")
         if "2.1" not in value.define_standard:
             problems.append("The draft must identify Define-XML 2.1 as its baseline.")
+        if workflow == "sdtm":
+            known_domains = set(domains)
+            mapped_domains = {mapping.target_domain.upper() for mapping in value.domain_mappings}
+            for domain in mapped_domains - known_domains:
+                problems.append(f"Domain mapping references target domain {domain} without a variable mapping.")
+            for dataset in value.datasets:
+                mapped_sources = {
+                    mapping.source_dataset.casefold()
+                    for mapping in value.domain_mappings
+                    if mapping.target_domain.upper() == dataset.domain.upper()
+                }
+                for variable in dataset.variables:
+                    if variable.source_dataset.casefold() not in mapped_sources:
+                        problems.append(
+                            f"Variable {dataset.domain}.{variable.name} references source dataset "
+                            f"{variable.source_dataset} without a domain mapping."
+                        )
+            domain_rule_ids = [rule.rule_id.casefold() for rule in value.domain_rule_augmentations]
+            if len(domain_rule_ids) != len(set(domain_rule_ids)):
+                problems.append("SDTM domain-rule identifiers must be unique.")
+            domain_rule_targets = [
+                rule.target_domain.upper() for rule in value.domain_rule_augmentations
+            ]
+            if len(domain_rule_targets) != len(set(domain_rule_targets)):
+                problems.append("Each SDTM domain must have exactly one augmented domain rule.")
+            for domain in set(domain_rule_targets) - known_domains:
+                problems.append(f"Domain rule target {domain} does not exist in variable mappings.")
+            for domain in known_domains - set(domain_rule_targets):
+                problems.append(f"Domain {domain} is missing an augmented domain rule.")
+            for rule in value.domain_rule_augmentations:
+                expected_sources = {
+                    mapping.source_dataset.casefold()
+                    for mapping in value.domain_mappings
+                    if mapping.target_domain.upper() == rule.target_domain.upper()
+                }
+                actual_sources = {source.casefold() for source in rule.source_datasets}
+                if actual_sources != expected_sources:
+                    problems.append(
+                        f"Domain rule {rule.rule_id} source datasets must exactly match the domain mapping."
+                    )
+            rule_ids = [rule.rule_id.casefold() for rule in value.rule_augmentations]
+            if len(rule_ids) != len(set(rule_ids)):
+                problems.append("SDTM rule identifiers must be unique.")
+            rule_targets = [
+                (rule.target_domain.upper(), rule.target_variable.upper())
+                for rule in value.rule_augmentations
+            ]
+            if len(rule_targets) != len(set(rule_targets)):
+                problems.append("Each SDTM domain-variable pair must have exactly one augmented rule.")
+            variable_targets = {
+                (dataset.domain.upper(), variable.name.upper())
+                for dataset in value.datasets
+                for variable in dataset.variables
+            }
+            for domain, variable in set(rule_targets) - variable_targets:
+                problems.append(f"Rule target {domain}.{variable} does not exist in variable mappings.")
+            for domain, variable in variable_targets - set(rule_targets):
+                problems.append(f"Variable {domain}.{variable} is missing an augmented rule.")
+    elif workflow == "sdtm-rule-augmentation":
+        domain_rule_ids = [rule.rule_id.casefold() for rule in value.domain_rule_augmentations]
+        if len(domain_rule_ids) != len(set(domain_rule_ids)):
+            problems.append("SDTM domain-rule identifiers must be unique.")
+        domain_rule_targets = [
+            rule.target_domain.upper() for rule in value.domain_rule_augmentations
+        ]
+        if len(domain_rule_targets) != len(set(domain_rule_targets)):
+            problems.append("Each SDTM domain must have exactly one augmented domain rule.")
+        rule_ids = [rule.rule_id.casefold() for rule in value.rule_augmentations]
+        if len(rule_ids) != len(set(rule_ids)):
+            problems.append("SDTM rule identifiers must be unique.")
+        rule_targets = [
+            (rule.target_domain.upper(), rule.target_variable.upper())
+            for rule in value.rule_augmentations
+        ]
+        if len(rule_targets) != len(set(rule_targets)):
+            problems.append("Each SDTM domain-variable pair must have exactly one augmented rule.")
+        if "3.4" not in value.standard:
+            problems.append("The draft must identify SDTMIG 3.4 as its baseline.")
     elif workflow == "tlf":
         output_ids = [item.output_id for item in value.outputs]
         if len(output_ids) != len(set(output_ids)):

@@ -4,12 +4,15 @@ from types import SimpleNamespace
 
 from app.agents import AGENTS, AgentOutcome, ClinicalAgentRunner, get_agent
 from app.agents.protocol_extraction import PERSPECTIVE_AGENTS
+from reportlab.pdfgen import canvas
+
 from app.agents.runtime import verify_result
 from app.ai import MetaAIClient
 from app.config import Settings
 from app.schemas import EDCDesign, EDCForm, EDCVisit, StudySummary
 from app.use_cases.base import UseCaseContext
 from app.use_cases.protocol_extraction import ProtocolExtractionUseCase
+from app.use_cases.sdtm import SDTMUseCase
 
 
 class FakeMessage:
@@ -239,3 +242,111 @@ def test_edc_agent_verification_rejects_broken_form_references() -> None:
     assert verify_result("edc-design", design) == [
         "Visit Baseline references unknown form MISSING."
     ]
+
+
+async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None:
+    domain_result = {
+        "study_name": "SYN-101",
+        "domain_mappings": [
+            {
+                "source_dataset": "RAW_DM",
+                "target_domain": "DM",
+                "rationale": "Demographics source",
+            }
+        ],
+    }
+    variable_result = {
+        "study_name": "SYN-101",
+        "datasets": [
+            {
+                "domain": "DM",
+                "description": "Demographics",
+                "variables": [
+                    {
+                        "name": "AGE",
+                        "label": "Age",
+                        "data_type": "Num",
+                        "source_dataset": "RAW_DM",
+                        "source_field": "AGE",
+                        "crf_source_label": "Age",
+                    }
+                ],
+            }
+        ],
+    }
+    final_result = {
+        "study_name": "SYN-101",
+        "domain_rule_augmentations": [
+            {
+                "rule_id": "DM-SOURCE",
+                "target_domain": "DM",
+                "source_datasets": ["RAW_DM"],
+                "description": "Use demographics source",
+                "logic": "Read the raw demographics dataset",
+                "r_input_expression": "raw_dm",
+                "sas_input_statement": "set raw.raw_dm;",
+            }
+        ],
+        "rule_augmentations": [
+            {
+                "rule_id": "DM-AGE",
+                "target_domain": "DM",
+                "target_variable": "AGE",
+                "source_dependencies": ["RAW_DM.AGE"],
+                "description": "Copy collected age",
+                "logic": "Direct assignment",
+                "r_expression": '.data[["AGE"]]',
+                "sas_expression": "AGE",
+            }
+        ],
+    }
+    actions = [
+        ("inspect_workflow_contract", {}),
+        ("read_source_chunk", {"index": 1}),
+        ("submit_result", {"result": domain_result}),
+        ("inspect_workflow_contract", {}),
+        ("read_source_chunk", {"index": 1}),
+        ("submit_result", {"result": variable_result}),
+        ("inspect_workflow_contract", {}),
+        ("read_source_chunk", {"index": 1}),
+        ("submit_result", {"result": final_result}),
+    ]
+    completions = ScriptedCompletions(actions)
+    settings = agent_settings(agent_max_turns=4)
+    ai = MetaAIClient(settings)
+    ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    edc = tmp_path / "edc.json"
+    edc.write_text(
+        json.dumps({"study": "SYN-101", "datasets": [{"name": "RAW_DM", "fields": ["AGE"]}]}),
+        encoding="utf-8",
+    )
+    crf = tmp_path / "blank.pdf"
+    pdf = canvas.Canvas(str(crf))
+    pdf.drawString(50, 750, "Age")
+    pdf.save()
+    progress_path = tmp_path / "agent" / "progress.json"
+
+    generated = await SDTMUseCase().generate(
+        UseCaseContext(
+            inputs=[crf, edc],
+            options={"languages": ["r", "sas"]},
+            ai=ai,
+            settings=settings,
+            agent_progress_path=progress_path,
+        )
+    )
+
+    assert generated.value.rule_augmentations[0].rule_id == "DM-AGE"
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["stage"] == "Rule augmentation"
+    assert progress["stage_index"] == 3
+    assert progress["completed_stages"] == [
+        "Domain mapping",
+        "Variable & value-level mapping",
+        "Rule augmentation",
+    ]
+    assert {event["stage"] for event in progress["events"]} == {
+        "Domain mapping",
+        "Variable & value-level mapping",
+        "Rule augmentation",
+    }

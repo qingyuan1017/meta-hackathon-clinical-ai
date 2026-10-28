@@ -43,6 +43,10 @@ Protocol rendering maps the reviewed summary into the official CDISC USDM 4.0 AP
 
 The API image fetches the official CORE v0.17.1 source at pinned release commit `2a90a3872a7e3b07c15abe84744026c94a7a04b0`, including its release cache, and installs `cdisc-rules-engine==0.17.1`. Local non-container runs must set `CORE_CLI_PATH` to the matching checked-out `core.py`. Changing the engine or cache requires an explicit ruleset-count and policy review; silently updating the cache would make conformance results non-reproducible.
 
+The SDTM use case is an ordered three-stage pipeline. Domain mapping first relates raw or existing SDTM source datasets to target SDTM domains. Variable mapping then adds variable traceability and value-level metadata and selects the source labels used for aCRF annotations. Rule augmentation finally contributes source-preparation rules per domain and R/SAS implementation expressions per target variable; deterministic rendering uses those rules to build the draft programs.
+
+Completed SDTM jobs open a dedicated review editor instead of a raw JSON-only form. Reviewers can drag raw or existing-SDTM datasets onto target domains, import versioned domain metadata through the configured CDISC Library MCP service, modify standard variables or add sponsor SUPP/VLM qualifiers in a matrix, and review the R/SAS rule expressions before schema-validated artifact rebuilding.
+
 This separation is intentional: an agent is a probabilistic planner that calls tools and drafts structured content, while a use case is the deterministic contract that validates, persists, edits, and renders that content. It keeps agent-driven runs and direct user/API edits on the same schemas and artifact path; removing `use_cases` would either couple rendering to the model loop or duplicate that logic in the API.
 
 ## Quick start
