@@ -207,17 +207,145 @@ def render_sdtm(result: SDTMPlan, crf_path: Path, output_dir: Path, languages: l
 def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
     workbook = Workbook()
     sheet = workbook.active
-    sheet.title = "Mappings"
-    sheet.append(["Domain", "Dataset", "Variable", "Label", "Type", "Source Field", "Origin", "Mapping", "Controlled Terms"])
+    sheet.title = "Domain Mappings"
+    sheet.append(["Source Dataset", "Source Type", "Target Domain", "Relationship", "Rationale"])
+    for mapping in result.domain_mappings:
+        sheet.append(
+            [
+                mapping.source_dataset,
+                mapping.source_type,
+                mapping.target_domain,
+                mapping.relationship,
+                mapping.rationale,
+            ]
+        )
+
+    variables = workbook.create_sheet("Variable Mappings")
+    variables.append(
+        [
+            "Domain",
+            "Dataset",
+            "Variable",
+            "Label",
+            "Type",
+            "Source Dataset",
+            "Source Field",
+            "Origin",
+            "Mapping",
+            "Controlled Terms",
+            "CRF Source Label",
+        ]
+    )
     for dataset in result.datasets:
         for variable in dataset.variables:
-            sheet.append([dataset.domain, dataset.description, variable.name, variable.label, variable.data_type, variable.source_field, variable.origin, variable.mapping_expression, "; ".join(variable.controlled_terms)])
-    sheet.freeze_panes = "A2"
-    sheet.auto_filter.ref = sheet.dimensions
+            variables.append(
+                [
+                    dataset.domain,
+                    dataset.description,
+                    variable.name,
+                    variable.label,
+                    variable.data_type,
+                    variable.source_dataset,
+                    variable.source_field,
+                    variable.origin,
+                    variable.mapping_expression,
+                    "; ".join(variable.controlled_terms),
+                    variable.crf_source_label or "",
+                ]
+            )
+
+    value_level = workbook.create_sheet("Value Level Metadata")
+    value_level.append(
+        [
+            "Domain",
+            "Variable",
+            "Where Clause",
+            "Label",
+            "Type",
+            "Origin",
+            "Mapping",
+            "Controlled Terms",
+        ]
+    )
+    for dataset in result.datasets:
+        for variable in dataset.variables:
+            for metadata in variable.value_level_metadata:
+                value_level.append(
+                    [
+                        dataset.domain,
+                        variable.name,
+                        metadata.where_clause,
+                        metadata.label,
+                        metadata.data_type,
+                        metadata.origin,
+                        metadata.mapping_expression,
+                        "; ".join(metadata.controlled_terms),
+                    ]
+                )
+
+    domain_rules = workbook.create_sheet("Domain Rule Augmentation")
+    domain_rules.append(
+        [
+            "Rule ID",
+            "Target Domain",
+            "Source Datasets",
+            "Description",
+            "Logic",
+            "R Input Expression",
+            "SAS Input Statement",
+            "Review Notes",
+        ]
+    )
+    for rule in result.domain_rule_augmentations:
+        domain_rules.append(
+            [
+                rule.rule_id,
+                rule.target_domain,
+                "; ".join(rule.source_datasets),
+                rule.description,
+                rule.logic,
+                rule.r_input_expression,
+                rule.sas_input_statement,
+                "; ".join(rule.review_notes),
+            ]
+        )
+
+    rules = workbook.create_sheet("Variable Rule Augmentation")
+    rules.append(
+        [
+            "Rule ID",
+            "Target Domain",
+            "Target Variable",
+            "Source Dependencies",
+            "Description",
+            "Logic",
+            "R Expression",
+            "SAS Expression",
+            "Review Notes",
+        ]
+    )
+    for rule in result.rule_augmentations:
+        rules.append(
+            [
+                rule.rule_id,
+                rule.target_domain,
+                rule.target_variable,
+                "; ".join(rule.source_dependencies),
+                rule.description,
+                rule.logic,
+                rule.r_expression,
+                rule.sas_expression,
+                "; ".join(rule.review_notes),
+            ]
+        )
+
     assumptions = workbook.create_sheet("Assumptions")
     assumptions.append([DISCLAIMER])
     for item in [*result.assumptions, *result.unresolved_mappings]:
         assumptions.append([item])
+    for current in (sheet, variables, value_level, domain_rules, rules):
+        current.freeze_panes = "A2"
+        current.auto_filter.ref = current.dimensions
     workbook.save(path)
     return path
 
@@ -259,7 +387,7 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path) -> Path:
     for dataset in result.datasets:
         for variable in dataset.variables:
             matches: list[tuple[fitz.Page, fitz.Rect]] = []
-            needle = variable.source_field.strip()
+            needle = (variable.crf_source_label or variable.source_field).strip()
             if needle and len(needle) >= 2:
                 for page in document:
                     for rect in page.search_for(needle)[:1]:
@@ -267,11 +395,18 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path) -> Path:
             if matches:
                 page, rect = matches[0]
                 point = fitz.Point(min(rect.x1 + 8, page.rect.width - 24), max(rect.y0, 24))
-                annotation = page.add_text_annot(point, f"{dataset.domain}.{variable.name}\n{variable.label}\n{variable.mapping_expression}")
+                value_level = "\n".join(
+                    f"VLM: {item.where_clause} — {item.mapping_expression}"
+                    for item in variable.value_level_metadata
+                )
+                text = f"{dataset.domain}.{variable.name}\n{variable.label}\n{variable.mapping_expression}"
+                if value_level:
+                    text = f"{text}\n{value_level}"
+                annotation = page.add_text_annot(point, text)
                 annotation.set_info(title="Clinical AI Workbench — DRAFT")
                 annotation.update()
             else:
-                unmatched.append(f"{dataset.domain}.{variable.name} ← {variable.source_field}")
+                unmatched.append(f"{dataset.domain}.{variable.name} ← {needle or '[no CRF label]'}")
     appendix = document.new_page()
     appendix.insert_textbox(fitz.Rect(48, 48, appendix.rect.width - 48, 110), "Draft aCRF annotation appendix", fontsize=16, color=(0.1, 0.2, 0.35))
     appendix.insert_textbox(fitz.Rect(48, 100, appendix.rect.width - 48, 155), DISCLAIMER, fontsize=9, color=(0.65, 0.05, 0.15))
@@ -282,25 +417,83 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path) -> Path:
 
 
 def _render_r_sdtm(result: SDTMPlan, path: Path) -> Path:
-    lines = [f"# {DISCLAIMER}", "# Generated scaffold; it is intentionally not executed.", "library(dplyr)", ""]
+    domain_rules = {
+        rule.target_domain.upper(): rule for rule in result.domain_rule_augmentations
+    }
+    rules = {
+        (rule.target_domain.upper(), rule.target_variable.upper()): rule
+        for rule in result.rule_augmentations
+    }
+    lines = [
+        f"# {DISCLAIMER}",
+        "# Generated from reviewed rule-augmentation metadata; it is intentionally not executed.",
+        "library(dplyr)",
+        "",
+    ]
     for dataset in result.datasets:
-        lines.extend([f"# {dataset.domain}: {dataset.description}", f"{dataset.domain.lower()} <- raw_data %>%", "  transmute("])
-        for variable in dataset.variables:
-            lines.append(f"    {variable.name} = {{ # TODO: {variable.source_field}; {variable.mapping_expression}\n      NA\n    }},")
+        domain_rule = domain_rules[dataset.domain.upper()]
+        lines.extend(
+            [
+                f"# {dataset.domain}: {dataset.description}",
+                f"# {domain_rule.rule_id}: {_one_line(domain_rule.description)}",
+                f"# Source datasets: {', '.join(domain_rule.source_datasets)}",
+                f"{dataset.domain.lower()} <- {domain_rule.r_input_expression} %>%",
+                "  transmute(",
+            ]
+        )
+        for index, variable in enumerate(dataset.variables):
+            rule = rules[(dataset.domain.upper(), variable.name.upper())]
+            delimiter = "," if index < len(dataset.variables) - 1 else ""
+            lines.extend(
+                [
+                    f"    # {rule.rule_id}: {_one_line(rule.description)}",
+                    f"    {variable.name} = {rule.r_expression}{delimiter}",
+                ]
+            )
         lines.extend(["  )", "", f"# TODO: write_xpt({dataset.domain.lower()}, 'output/{dataset.domain.lower()}.xpt')", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
 def _render_sas_sdtm(result: SDTMPlan, path: Path) -> Path:
-    lines = [f"/* {DISCLAIMER} */", "/* Generated scaffold; it is intentionally not executed. */", ""]
+    domain_rules = {
+        rule.target_domain.upper(): rule for rule in result.domain_rule_augmentations
+    }
+    rules = {
+        (rule.target_domain.upper(), rule.target_variable.upper()): rule
+        for rule in result.rule_augmentations
+    }
+    lines = [
+        f"/* {DISCLAIMER} */",
+        "/* Generated from reviewed rule-augmentation metadata; it is intentionally not executed. */",
+        "",
+    ]
     for dataset in result.datasets:
-        lines.extend([f"/* {dataset.domain}: {dataset.description} */", f"data sdtm.{dataset.domain.lower()};", "  set raw.source;"])
+        domain_rule = domain_rules[dataset.domain.upper()]
+        lines.extend(
+            [
+                f"/* {dataset.domain}: {dataset.description} */",
+                f"/* {domain_rule.rule_id}: {_one_line(domain_rule.description)} */",
+                f"/* Source datasets: {', '.join(domain_rule.source_datasets)} */",
+                f"data sdtm.{dataset.domain.lower()};",
+            ]
+        )
+        lines.extend(f"  {line}" for line in domain_rule.sas_input_statement.splitlines())
         for variable in dataset.variables:
-            lines.append(f"  /* TODO {variable.name}: {variable.source_field}; {variable.mapping_expression} */")
+            rule = rules[(dataset.domain.upper(), variable.name.upper())]
+            lines.extend(
+                [
+                    f"  /* {rule.rule_id}: {_one_line(rule.description)} */",
+                    f"  {variable.name} = {rule.sas_expression};",
+                ]
+            )
         lines.extend(["run;", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
+
+
+def _one_line(value: str) -> str:
+    return " ".join(value.split())
 
 
 def render_tlf(result: TLFPlan, output_dir: Path, languages: list[str]) -> list[Path]:

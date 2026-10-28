@@ -19,3 +19,4 @@ export interface JobList { items: Job[]; total: number; page: number; page_size:
 export type Health = components["schemas"]["HealthRead"];
 export type UseCaseContract = components["schemas"]["UseCaseRead"];
 export type AgentProgress = components["schemas"]["AgentProgressRead"];
+export type CDISCDataset = components["schemas"]["CDISCDatasetRead"];

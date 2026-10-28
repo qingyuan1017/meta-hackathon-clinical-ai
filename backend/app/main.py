@@ -4,11 +4,13 @@ import json
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from mcp import Client as MCPClient
 from reportlab.pdfgen import canvas
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -20,7 +22,7 @@ from .db import get_db, initialize_database
 from .jobs import runner
 from .models import Artifact, Job
 from .parsers import parse_source
-from .schemas import AgentEventRead, AgentProgressRead, AgentRead, DISCLAIMER, ArtifactRead, HealthRead, JobList, JobRead, JobResultUpdate, UseCaseRead
+from .schemas import AgentEventRead, AgentProgressRead, AgentRead, ArtifactRead, CDISCDatasetRead, DISCLAIMER, HealthRead, JobList, JobRead, JobResultUpdate, UseCaseRead
 from .security import detect_identifiers, validate_upload_metadata, verify_signature
 from .use_cases import USE_CASES, get_use_case
 from .workflows import DOCUMENT_TYPES, WORKFLOWS, WorkflowService
@@ -84,6 +86,57 @@ def read_use_case(use_case_id: str) -> UseCaseRead:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Use case not found.") from exc
     return UseCaseRead.model_validate(use_case.public_definition())
+
+
+@app.get(
+    f"{settings.api_prefix}/standards/sdtm/datasets/{{domain}}",
+    response_model=CDISCDatasetRead,
+)
+async def read_cdisc_sdtm_dataset(
+    domain: str,
+    version: str = Query("3-4", min_length=1, max_length=80),
+    standard: Literal["sdtm", "sdtmig"] = Query("sdtmig"),
+) -> CDISCDatasetRead:
+    """Read one versioned SDTM dataset through the configured CDISC Library MCP service."""
+
+    normalized_domain = domain.strip().upper()
+    if not normalized_domain or len(normalized_domain) > 12 or not normalized_domain.isalnum():
+        raise HTTPException(status_code=422, detail="Domain must be an alphanumeric SDTM dataset identifier.")
+    if not settings.cdisc_mcp_enabled:
+        raise HTTPException(status_code=503, detail="CDISC Library integration is disabled.")
+    try:
+        async with MCPClient(settings.cdisc_mcp_url) as client:
+            result = await client.call_tool(
+                "cdisc_get_dataset",
+                {"standard": standard, "version": version.strip(), "dataset": normalized_domain},
+            )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="The configured CDISC Library service could not retrieve this dataset.",
+        ) from exc
+    if result.is_error:
+        raise HTTPException(status_code=502, detail="CDISC Library rejected the dataset request.")
+    payload = result.structured_content
+    if payload is None:
+        content = [item.model_dump(exclude_none=True) for item in result.content]
+        if len(content) == 1 and content[0].get("type") == "text":
+            try:
+                payload = json.loads(str(content[0].get("text", "")))
+            except json.JSONDecodeError:
+                payload = content
+        else:
+            payload = content
+    if isinstance(payload, dict) and set(payload) == {"result"}:
+        payload = payload["result"]
+    if not isinstance(payload, (dict, list)):
+        raise HTTPException(status_code=502, detail="CDISC Library returned an unsupported dataset payload.")
+    return CDISCDatasetRead(
+        standard=standard,
+        version=version.strip(),
+        domain=normalized_domain,
+        payload=payload,
+    )
 
 
 @app.get(f"{settings.api_prefix}/agents", response_model=list[AgentRead])
@@ -240,6 +293,10 @@ def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentP
             status=job.status,
             turn=0,
             max_turns=settings.agent_max_turns,
+            stage=None,
+            stage_index=1,
+            stage_count=1,
+            completed_stages=[],
             total_source_chunks=0,
             read_source_chunks=[],
             events=[],
@@ -253,6 +310,7 @@ def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentP
             turn=int(event.get("turn", 0)),
             type=str(event.get("type", "unknown")),
             name=str(event["name"]) if event.get("name") else None,
+            stage=str(event["stage"]) if event.get("stage") else None,
             ok=event.get("ok") if isinstance(event.get("ok"), bool) else None,
             error=str(event["error"])[:500] if event.get("error") else None,
         )
@@ -265,6 +323,10 @@ def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentP
         status=str(progress.get("status", job.status)),
         turn=int(progress.get("turn", 0)),
         max_turns=int(progress.get("max_turns", settings.agent_max_turns)),
+        stage=str(progress["stage"]) if progress.get("stage") else None,
+        stage_index=int(progress.get("stage_index", 1)),
+        stage_count=int(progress.get("stage_count", 1)),
+        completed_stages=[str(item) for item in progress.get("completed_stages", [])],
         total_source_chunks=int(progress.get("total_source_chunks", 0)),
         read_source_chunks=[int(item) for item in progress.get("read_source_chunks", [])],
         events=events,

@@ -40,6 +40,9 @@ export default function WorkflowPage() {
   const onCreated = (job: Job) => router.replace(`/workflows/${workflow}?job=${job.id}${disciplineQuery}`);
   const reset = () => router.replace(`/workflows/${workflow}${workflow === "clinical-document" ? `?discipline=${discipline}` : ""}`);
   const workspaceLabel = workflow === "clinical-document" && discipline === "data-management" ? "Data management" : workflow === "sdtm" || workflow === "tlf" ? "Stats programming" : "Biostats";
+  const executionSteps = workflow === "sdtm"
+    ? ["Validate and scan input", "Domain mapping", "Variable & value-level mapping", "Rule augmentation", "Validate and render artifacts"]
+    : ["Validate and scan input", "Inspect workflow contract", "Investigate all source chunks", "Validate and render artifacts"];
   return (
     <div className="mx-auto max-w-[1440px] px-5 py-8 lg:px-10 lg:py-10">
       <div className="border-b border-white/10 pb-6">
@@ -60,13 +63,14 @@ export default function WorkflowPage() {
           <div className="mt-4"><ConfigStatus compact /></div>
           <div className="mt-4 rounded-xl border border-white/10 bg-[#18181b] p-4">
             <p className="flex items-center gap-2 text-xs font-semibold text-zinc-100"><Info size={15} className="text-violet-300" /> Agent execution contract</p>
-            <ol className="mt-4 space-y-3 text-xs text-zinc-600">{["Validate and scan input", "Inspect workflow contract", "Investigate all source chunks", "Validate and render artifacts"].map((step, index) => <li key={step} className="flex items-center gap-2">{jobId && ((jobQuery.data?.status === "succeeded") || index === 0) ? <CheckCircle2 size={14} className="text-clinical-600" /> : <Circle size={14} className="text-zinc-300" />}{step}</li>)}</ol>
+            <ol className="mt-4 space-y-3 text-xs text-zinc-600">{executionSteps.map((step, index) => <li key={step} className="flex items-center gap-2">{jobId && ((jobQuery.data?.status === "succeeded") || index === 0) ? <CheckCircle2 size={14} className="text-clinical-600" /> : <Circle size={14} className="text-zinc-300" />}{step}</li>)}</ol>
           </div>
           {contract.data && (
             <div className="mt-4 rounded-xl border border-white/10 bg-[#18181b] p-4">
               <p className="text-xs font-semibold text-zinc-100">Shared use-case contract</p>
               <p className="mt-3 flex items-start gap-2 text-xs leading-5 text-zinc-400"><Bot size={14} className="mt-0.5 shrink-0 text-violet-300" /><span>Agent: <span className="font-semibold text-zinc-100">{contract.data.agent_name}</span><br /><span className="font-mono text-[11px] text-violet-300">{contract.data.agent_id}</span></span></p>
               <p className="mt-2 text-xs leading-5 text-zinc-400">Skill: <span className="font-mono text-violet-300">{contract.data.skill_name}</span></p>
+              {contract.data.stages && contract.data.stages.length > 0 && <p className="mt-2 text-xs leading-5 text-zinc-400">Stages: {contract.data.stages.join(" → ")}</p>}
               <p className="mt-2 text-xs leading-5 text-zinc-400">Outputs: {contract.data.output_formats.join(", ").toUpperCase()}</p>
               <p className="mt-2 text-xs leading-5 text-zinc-400">Result editing: {contract.data.supports_result_editing ? "schema-validated" : "disabled"}</p>
             </div>

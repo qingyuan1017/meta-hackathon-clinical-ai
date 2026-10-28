@@ -1,0 +1,3 @@
+# SDTM stage 1 — domain mapping
+
+Determine the dataset-level mapping from each supplied raw or existing SDTM source dataset to its target SDTMIG 3.4 domain. Emit one `domain_mappings` entry for every source-to-target relationship, including split, merge, and derived relationships when needed. Preserve exact source dataset identifiers, uppercase target domain identifiers, explain the rationale, and record uncertainty instead of inventing source structure. Do not perform variable mapping or write code in this stage. Use versioned CDISC Library metadata when it materially supports the domain decision. A plausible mapping is not evidence of conformance.

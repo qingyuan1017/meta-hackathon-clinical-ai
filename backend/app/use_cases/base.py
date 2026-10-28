@@ -23,6 +23,7 @@ class UseCaseDescriptor:
     required_inputs: tuple[str, ...]
     output_formats: tuple[str, ...]
     mcp_dependencies: tuple[str, ...] = ()
+    stages: tuple[str, ...] = ()
     supports_languages: bool = False
     supports_result_editing: bool = True
 
@@ -90,6 +91,7 @@ class ClinicalUseCase(ABC):
             "required_inputs": list(descriptor.required_inputs),
             "output_formats": list(descriptor.output_formats),
             "mcp_dependencies": list(descriptor.mcp_dependencies),
+            "stages": list(descriptor.stages),
             "supports_languages": descriptor.supports_languages,
             "supports_result_editing": descriptor.supports_result_editing,
             "result_schema": self.result_model.model_json_schema(),

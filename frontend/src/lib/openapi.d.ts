@@ -58,6 +58,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/standards/sdtm/datasets/{domain}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Cdisc Sdtm Dataset
+         * @description Read one versioned SDTM dataset through the configured CDISC Library MCP service.
+         */
+        get: operations["read_cdisc_sdtm_dataset_api_v1_standards_sdtm_datasets__domain__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents": {
         parameters: {
             query?: never;
@@ -267,6 +287,8 @@ export interface components {
             type: string;
             /** Name */
             name?: string | null;
+            /** Stage */
+            stage?: string | null;
             /** Ok */
             ok?: boolean | null;
             /** Error */
@@ -284,6 +306,20 @@ export interface components {
             turn: number;
             /** Max Turns */
             max_turns: number;
+            /** Stage */
+            stage?: string | null;
+            /**
+             * Stage Index
+             * @default 1
+             */
+            stage_index: number;
+            /**
+             * Stage Count
+             * @default 1
+             */
+            stage_count: number;
+            /** Completed Stages */
+            completed_stages?: string[];
             /** Total Source Chunks */
             total_source_chunks: number;
             /** Read Source Chunks */
@@ -333,6 +369,22 @@ export interface components {
              * @default []
              */
             files: string[];
+        };
+        /** CDISCDatasetRead */
+        CDISCDatasetRead: {
+            /**
+             * Standard
+             * @enum {string}
+             */
+            standard: "sdtm" | "sdtmig";
+            /** Version */
+            version: string;
+            /** Domain */
+            domain: string;
+            /** Payload */
+            payload: {
+                [key: string]: unknown;
+            } | unknown[];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -434,6 +486,8 @@ export interface components {
             output_formats: string[];
             /** Mcp Dependencies */
             mcp_dependencies: string[];
+            /** Stages */
+            stages?: string[];
             /** Supports Languages */
             supports_languages: boolean;
             /** Supports Result Editing */
@@ -523,6 +577,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UseCaseRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_cdisc_sdtm_dataset_api_v1_standards_sdtm_datasets__domain__get: {
+        parameters: {
+            query?: {
+                version?: string;
+                standard?: "sdtm" | "sdtmig";
+            };
+            header?: never;
+            path: {
+                domain: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CDISCDatasetRead"];
                 };
             };
             /** @description Validation Error */

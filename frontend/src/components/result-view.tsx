@@ -8,11 +8,13 @@ import type { Job } from "@/lib/types";
 import { formatBytes } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader } from "./ui/card";
+import { SDTMReviewEditor, type SDTMPlanDraft } from "./sdtm-review-editor";
 import { StatusBadge } from "./status-badge";
 
 export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) {
   const [tab, setTab] = useState<"preview" | "edit" | "agent" | "artifacts" | "warnings">("preview");
   const [draft, setDraft] = useState(() => JSON.stringify(job.result, null, 2));
+  const [sdtmDraft, setSdtmDraft] = useState<Record<string, unknown>>(() => asRecord(job.result));
   const [draftError, setDraftError] = useState<string | null>(null);
   const client = useQueryClient();
   const agentQuery = useQuery({
@@ -20,7 +22,10 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
     queryFn: () => api.agentProgress(job.id),
     refetchInterval: job.status === "queued" || job.status === "running" ? 2_000 : false,
   });
-  useEffect(() => setDraft(JSON.stringify(job.result, null, 2)), [job.id, job.result]);
+  useEffect(() => {
+    setDraft(JSON.stringify(job.result, null, 2));
+    setSdtmDraft(asRecord(job.result));
+  }, [job.id, job.result]);
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteJob(job.id),
     onSuccess: () => { client.invalidateQueries({ queryKey: ["jobs"] }); onReset(); },
@@ -63,8 +68,8 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
         )}
         {(job.status === "queued" || job.status === "running") && (
           <div className="mb-5 rounded-xl border border-blue-500/20 bg-blue-500/10 p-5">
-            <div className="flex items-center gap-3"><span className="h-3 w-3 animate-pulse rounded-full bg-blue-400" /><p className="text-sm font-bold text-blue-200">{job.status === "queued" ? "Waiting to start…" : "The specialist agent is reviewing sources, using approved tools, and validating its draft…"}</p></div>
-            <p className="mt-2 pl-6 text-xs text-blue-300">{agentQuery.data ? `Turn ${agentQuery.data.turn}/${agentQuery.data.max_turns} · source chunks ${agentQuery.data.read_source_chunks.length}/${agentQuery.data.total_source_chunks}` : "You can leave this page; local history will retain the job."}</p>
+            <div className="flex items-center gap-3"><span className="h-3 w-3 animate-pulse rounded-full bg-blue-400" /><p className="text-sm font-bold text-blue-200">{job.status === "queued" ? "Waiting to start…" : agentQuery.data?.stage ? `Stage ${agentQuery.data.stage_index ?? 1}/${agentQuery.data.stage_count ?? 1}: ${agentQuery.data.stage}` : "The specialist agent is reviewing sources, using approved tools, and validating its draft…"}</p></div>
+            <p className="mt-2 pl-6 text-xs text-blue-300">{agentQuery.data ? `Turn ${agentQuery.data.turn}/${agentQuery.data.max_turns} · current-stage source chunks ${agentQuery.data.read_source_chunks.length}/${agentQuery.data.total_source_chunks}` : "You can leave this page; local history will retain the job."}</p>
           </div>
         )}
         <div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist">
@@ -75,7 +80,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
         <div className="min-h-72 py-5">
           {tab === "preview" && (job.result ? <StructuredPreview value={job.result} /> : <EmptyState text="A structured preview will appear when generation completes." />)}
           {tab === "edit" && (
-            <div className="space-y-4">
+            job.workflow === "sdtm" ? <SDTMReviewEditor value={sdtmDraft} onChange={(next) => setSdtmDraft(next)} onSave={(next: SDTMPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : <div className="space-y-4">
               <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm leading-6 text-blue-200">Edit the validated structured result below. Saving rebuilds DOCX, PDF, XLSX, XML, code, and ZIP artifacts without another model call.</div>
               <textarea aria-label="Editable structured result" value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} className="focus-ring min-h-[32rem] w-full rounded-xl border border-white/15 bg-[#0d0d0f] p-4 font-mono text-xs leading-5 text-zinc-200" />
               {(draftError || updateMutation.error) && <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">{draftError ?? updateMutation.error?.message}</div>}
@@ -87,9 +92,9 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
               <div className="grid gap-3 sm:grid-cols-3">
                 <AgentMetric label="Agent" value={agentQuery.data.agent_id} />
                 <AgentMetric label="Turns" value={`${agentQuery.data.turn} / ${agentQuery.data.max_turns}`} />
-                <AgentMetric label="Sources reviewed" value={`${agentQuery.data.read_source_chunks.length} / ${agentQuery.data.total_source_chunks}`} />
+                <AgentMetric label={agentQuery.data.stage ? "Current stage" : "Sources reviewed"} value={agentQuery.data.stage ?? `${agentQuery.data.read_source_chunks.length} / ${agentQuery.data.total_source_chunks}`} />
               </div>
-              <ol className="space-y-2">{agentQuery.data.events.map((event, index) => <li key={`${event.turn}-${event.name ?? event.type}-${index}`} className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3"><div className="flex items-center justify-between gap-3"><span className="font-mono text-xs font-bold text-violet-300">TURN {event.turn}</span><span className={`text-xs font-bold ${event.ok === false ? "text-rose-300" : "text-emerald-300"}`}>{event.ok === false ? "REFUSED" : "COMPLETED"}</span></div><p className="mt-1 text-sm font-bold text-zinc-200">{event.name ?? event.type.replaceAll("_", " ")}</p>{event.error && <p className="mt-1 text-xs leading-5 text-rose-300">{event.error}</p>}</li>)}</ol>
+              <ol className="space-y-2">{agentQuery.data.events.map((event, index) => <li key={`${event.turn}-${event.name ?? event.type}-${index}`} className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3"><div className="flex items-center justify-between gap-3"><span className="font-mono text-xs font-bold text-violet-300">TURN {event.turn}{event.stage ? ` · ${event.stage.toUpperCase()}` : ""}</span><span className={`text-xs font-bold ${event.ok === false ? "text-rose-300" : "text-emerald-300"}`}>{event.ok === false ? "REFUSED" : "COMPLETED"}</span></div><p className="mt-1 text-sm font-bold text-zinc-200">{event.name ?? event.type.replaceAll("_", " ")}</p>{event.error && <p className="mt-1 text-xs leading-5 text-rose-300">{event.error}</p>}</li>)}</ol>
               {!agentQuery.data.events.length && <EmptyState text="The agent has not started a tool turn yet." />}
             </div>
           ) : <EmptyState text="Loading the sanitized agent trace…" />)}
@@ -128,3 +133,5 @@ function StructuredPreview({ value, depth = 0 }: { value: unknown; depth?: numbe
 function EmptyState({ text }: { text: string }) { return <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-white/15 bg-white/[0.02] text-center text-sm text-zinc-500">{text}</div>; }
 
 function AgentMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4"><p className="text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">{label}</p><p className="mt-1 break-words text-sm font-extrabold text-zinc-200">{value}</p></div>; }
+
+function asRecord(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }

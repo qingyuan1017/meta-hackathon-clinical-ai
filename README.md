@@ -39,6 +39,10 @@ backend/app/
 
 Every `POST /api/v1/jobs/{workflow}` call now runs the workflow's specialist agent. The agent must inspect the live contract, read every available source chunk, use at most one tool per turn, and submit a schema-valid result before deterministic rendering begins. Agent progress is saved under `data/jobs/<job-id>/agent/progress.json`; it contains no API credential and is removed when the job is deleted.
 
+The SDTM use case is an ordered three-stage pipeline. Domain mapping first relates raw or existing SDTM source datasets to target SDTM domains. Variable mapping then adds variable traceability and value-level metadata and selects the source labels used for aCRF annotations. Rule augmentation finally contributes source-preparation rules per domain and R/SAS implementation expressions per target variable; deterministic rendering uses those rules to build the draft programs.
+
+Completed SDTM jobs open a dedicated review editor instead of a raw JSON-only form. Reviewers can drag raw or existing-SDTM datasets onto target domains, import versioned domain metadata through the configured CDISC Library MCP service, modify standard variables or add sponsor SUPP/VLM qualifiers in a matrix, and review the R/SAS rule expressions before schema-validated artifact rebuilding.
+
 This separation is intentional: an agent is a probabilistic planner that calls tools and drafts structured content, while a use case is the deterministic contract that validates, persists, edits, and renders that content. It keeps agent-driven runs and direct user/API edits on the same schemas and artifact path; removing `use_cases` would either couple rendering to the model loop or duplicate that logic in the API.
 
 ## Quick start
