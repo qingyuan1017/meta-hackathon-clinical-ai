@@ -46,7 +46,27 @@ class JobRunner:
         inputs = [(job_dir / "input" / name).resolve() for name in input_names]
         output_dir = job_dir / "output"
         try:
-            result = await WorkflowService().execute(
+            service = WorkflowService()
+            review = await service.prepare_review(
+                workflow,
+                inputs=inputs,
+                options=options,
+                job_dir=job_dir,
+            )
+            if review is not None:
+                with SessionLocal() as session:
+                    job = session.get(Job, job_id)
+                    if job is None:
+                        shutil.rmtree(job_dir, ignore_errors=True)
+                        return
+                    job.result_json = json.dumps(review.result, ensure_ascii=False)
+                    job.warnings_json = json.dumps([DISCLAIMER, *review.warnings], ensure_ascii=False)
+                    job.status = "review_required"
+                    job.completed_at = None
+                    job.updated_at = datetime.now(timezone.utc)
+                    session.commit()
+                return
+            result = await service.execute(
                 workflow,
                 inputs=inputs,
                 options=options,

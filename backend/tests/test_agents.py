@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from app.agents import AGENTS, AgentOutcome, ClinicalAgentRunner, get_agent
 from app.agents.protocol_extraction import PERSPECTIVE_AGENTS
-from app.agents.sdtm import STAGE_AGENTS
+from app.agents.sdtm import SOURCE_NORMALIZATION_AGENT, STAGE_AGENTS
 from reportlab.pdfgen import canvas
 
 from app.agents.runtime import verify_result
@@ -106,7 +106,7 @@ def test_every_protocol_agent_loads_the_shared_extraction_policy() -> None:
 
 
 def test_every_sdtm_agent_loads_the_shared_mapping_policy() -> None:
-    agents = [get_agent("sdtm"), *(definition for _, definition in STAGE_AGENTS)]
+    agents = [get_agent("sdtm"), SOURCE_NORMALIZATION_AGENT, *(definition for _, definition in STAGE_AGENTS)]
     for agent in agents:
         instructions = agent.instructions()
         assert "# Shared SDTM mapping policy" in instructions
@@ -254,6 +254,63 @@ def test_edc_agent_verification_rejects_broken_form_references() -> None:
     ]
 
 
+async def test_sdtm_use_case_normalizes_edc_for_review(tmp_path) -> None:
+    source_result = {
+        "study_name": "SYN-101",
+        "datasets": [
+            {
+                "name": "RAW_DM",
+                "label": "Demographics",
+                "key_variables": ["SUBJID"],
+                "variables": [
+                    {
+                        "name": "SUBJID",
+                        "label": "Subject identifier",
+                        "data_type": "text",
+                        "provenance": {"file": "edc.json"},
+                    }
+                ],
+                "provenance": {"file": "edc.json"},
+            }
+        ],
+    }
+    completions = ScriptedCompletions([
+        ("inspect_workflow_contract", {}),
+        ("read_source_chunk", {"index": 1}),
+        ("submit_result", {"result": source_result}),
+    ])
+    settings = agent_settings(agent_max_turns=4)
+    ai = MetaAIClient(settings)
+    ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    edc = tmp_path / "edc.json"
+    edc.write_text(json.dumps({"study": "SYN-101", "forms": []}), encoding="utf-8")
+    crf = tmp_path / "blank.pdf"
+    pdf = canvas.Canvas(str(crf))
+    pdf.drawString(50, 750, "Subject Identifier")
+    pdf.save()
+
+    prepared = await SDTMUseCase().prepare_review(
+        UseCaseContext(
+            inputs=[crf, edc],
+            options={"languages": ["r"]},
+            ai=ai,
+            settings=settings,
+            agent_progress_path=tmp_path / "agent" / "progress.json",
+        )
+    )
+
+    assert prepared is not None
+    assert prepared.value.datasets[0].variables[0].name == "SUBJID"
+    assert await SDTMUseCase().prepare_review(
+        UseCaseContext(
+            inputs=[crf, edc],
+            options={"edc_source_spec": source_result},
+            ai=ai,
+            settings=settings,
+        )
+    ) is None
+
+
 async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None:
     domain_result = {
         "study_name": "SYN-101",
@@ -345,11 +402,29 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
     pdf.drawString(50, 750, "Age")
     pdf.save()
     progress_path = tmp_path / "agent" / "progress.json"
+    source_spec = {
+        "study_name": "SYN-101",
+        "datasets": [
+            {
+                "name": "RAW_DM",
+                "label": "Demographics",
+                "variables": [
+                    {
+                        "name": "AGE",
+                        "label": "Age",
+                        "data_type": "integer",
+                        "provenance": {"file": "edc.json"},
+                    }
+                ],
+                "provenance": {"file": "edc.json"},
+            }
+        ],
+    }
 
     generated = await SDTMUseCase().generate(
         UseCaseContext(
             inputs=[crf, edc],
-            options={"languages": ["r", "sas"]},
+            options={"languages": ["r", "sas"], "edc_source_spec": source_spec},
             ai=ai,
             settings=settings,
             agent_progress_path=progress_path,

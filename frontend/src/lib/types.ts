@@ -1,7 +1,7 @@
 import type { components } from "./openapi";
 
 export type Workflow = "protocol-extraction" | "clinical-document" | "edc-design" | "sdtm" | "tlf";
-export type JobStatus = "queued" | "running" | "succeeded" | "failed";
+export type JobStatus = "queued" | "running" | "review_required" | "succeeded" | "failed";
 
 export type Artifact = components["schemas"]["ArtifactRead"];
 

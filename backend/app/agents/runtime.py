@@ -459,6 +459,30 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
                 problems.append(f"Edit check {check.check_id} references unknown form {check.form}.")
             elif check.field not in known_forms[check.form]:
                 problems.append(f"Edit check {check.check_id} references unknown field {check.form}.{check.field}.")
+    elif workflow == "sdtm-source-normalization":
+        dataset_names = [dataset.name.strip().casefold() for dataset in value.datasets]
+        if any(not name for name in dataset_names):
+            problems.append("EDC source dataset names cannot be empty.")
+        if len(dataset_names) != len(set(dataset_names)):
+            problems.append("EDC source dataset names must be unique.")
+        codelist_names = [item.name.strip().casefold() for item in value.codelists]
+        if len(codelist_names) != len(set(codelist_names)):
+            problems.append("EDC source codelist names must be unique.")
+        known_codelists = set(codelist_names)
+        for dataset in value.datasets:
+            variables = [variable.name.strip().casefold() for variable in dataset.variables]
+            if any(not name for name in variables):
+                problems.append(f"Dataset {dataset.name} has an empty variable name.")
+            if len(variables) != len(set(variables)):
+                problems.append(f"Dataset {dataset.name} has duplicate variable names.")
+            for key in dataset.key_variables:
+                if key.strip().casefold() not in set(variables):
+                    problems.append(f"Dataset {dataset.name} key {key} does not reference a source variable.")
+            for variable in dataset.variables:
+                if variable.codelist and variable.codelist.strip().casefold() not in known_codelists:
+                    problems.append(
+                        f"Variable {dataset.name}.{variable.name} references unknown codelist {variable.codelist}."
+                    )
     elif workflow == "sdtm-domain-mapping":
         mappings = [
             (mapping.source_dataset.casefold(), mapping.target_domain.upper())

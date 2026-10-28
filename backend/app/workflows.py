@@ -56,6 +56,32 @@ class WorkflowService:
             warnings=generated.warnings,
         )
 
+    async def prepare_review(
+        self,
+        workflow: str,
+        *,
+        inputs: list[Path],
+        options: dict[str, Any],
+        job_dir: Path,
+    ) -> WorkflowResult | None:
+        use_case = get_use_case(workflow)
+        prepared = await use_case.prepare_review(
+            UseCaseContext(
+                inputs=inputs,
+                options=options,
+                ai=self.ai or MetaAIClient(),
+                settings=self.settings,
+                agent_progress_path=job_dir / "agent" / "progress.json",
+            )
+        )
+        if prepared is None:
+            return None
+        return WorkflowResult(
+            result=prepared.value.model_dump(),
+            paths=[],
+            warnings=prepared.warnings,
+        )
+
     def render_revision(
         self,
         workflow: str,

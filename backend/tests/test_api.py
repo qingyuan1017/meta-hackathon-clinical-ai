@@ -152,6 +152,61 @@ def test_queued_job_has_safe_agent_progress_summary() -> None:
                     session.commit()
 
 
+def test_reviewed_edc_source_spec_resumes_sdtm_job(monkeypatch) -> None:
+    queued = []
+    monkeypatch.setattr("app.main.runner.enqueue", queued.append)
+    source_spec = {
+        "study_name": "SYN-101",
+        "datasets": [
+            {
+                "name": "RAW_DM",
+                "label": "Demographics",
+                "key_variables": ["SUBJID"],
+                "variables": [
+                    {
+                        "name": "SUBJID",
+                        "label": "Subject identifier",
+                        "data_type": "text",
+                        "provenance": {"file": "edc.json"},
+                    }
+                ],
+                "provenance": {"file": "edc.json"},
+            }
+        ],
+    }
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm",
+            title="SDTM source review",
+            status="review_required",
+            options_json='{"deidentified_acknowledged": true, "languages": ["r"]}',
+            input_files_json='["01-blank.pdf", "02-edc.json"]',
+            result_json=json.dumps(source_spec),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                f"/api/v1/jobs/{job_id}/edc-source-spec",
+                json={"source_spec": source_spec},
+            )
+        assert response.status_code == 202, response.text
+        assert response.json()["status"] == "queued"
+        assert queued == [job_id]
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            assert stored is not None
+            assert json.loads(stored.options_json)["edc_source_spec"]["datasets"][0]["name"] == "RAW_DM"
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+
+
 def test_completed_result_can_be_revised_and_rerendered(monkeypatch) -> None:
     def conformant_core(usdm_path, output_dir):
         report = output_dir / "core-report.json"

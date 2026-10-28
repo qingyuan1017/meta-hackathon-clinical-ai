@@ -38,6 +38,45 @@ def parse_source(path: Path) -> str:
     raise HTTPException(status_code=415, detail=f"No parser for {suffix}")
 
 
+def parse_edc_source(path: Path) -> str:
+    """Extract an EDC JSON/XLSX deterministically with reviewable provenance."""
+
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        try:
+            content = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=422, detail=f"Invalid JSON in {path.name}: {exc.msg}") from exc
+        return json.dumps(
+            {"file": path.name, "format": "json", "content": content},
+            indent=2,
+            ensure_ascii=False,
+        )
+    if suffix != ".xlsx":
+        raise HTTPException(status_code=415, detail="EDC source metadata must be JSON or XLSX.")
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Unable to read workbook {path.name}.") from exc
+    sheets = []
+    for sheet in workbook.worksheets:
+        rows = []
+        for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+            values = [cell for cell in row]
+            if any(value not in (None, "") for value in values):
+                rows.append({"row": row_number, "values": values})
+            if len(rows) >= 2_000:
+                break
+        sheets.append({"name": sheet.title, "rows": rows})
+    workbook.close()
+    return json.dumps(
+        {"file": path.name, "format": "xlsx", "sheets": sheets},
+        indent=2,
+        ensure_ascii=False,
+        default=str,
+    )
+
+
 def parse_pdf(path: Path) -> str:
     settings = get_settings()
     try:

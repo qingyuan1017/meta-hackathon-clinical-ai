@@ -221,6 +221,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/edc-source-spec": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Edc Source Spec
+         * @description Approve normalized EDC metadata and resume the three SDTM mapping stages.
+         */
+        put: operations["approve_edc_source_spec_api_v1_jobs__job_id__edc_source_spec_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/result": {
         parameters: {
             query?: never;
@@ -385,6 +405,91 @@ export interface components {
             payload: {
                 [key: string]: unknown;
             } | unknown[];
+        };
+        /** EDCSourceCodeList */
+        EDCSourceCodeList: {
+            /** Name */
+            name: string;
+            /** Values */
+            values?: string[];
+        };
+        /** EDCSourceDataset */
+        EDCSourceDataset: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /**
+             * Source Type
+             * @default raw
+             * @enum {string}
+             */
+            source_type: "raw" | "sdtm";
+            /**
+             * Structure
+             * @default Not specified
+             */
+            structure: string;
+            /** Key Variables */
+            key_variables?: string[];
+            /** Variables */
+            variables: components["schemas"]["EDCSourceVariable"][];
+            provenance: components["schemas"]["EDCSourceProvenance"];
+        };
+        /** EDCSourceProvenance */
+        EDCSourceProvenance: {
+            /** File */
+            file: string;
+            /** Sheet */
+            sheet?: string | null;
+            /** Row */
+            row?: number | null;
+        };
+        /** EDCSourceSpecification */
+        EDCSourceSpecification: {
+            /** Study Name */
+            study_name: string;
+            /** Datasets */
+            datasets: components["schemas"]["EDCSourceDataset"][];
+            /** Codelists */
+            codelists?: components["schemas"]["EDCSourceCodeList"][];
+            /** Assumptions */
+            assumptions?: string[];
+            /** Unresolved Items */
+            unresolved_items?: string[];
+        };
+        /** EDCSourceSpecificationUpdate */
+        EDCSourceSpecificationUpdate: {
+            source_spec: components["schemas"]["EDCSourceSpecification"];
+        };
+        /** EDCSourceVariable */
+        EDCSourceVariable: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /**
+             * Data Type
+             * @default unknown
+             * @enum {string}
+             */
+            data_type: "text" | "integer" | "decimal" | "date" | "datetime" | "boolean" | "coded" | "unknown";
+            /** Length */
+            length?: number | null;
+            /** Format */
+            format?: string | null;
+            /**
+             * Required
+             * @default false
+             */
+            required: boolean;
+            /** Codelist */
+            codelist?: string | null;
+            /** Form Id */
+            form_id?: string | null;
+            /** Question */
+            question?: string | null;
+            provenance: components["schemas"]["EDCSourceProvenance"];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -876,6 +981,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_edc_source_spec_api_v1_jobs__job_id__edc_source_spec_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EDCSourceSpecificationUpdate"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             202: {

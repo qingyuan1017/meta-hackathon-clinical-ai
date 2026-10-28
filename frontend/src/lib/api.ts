@@ -32,6 +32,12 @@ export const api = {
     return request<Job>(`/api/v1/jobs/${workflow}`, { method: "POST", body: data });
   },
   retryJob: (id: string) => request<Job>(`/api/v1/jobs/${id}/retry`, { method: "POST" }),
+  approveEdcSource: (id: string, sourceSpec: Record<string, unknown>) =>
+    request<Job>(`/api/v1/jobs/${id}/edc-source-spec`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_spec: sourceSpec }),
+    }),
   updateJobResult: (id: string, result: Record<string, unknown>) =>
     request<Job>(`/api/v1/jobs/${id}/result`, {
       method: "PUT",

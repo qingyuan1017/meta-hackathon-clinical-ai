@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -16,13 +17,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .agents import AGENTS, get_agent
+from .agents.runtime import verify_result
 from .artifacts import artifact_record
 from .config import get_settings
 from .db import get_db, initialize_database
 from .jobs import runner
 from .models import Artifact, Job
 from .parsers import parse_source
-from .schemas import AgentEventRead, AgentProgressRead, AgentRead, ArtifactRead, CDISCDatasetRead, DISCLAIMER, HealthRead, JobList, JobRead, JobResultUpdate, UseCaseRead
+from .schemas import AgentEventRead, AgentProgressRead, AgentRead, ArtifactRead, CDISCDatasetRead, DISCLAIMER, EDCSourceSpecificationUpdate, HealthRead, JobList, JobRead, JobResultUpdate, UseCaseRead
 from .security import detect_identifiers, validate_upload_metadata, verify_signature
 from .use_cases import USE_CASES, get_use_case
 from .workflows import DOCUMENT_TYPES, WORKFLOWS, WorkflowService
@@ -350,6 +352,50 @@ def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     job.warnings_json = "[]"
     job.error = None
     job.completed_at = None
+    db.commit()
+    db.refresh(job)
+    runner.enqueue(job.id)
+    return _job_read(job)
+
+
+@app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/edc-source-spec",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def approve_edc_source_spec(
+    job_id: str,
+    update: EDCSourceSpecificationUpdate,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    """Approve normalized EDC metadata and resume the three SDTM mapping stages."""
+
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm" or job.status != "review_required":
+        raise HTTPException(status_code=409, detail="This job is not waiting for EDC source review.")
+    problems = verify_result("sdtm-source-normalization", update.source_spec)
+    if problems:
+        raise HTTPException(status_code=422, detail=problems)
+    serialized = update.source_spec.model_dump_json()
+    identifiers = detect_identifiers(serialized)
+    if identifiers:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Potential direct identifiers detected in the EDC source specification: {', '.join(identifiers)}.",
+        )
+    options = json.loads(job.options_json)
+    options["edc_source_spec"] = update.source_spec.model_dump(mode="json")
+    job.options_json = json.dumps(options, ensure_ascii=False)
+    job.status = "queued"
+    job.result_json = None
+    job.warnings_json = "[]"
+    job.error = None
+    job.completed_at = None
+    job.updated_at = datetime.now(timezone.utc)
+    progress_path = settings.jobs_dir / job.id / "agent" / "progress.json"
+    progress_path.unlink(missing_ok=True)
     db.commit()
     db.refresh(job)
     runner.enqueue(job.id)

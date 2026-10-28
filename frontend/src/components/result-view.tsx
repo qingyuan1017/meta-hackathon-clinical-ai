@@ -8,6 +8,7 @@ import type { Job } from "@/lib/types";
 import { formatBytes } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader } from "./ui/card";
+import { EDCSourceReviewEditor, type EDCSourceSpecificationDraft } from "./edc-source-review-editor";
 import { SDTMReviewEditor, type SDTMPlanDraft } from "./sdtm-review-editor";
 import { StatusBadge } from "./status-badge";
 
@@ -15,6 +16,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
   const [tab, setTab] = useState<"preview" | "edit" | "agent" | "artifacts" | "warnings">("preview");
   const [draft, setDraft] = useState(() => JSON.stringify(job.result, null, 2));
   const [sdtmDraft, setSdtmDraft] = useState<Record<string, unknown>>(() => asRecord(job.result));
+  const [edcSourceDraft, setEdcSourceDraft] = useState<Record<string, unknown>>(() => asRecord(job.result));
   const [draftError, setDraftError] = useState<string | null>(null);
   const client = useQueryClient();
   const agentQuery = useQuery({
@@ -25,6 +27,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
   useEffect(() => {
     setDraft(JSON.stringify(job.result, null, 2));
     setSdtmDraft(asRecord(job.result));
+    setEdcSourceDraft(asRecord(job.result));
   }, [job.id, job.result]);
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteJob(job.id),
@@ -44,6 +47,13 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
       client.invalidateQueries({ queryKey: ["jobs"] });
       setDraftError(null);
       setTab("preview");
+    },
+  });
+  const approveSourceMutation = useMutation({
+    mutationFn: (sourceSpec: Record<string, unknown>) => api.approveEdcSource(job.id, sourceSpec),
+    onSuccess: (updated) => {
+      client.setQueryData(["job", job.id], updated);
+      client.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
   const saveDraft = () => {
@@ -72,7 +82,9 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
             <p className="mt-2 pl-6 text-xs text-blue-300">{agentQuery.data ? `Turn ${agentQuery.data.turn}/${agentQuery.data.max_turns} · current-stage source chunks ${agentQuery.data.read_source_chunks.length}/${agentQuery.data.total_source_chunks}` : "You can leave this page; local history will retain the job."}</p>
           </div>
         )}
-        <div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist">
+        {job.workflow === "sdtm" && job.status === "review_required" ? (
+          <div className="py-5"><EDCSourceReviewEditor value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: EDCSourceSpecificationDraft) => approveSourceMutation.mutate(next)} saving={approveSourceMutation.isPending} error={approveSourceMutation.error?.message} /></div>
+        ) : <><div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist">
           {(["preview", ...(job.status === "succeeded" ? ["edit" as const] : []), "agent", "artifacts", "warnings"] as const).map((item) => (
             <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold capitalize ${tab === item ? "border-b-2 border-clinical-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{item}</button>
           ))}
@@ -109,7 +121,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
             </div>
           ) : <EmptyState text="Downloads will appear after successful generation." />)}
           {tab === "warnings" && (job.warnings.length ? <ul className="space-y-2">{job.warnings.map((warning, index) => <li className="rounded-lg border border-amber-500/20 bg-amber-500/[0.07] px-4 py-3 text-sm leading-6 text-amber-200" key={`${warning}-${index}`}>{warning}</li>)}</ul> : <EmptyState text="No workflow warnings have been recorded yet." />)}
-        </div>
+        </div></>}
         <div className="flex flex-wrap justify-between gap-3 border-t border-white/10 pt-5">
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={onReset}>New generation</Button>

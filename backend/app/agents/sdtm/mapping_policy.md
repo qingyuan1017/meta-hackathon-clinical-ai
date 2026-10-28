@@ -10,6 +10,8 @@ This policy is the common source of truth for the SDTM lead and every ordered ma
 
 ## Ordered mapping contract
 
+Before mapping begins, deterministically extracted EDC content is normalized into an `EDCSourceSpecification` and approved by a user. Only that approved source schema may supply dataset and variable identifiers to downstream stages.
+
 1. Domain mapping relates every raw or existing-SDTM source dataset to a target SDTMIG 3.4 domain, including direct, split, merge, and derived relationships.
 2. Variable mapping preserves the approved domain plan and adds target variables, source traceability, origins, controlled-term context, value-level metadata, and exact blank-CRF labels for aCRF annotations.
 3. Rule augmentation preserves both mapping stages and adds one source-preparation rule per target domain plus one implementation rule per target domain-variable pair. Those R and SAS expressions determine the deterministic draft program artifacts.

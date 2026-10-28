@@ -19,6 +19,16 @@ AGENT = AgentDefinition(
 )
 
 
+SOURCE_NORMALIZATION_AGENT = AgentDefinition(
+    id="clinical-sdtm-source-normalization-agent",
+    workflow="sdtm-source-normalization",
+    name="Clinical EDC Source Normalization Agent",
+    description="Normalizes deterministically extracted EDC metadata into a reviewable source specification.",
+    instruction_file=_DIRECTORY / "source_normalization.md",
+    policy_files=(SDTM_POLICY,),
+)
+
+
 DOMAIN_MAPPING_AGENT = AgentDefinition(
     id="clinical-sdtm-domain-mapping-agent",
     workflow="sdtm-domain-mapping",

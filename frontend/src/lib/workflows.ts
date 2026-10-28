@@ -47,7 +47,7 @@ export const workflows: WorkflowDefinition[] = [
     id: "sdtm",
     title: "SDTM mapping and code generation",
     shortTitle: "SDTM artifacts",
-    description: "Progress from domain mapping to variable/value-level mapping and rule augmentation, then render draft Define-XML, aCRF, and R/SAS code.",
+    description: "Review a normalized EDC source schema, then progress through domain mapping, variable/value-level mapping, and rule augmentation before rendering draft artifacts.",
     eyebrow: "04 · STANDARDIZE",
     icon: Files,
     accepts: ".pdf,.json,.xlsx,.docx,.txt,.md",

@@ -69,6 +69,11 @@ class ClinicalUseCase(ABC):
     def validate_result(self, value: dict[str, Any]) -> BaseModel:
         return self.result_model.model_validate(value)
 
+    async def prepare_review(self, context: UseCaseContext) -> GeneratedContent | None:
+        """Optionally produce a human-review gate before final generation."""
+
+        return None
+
     def result_warnings(self, result: BaseModel) -> list[str]:
         warnings: list[str] = []
         for field in ("ambiguities", "assumptions", "unresolved_items", "unresolved_mappings"):

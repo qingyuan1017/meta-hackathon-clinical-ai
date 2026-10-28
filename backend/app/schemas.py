@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 DISCLAIMER = (
@@ -98,6 +98,52 @@ class EDCDesign(BaseModel):
     codelists: list[CodeList] = Field(default_factory=list)
     edit_checks: list[EditCheck] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
+
+
+class EDCSourceModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+class EDCSourceProvenance(EDCSourceModel):
+    file: str = Field(min_length=1)
+    sheet: str | None = None
+    row: int | None = Field(default=None, ge=1)
+
+
+class EDCSourceVariable(EDCSourceModel):
+    name: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    data_type: Literal["text", "integer", "decimal", "date", "datetime", "boolean", "coded", "unknown"] = "unknown"
+    length: int | None = Field(default=None, ge=1)
+    format: str | None = None
+    required: bool = False
+    codelist: str | None = None
+    form_id: str | None = None
+    question: str | None = None
+    provenance: EDCSourceProvenance
+
+
+class EDCSourceDataset(EDCSourceModel):
+    name: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    source_type: Literal["raw", "sdtm"] = "raw"
+    structure: str = "Not specified"
+    key_variables: list[str] = Field(default_factory=list)
+    variables: list[EDCSourceVariable] = Field(min_length=1)
+    provenance: EDCSourceProvenance
+
+
+class EDCSourceCodeList(EDCSourceModel):
+    name: str = Field(min_length=1)
+    values: list[str] = Field(default_factory=list)
+
+
+class EDCSourceSpecification(EDCSourceModel):
+    study_name: str = Field(min_length=1)
+    datasets: list[EDCSourceDataset] = Field(min_length=1)
+    codelists: list[EDCSourceCodeList] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    unresolved_items: list[str] = Field(default_factory=list)
 
 
 class SDTMDomainMapping(BaseModel):
@@ -250,6 +296,10 @@ class JobList(BaseModel):
 
 class JobResultUpdate(BaseModel):
     result: dict[str, Any]
+
+
+class EDCSourceSpecificationUpdate(BaseModel):
+    source_spec: EDCSourceSpecification
 
 
 class UseCaseRead(BaseModel):
