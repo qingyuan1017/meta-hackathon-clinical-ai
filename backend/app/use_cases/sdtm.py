@@ -5,13 +5,17 @@ from typing import Any, cast
 
 from pydantic import BaseModel
 
-from ..agents.runtime import ClinicalAgentRunner, verify_result
-from ..agents.sdtm.agent import DOMAIN_MAPPING_AGENT, RULE_AUGMENTATION_AGENT, VARIABLE_MAPPING_AGENT
+from ..agents import ClinicalAgentRunner, get_agent
+from ..agents.runtime import verify_result
+from ..agents.sdtm import STAGE_AGENTS
 from ..artifacts import render_sdtm
 from ..parsers import parse_source
 from ..schemas import SDTMDomainMappingPlan, SDTMPlan, SDTMRuleAugmentationPlan, SDTMVariableMappingPlan
 from .base import ClinicalUseCase, GeneratedContent, UseCaseContext, UseCaseDescriptor
 from .utilities import normalize_languages
+
+
+_STAGE_AGENTS = dict(STAGE_AGENTS)
 
 
 class SDTMUseCase(ClinicalUseCase):
@@ -50,7 +54,7 @@ class SDTMUseCase(ClinicalUseCase):
         )
         stage_count = len(self.descriptor.stages)
         domain_outcome = await ClinicalAgentRunner(
-            definition=DOMAIN_MAPPING_AGENT,
+            definition=_STAGE_AGENTS["domain-mapping"],
             result_model=SDTMDomainMappingPlan,
             ai=context.ai,
             settings=context.settings,
@@ -69,7 +73,7 @@ class SDTMUseCase(ClinicalUseCase):
 
         domain_json = domain_outcome.value.model_dump_json(indent=2)
         variable_outcome = await ClinicalAgentRunner(
-            definition=VARIABLE_MAPPING_AGENT,
+            definition=_STAGE_AGENTS["variable-mapping"],
             result_model=SDTMVariableMappingPlan,
             ai=context.ai,
             settings=context.settings,
@@ -93,7 +97,7 @@ class SDTMUseCase(ClinicalUseCase):
 
         variable_json = variable_outcome.value.model_dump_json(indent=2)
         rule_outcome = await ClinicalAgentRunner(
-            definition=RULE_AUGMENTATION_AGENT,
+            definition=_STAGE_AGENTS["rule-augmentation"],
             result_model=SDTMRuleAugmentationPlan,
             ai=context.ai,
             settings=context.settings,
@@ -115,36 +119,32 @@ class SDTMUseCase(ClinicalUseCase):
             completed_stages=list(self.descriptor.stages[:2]),
             prior_events=variable_outcome.events,
         )
-        domain_plan = cast(SDTMDomainMappingPlan, domain_outcome.value)
-        variable_plan = cast(SDTMVariableMappingPlan, variable_outcome.value)
-        rule_plan = cast(SDTMRuleAugmentationPlan, rule_outcome.value)
-        result = SDTMPlan(
-            study_name=domain_plan.study_name,
-            standard=domain_plan.standard,
-            define_standard=variable_plan.define_standard,
-            domain_mappings=domain_plan.domain_mappings,
-            datasets=variable_plan.datasets,
-            domain_rule_augmentations=rule_plan.domain_rule_augmentations,
-            rule_augmentations=rule_plan.rule_augmentations,
-            assumptions=list(
-                dict.fromkeys(
-                    [
-                        *domain_plan.assumptions,
-                        *variable_plan.assumptions,
-                        *rule_plan.assumptions,
-                    ]
-                )
+        rule_json = rule_outcome.value.model_dump_json(indent=2)
+        lead_outcome = await ClinicalAgentRunner(
+            definition=get_agent(self.descriptor.id),
+            result_model=self.result_model,
+            ai=context.ai,
+            settings=context.settings,
+            progress_path=context.agent_progress_path,
+        ).run(
+            objective=(
+                "Produce the final traceable SDTM artifact plan. Independently verify every field against the "
+                "original EDC and blank CRF, reconcile the fallible ordered stage drafts below, and preserve "
+                "every unresolved conflict or uncertainty. Domain and variable mappings must remain consistent "
+                "with the augmented implementation rules.\n\n"
+                f"CANDIDATE STAGE 1 DOMAIN MAPPING\n{domain_json}\n\n"
+                f"CANDIDATE STAGE 2 VARIABLE AND VALUE-LEVEL MAPPING\n{variable_json}\n\n"
+                f"CANDIDATE STAGE 3 RULE AUGMENTATION\n{rule_json}"
             ),
-            unresolved_mappings=list(
-                dict.fromkeys(
-                    [
-                        *domain_plan.unresolved_mappings,
-                        *variable_plan.unresolved_mappings,
-                        *rule_plan.unresolved_mappings,
-                    ]
-                )
-            ),
+            source=f"{source}\n\nBLANK CRF TEXT\n{parse_source(crf)}",
+            options=context.options,
+            stage=self.descriptor.stages[2],
+            stage_index=3,
+            stage_count=stage_count,
+            completed_stages=list(self.descriptor.stages),
+            prior_events=rule_outcome.events,
         )
+        result = cast(SDTMPlan, lead_outcome.value)
         problems = verify_result("sdtm", result)
         if problems:
             raise ValueError(" ".join(problems))
@@ -152,6 +152,7 @@ class SDTMUseCase(ClinicalUseCase):
             *domain_outcome.warnings,
             *variable_outcome.warnings,
             *rule_outcome.warnings,
+            *lead_outcome.warnings,
             *self.result_warnings(result),
         ]
         return GeneratedContent(value=result, warnings=list(dict.fromkeys(warnings)))

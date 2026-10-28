@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from app.agents import AGENTS, AgentOutcome, ClinicalAgentRunner, get_agent
 from app.agents.protocol_extraction import PERSPECTIVE_AGENTS
+from app.agents.sdtm import STAGE_AGENTS
 from reportlab.pdfgen import canvas
 
 from app.agents.runtime import verify_result
@@ -102,6 +103,15 @@ def test_every_protocol_agent_loads_the_shared_extraction_policy() -> None:
         assert "# Shared clinical protocol extraction policy" in instructions
         assert "agreement among agents" in instructions
         assert agent.policy_files and agent.policy_files[0].name == "extraction_policy.md"
+
+
+def test_every_sdtm_agent_loads_the_shared_mapping_policy() -> None:
+    agents = [get_agent("sdtm"), *(definition for _, definition in STAGE_AGENTS)]
+    for agent in agents:
+        instructions = agent.instructions()
+        assert "# Shared SDTM mapping policy" in instructions
+        assert "specialist drafts as fallible observations" in instructions
+        assert agent.policy_files and agent.policy_files[0].name == "mapping_policy.md"
 
 
 async def test_agent_reads_contract_and_source_then_submits_valid_result(tmp_path) -> None:
@@ -300,6 +310,13 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
             }
         ],
     }
+    lead_result = {
+        "study_name": "SYN-101",
+        "domain_mappings": domain_result["domain_mappings"],
+        "datasets": variable_result["datasets"],
+        "domain_rule_augmentations": final_result["domain_rule_augmentations"],
+        "rule_augmentations": final_result["rule_augmentations"],
+    }
     actions = [
         ("inspect_workflow_contract", {}),
         ("read_source_chunk", {"index": 1}),
@@ -310,6 +327,9 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
         ("inspect_workflow_contract", {}),
         ("read_source_chunk", {"index": 1}),
         ("submit_result", {"result": final_result}),
+        ("inspect_workflow_contract", {}),
+        ("read_source_chunk", {"index": 1}),
+        ("submit_result", {"result": lead_result}),
     ]
     completions = ScriptedCompletions(actions)
     settings = agent_settings(agent_max_turns=4)
@@ -337,6 +357,7 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
     )
 
     assert generated.value.rule_augmentations[0].rule_id == "DM-AGE"
+    assert "# SDTM mapping lead" in completions.requests[-3]["messages"][0]["content"]
     progress = json.loads(progress_path.read_text(encoding="utf-8"))
     assert progress["stage"] == "Rule augmentation"
     assert progress["stage_index"] == 3

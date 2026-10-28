@@ -5,6 +5,18 @@ from ..tool_catalog import CDISC_TOOLS
 
 
 _DIRECTORY = Path(__file__).parent
+SDTM_POLICY = _DIRECTORY / "mapping_policy.md"
+
+
+AGENT = AgentDefinition(
+    id="clinical-sdtm-artifacts-agent",
+    workflow="sdtm",
+    name="Clinical SDTM Mapping Lead",
+    description="Reconciles ordered mapping specialists into one traceable SDTM artifact plan.",
+    instruction_file=_DIRECTORY / "instructions.md",
+    policy_files=(SDTM_POLICY,),
+    remote_tools=CDISC_TOOLS,
+)
 
 
 DOMAIN_MAPPING_AGENT = AgentDefinition(
@@ -13,6 +25,7 @@ DOMAIN_MAPPING_AGENT = AgentDefinition(
     name="Clinical SDTM Domain Mapping Agent",
     description="Maps raw or existing SDTM source datasets to target SDTM domains.",
     instruction_file=_DIRECTORY / "domain_mapping.md",
+    policy_files=(SDTM_POLICY,),
     remote_tools=CDISC_TOOLS,
 )
 
@@ -23,6 +36,7 @@ VARIABLE_MAPPING_AGENT = AgentDefinition(
     name="Clinical SDTM Variable Mapping Agent",
     description="Maps variables and value-level metadata and determines draft aCRF annotations.",
     instruction_file=_DIRECTORY / "variable_mapping.md",
+    policy_files=(SDTM_POLICY,),
     remote_tools=CDISC_TOOLS,
 )
 
@@ -33,15 +47,13 @@ RULE_AUGMENTATION_AGENT = AgentDefinition(
     name="Clinical SDTM Rule Augmentation Agent",
     description="Augments approved mappings with implementation rules used to render draft R and SAS code.",
     instruction_file=_DIRECTORY / "rule_augmentation.md",
+    policy_files=(SDTM_POLICY,),
     remote_tools=CDISC_TOOLS,
 )
 
 
-AGENT = AgentDefinition(
-    id="clinical-sdtm-artifacts-agent",
-    workflow="sdtm",
-    name="Clinical SDTM Mapping Pipeline",
-    description="Runs domain mapping, variable/value-level mapping, and rule augmentation in sequence.",
-    instruction_file=Path(__file__).with_name("instructions.md"),
-    remote_tools=CDISC_TOOLS,
+STAGE_AGENTS = (
+    ("domain-mapping", DOMAIN_MAPPING_AGENT),
+    ("variable-mapping", VARIABLE_MAPPING_AGENT),
+    ("rule-augmentation", RULE_AUGMENTATION_AGENT),
 )

@@ -13,6 +13,8 @@ The SDTM workflow runs three ordered stages:
 2. Variable mapping determines variable traceability and value-level metadata; its CRF source labels drive the aCRF annotations.
 3. Rule augmentation adds one source-preparation rule per target domain and one implementation rule per target variable; its R and SAS expressions drive the final draft program artifacts.
 
+After the ordered specialists finish, the registered SDTM lead rereads the original EDC and blank CRF and reconciles all three drafts under `backend/app/agents/sdtm/mapping_policy.md`. Treat stage drafts as fallible observations; only the lead's complete, cross-stage-validated `SDTMPlan` proceeds to deterministic rendering.
+
 - Query CDISC Library MCP tools for the exact SDTMIG product, domains, variables, and controlled terminology needed. Preserve returned version identifiers.
 - Poll the workbench job and review all three stages, source-to-target traceability, origins, keys, derivations, value-level metadata, unresolved mappings, Define-XML references, aCRF annotations, and rule-to-code consistency.
 - In the web review editor, use drag-and-drop for raw-to-SDTM or SDTM-to-SDTM domain mappings, import versioned CDISC dataset metadata when needed, review variable/VLM cells, and treat sponsor SUPP additions as editable draft metadata.
