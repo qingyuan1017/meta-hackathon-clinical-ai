@@ -203,7 +203,7 @@ async def test_protocol_extraction_runs_parallel_perspectives_then_reconciles(
                 }
             )
             title = "Reconciled protocol" if is_lead else self.definition.name
-            return AgentOutcome(value=StudySummary(study_title=title), warnings=[])
+            return AgentOutcome(value=StudySummary(study_title=title), warnings=[], events=[])
 
     monkeypatch.setattr("app.use_cases.protocol_extraction.ClinicalAgentRunner", FakeRunner)
     progress_path = tmp_path / "agent" / "progress.json"
