@@ -127,6 +127,12 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
     assert '.data[["AGE"]]' in (tmp_path / "build-sdtm.R").read_text(encoding="utf-8")
     assert "AGE = AGE;" in (tmp_path / "build-sdtm.sas").read_text(encoding="utf-8")
 
+    code_only_dir = tmp_path / "code-only"
+    code_only_dir.mkdir()
+    code_only_paths = render_sdtm(sdtm, None, code_only_dir, ["r", "sas"])
+    assert "annotated-crf.pdf" not in {path.name for path in code_only_paths}
+    assert {"define.xml", "build-sdtm.R", "build-sdtm.sas"} <= {path.name for path in code_only_paths}
+
     tlf = TLFPlan(study_name="SYN-101", outputs=[TLFSpec(output_id="T-01", output_type="table", title="Disposition", columns=[TLFColumn(heading="Treatment")])])
     tlf_paths = render_tlf(tlf, tmp_path, ["r", "sas"])
     assert Document(next(path for path in tlf_paths if path.name == "tlf-shells.docx")).tables

@@ -2,6 +2,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 
+import pytest
 from app.agents import AGENTS, AgentOutcome, ClinicalAgentRunner, get_agent
 from app.agents.protocol_extraction import PERSPECTIVE_AGENTS
 from app.agents.sdtm import SOURCE_NORMALIZATION_AGENT, STAGE_AGENTS
@@ -14,6 +15,13 @@ from app.schemas import EDCDesign, EDCForm, EDCVisit, StudySummary
 from app.use_cases.base import UseCaseContext
 from app.use_cases.protocol_extraction import ProtocolExtractionUseCase
 from app.use_cases.sdtm import SDTMUseCase
+
+
+def test_sdtm_submission_requires_edc_but_not_crf() -> None:
+    SDTMUseCase().validate_submission(["edc.xlsx"], {})
+    SDTMUseCase().validate_submission(["edc.json", "blank-crf.pdf"], {})
+    with pytest.raises(ValueError, match="EDC JSON or XLSX"):
+        SDTMUseCase().validate_submission(["blank-crf.pdf"], {})
 
 
 class FakeMessage:
@@ -335,7 +343,7 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
                         "data_type": "Num",
                         "source_dataset": "RAW_DM",
                         "source_field": "AGE",
-                        "crf_source_label": "Age",
+                        "crf_source_label": None,
                     }
                 ],
             }
@@ -397,10 +405,6 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
         json.dumps({"study": "SYN-101", "datasets": [{"name": "RAW_DM", "fields": ["AGE"]}]}),
         encoding="utf-8",
     )
-    crf = tmp_path / "blank.pdf"
-    pdf = canvas.Canvas(str(crf))
-    pdf.drawString(50, 750, "Age")
-    pdf.save()
     progress_path = tmp_path / "agent" / "progress.json"
     source_spec = {
         "study_name": "SYN-101",
@@ -423,7 +427,7 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
 
     generated = await SDTMUseCase().generate(
         UseCaseContext(
-            inputs=[crf, edc],
+            inputs=[edc],
             options={"languages": ["r", "sas"], "edc_source_spec": source_spec},
             ai=ai,
             settings=settings,
@@ -432,6 +436,8 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
     )
 
     assert generated.value.rule_augmentations[0].rule_id == "DM-AGE"
+    assert any("Blank CRF was not supplied" in warning for warning in generated.warnings)
+    assert any("BLANK CRF NOT SUPPLIED" in json.dumps(request) for request in completions.requests)
     assert "# SDTM mapping lead" in completions.requests[-3]["messages"][0]["content"]
     progress = json.loads(progress_path.read_text(encoding="utf-8"))
     assert progress["stage"] == "Rule augmentation"

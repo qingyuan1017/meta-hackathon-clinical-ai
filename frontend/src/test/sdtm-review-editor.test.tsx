@@ -26,7 +26,7 @@ describe("SDTMReviewEditor", () => {
     fireEvent.click(screen.getByText("Rule augmentation"));
     expect(screen.getByText("DM.AGE")).toBeInTheDocument();
     fireEvent.click(screen.getByText("aCRF review"));
-    expect(screen.getByText("Annotated CRF review will appear after the SDTM artifacts are generated.")).toBeInTheDocument();
+    expect(screen.getByText("No aCRF was generated because this job did not include a blank CRF PDF. Start a new generation with a blank CRF to enable annotation review.")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Define-XML"));
     expect(screen.getByText("Define-XML 2.1 review will appear after the SDTM artifacts are generated.")).toBeInTheDocument();
   });

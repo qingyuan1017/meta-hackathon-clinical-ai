@@ -23,10 +23,10 @@ class SDTMUseCase(ClinicalUseCase):
     descriptor = UseCaseDescriptor(
         id="sdtm",
         title="SDTM mapping and code generation",
-        description="Run domain mapping, variable/value-level mapping, and rule augmentation before rendering code and metadata artifacts.",
+        description="Generate reviewed SDTM mappings, metadata, and code from EDC JSON/XLSX, with an optional blank CRF for aCRF output.",
         skill_name="clinical-sdtm-artifacts",
         accepted_extensions=(".pdf", ".json", ".xlsx", ".docx", ".txt", ".md"),
-        required_inputs=("Blank CRF PDF", "EDC JSON or XLSX", "Optional protocol context"),
+        required_inputs=("EDC JSON or XLSX", "Optional blank CRF PDF", "Optional protocol context"),
         output_formats=("json", "xlsx", "xml", "pdf", "r", "sas", "zip"),
         mcp_dependencies=("cdisc-library",),
         stages=("Domain mapping", "Variable & value-level mapping", "Rule augmentation"),
@@ -43,14 +43,14 @@ class SDTMUseCase(ClinicalUseCase):
 
     def validate_submission(self, filenames: list[str], options: dict[str, Any]) -> None:
         suffixes = [Path(name).suffix.lower() for name in filenames]
-        if ".pdf" not in suffixes or not any(suffix in {".json", ".xlsx"} for suffix in suffixes):
-            raise ValueError("SDTM generation requires a blank CRF PDF and EDC JSON or XLSX.")
+        if not any(suffix in {".json", ".xlsx"} for suffix in suffixes):
+            raise ValueError("SDTM generation requires an EDC JSON or XLSX specification. A blank CRF PDF is optional.")
 
     async def prepare_review(self, context: UseCaseContext) -> GeneratedContent | None:
         if context.options.get("edc_source_spec") is not None:
             self._approved_source_spec(context.options)
             return None
-        _, edc = self._required_inputs(context.inputs)
+        _, edc = self._workflow_inputs(context.inputs)
         outcome = await ClinicalAgentRunner(
             definition=SOURCE_NORMALIZATION_AGENT,
             result_model=EDCSourceSpecification,
@@ -73,10 +73,16 @@ class SDTMUseCase(ClinicalUseCase):
         )
 
     async def generate(self, context: UseCaseContext) -> GeneratedContent:
-        crf, edc = self._required_inputs(context.inputs)
+        crf, edc = self._workflow_inputs(context.inputs)
         source_spec = self._approved_source_spec(context.options)
         agent_options = {key: value for key, value in context.options.items() if key != "edc_source_spec"}
-        context_inputs = [path for path in context.inputs if path not in {crf, edc}]
+        excluded_inputs = {edc, *([crf] if crf is not None else [])}
+        context_inputs = [path for path in context.inputs if path not in excluded_inputs]
+        crf_source = (
+            f"BLANK CRF TEXT\n{parse_source(crf)}"
+            if crf is not None
+            else "BLANK CRF NOT SUPPLIED\nDo not invent CRF labels or annotations. Leave crf_source_label null."
+        )
         source = (
             f"USER-APPROVED EDC SOURCE SPECIFICATION\n{source_spec.model_dump_json(indent=2)}\n\n"
             f"OPTIONAL STUDY CONTEXT\n{self.join_sources(context_inputs)}"
@@ -110,11 +116,12 @@ class SDTMUseCase(ClinicalUseCase):
         ).run(
             objective=(
                 "Stage 2 of 3: preserve the domain plan and determine variable-level mappings, value-level "
-                "metadata, and the exact blank-CRF labels used for aCRF annotations. Do not generate code."
+                "metadata, and, only when a blank CRF is supplied, its exact labels for aCRF annotations. "
+                "When no blank CRF is supplied, leave crf_source_label null. Do not generate code."
             ),
             source=(
                 f"{source}\n\nSTAGE 1 DOMAIN MAPPING — PRESERVE\n{domain_json}\n\n"
-                f"BLANK CRF TEXT\n{parse_source(crf)}"
+                f"{crf_source}"
             ),
             options=agent_options,
             stage=self.descriptor.stages[1],
@@ -158,14 +165,15 @@ class SDTMUseCase(ClinicalUseCase):
         ).run(
             objective=(
                 "Produce the final traceable SDTM artifact plan. Independently verify every field against the "
-                "user-approved EDC source specification and blank CRF, reconcile the fallible ordered stage drafts below, and preserve "
+                "user-approved EDC source specification and any supplied blank CRF, reconcile the fallible "
+                "ordered stage drafts below, and preserve "
                 "every unresolved conflict or uncertainty. Domain and variable mappings must remain consistent "
                 "with the augmented implementation rules.\n\n"
                 f"CANDIDATE STAGE 1 DOMAIN MAPPING\n{domain_json}\n\n"
                 f"CANDIDATE STAGE 2 VARIABLE AND VALUE-LEVEL MAPPING\n{variable_json}\n\n"
                 f"CANDIDATE STAGE 3 RULE AUGMENTATION\n{rule_json}"
             ),
-            source=f"{source}\n\nBLANK CRF TEXT\n{parse_source(crf)}",
+            source=f"{source}\n\n{crf_source}",
             options=agent_options,
             stage=self.descriptor.stages[2],
             stage_index=3,
@@ -184,10 +192,12 @@ class SDTMUseCase(ClinicalUseCase):
             *lead_outcome.warnings,
             *self.result_warnings(result),
         ]
+        if crf is None:
+            warnings.append("Blank CRF was not supplied; annotated-crf.pdf was not generated.")
         return GeneratedContent(value=result, warnings=list(dict.fromkeys(warnings)))
 
     def render(self, result: BaseModel, *, inputs: list[Path], options: dict[str, Any], output_dir: Path) -> list[Path]:
-        crf, _ = self._required_inputs(inputs)
+        crf, _ = self._workflow_inputs(inputs)
         source_spec = self._approved_source_spec(options)
         source_spec_path = output_dir / "edc-source-specification.json"
         source_spec_path.write_text(
@@ -200,11 +210,11 @@ class SDTMUseCase(ClinicalUseCase):
         ]
 
     @staticmethod
-    def _required_inputs(inputs: list[Path]) -> tuple[Path, Path]:
+    def _workflow_inputs(inputs: list[Path]) -> tuple[Path | None, Path]:
         crf = next((path for path in inputs if path.suffix.lower() == ".pdf"), None)
         edc = next((path for path in inputs if path.suffix.lower() in {".json", ".xlsx"}), None)
-        if crf is None or edc is None:
-            raise ValueError("SDTM generation requires a blank CRF PDF and an EDC JSON or XLSX specification.")
+        if edc is None:
+            raise ValueError("SDTM generation requires an EDC JSON or XLSX specification. A blank CRF PDF is optional.")
         return crf, edc
 
     @staticmethod

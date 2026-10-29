@@ -68,6 +68,34 @@ def test_generation_requires_meta_configuration() -> None:
         settings.meta_api_key, settings.meta_model = original_key, original_model
 
 
+def test_sdtm_job_accepts_edc_without_blank_crf(monkeypatch) -> None:
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key, settings.meta_model = "test", "test-model"
+    queued: list[str] = []
+    monkeypatch.setattr("app.main.runner.enqueue", queued.append)
+    job_id = ""
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/jobs/sdtm",
+                data={"options": '{"deidentified_acknowledged": true, "languages": ["r"]}'},
+                files={"files": ("edc.json", b'{"study": "SYN-101", "datasets": []}', "application/json")},
+            )
+        assert response.status_code == 202, response.text
+        job_id = response.json()["id"]
+        assert response.json()["status"] == "queued"
+        assert queued == [job_id]
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        if job_id:
+            with SessionLocal() as session:
+                stored = session.get(Job, job_id)
+                if stored:
+                    session.delete(stored)
+                    session.commit()
+            shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
 def test_unknown_workflow_is_rejected() -> None:
     original_key, original_model = settings.meta_api_key, settings.meta_model
     settings.meta_api_key, settings.meta_model = "test", "test-model"

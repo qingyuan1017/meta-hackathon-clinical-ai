@@ -232,14 +232,15 @@ def render_edc(result: EDCDesign, output_dir: Path) -> list[Path]:
     return [json_path, xlsx_path]
 
 
-def render_sdtm(result: SDTMPlan, crf_path: Path, output_dir: Path, languages: list[str]) -> list[Path]:
+def render_sdtm(result: SDTMPlan, crf_path: Path | None, output_dir: Path, languages: list[str]) -> list[Path]:
     paths: list[Path] = []
     json_path = output_dir / "sdtm-mapping.json"
     json_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     paths.append(json_path)
     paths.append(_render_sdtm_xlsx(result, output_dir / "sdtm-mapping.xlsx"))
     paths.append(_render_define_xml(result, output_dir / "define.xml"))
-    paths.append(_annotate_crf(result, crf_path, output_dir / "annotated-crf.pdf"))
+    if crf_path is not None:
+        paths.append(_annotate_crf(result, crf_path, output_dir / "annotated-crf.pdf"))
     if "r" in languages:
         paths.append(_render_r_sdtm(result, output_dir / "build-sdtm.R"))
     if "sas" in languages:

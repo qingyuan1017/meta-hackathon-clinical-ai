@@ -344,6 +344,7 @@ export function SDTMReviewEditor({ value, artifacts = [], onChange, onSave, savi
           title="Annotated CRF review"
           description="This draft is generated from the aCRF labels in Variable & VLM. Change those labels, save the reviewed mappings, and return here to inspect the rebuilt PDF."
           artifact={acrfArtifact}
+          missingMessage="No aCRF was generated because this job did not include a blank CRF PDF. Start a new generation with a blank CRF to enable annotation review."
         >
           {acrfArtifact ? <iframe title="Annotated CRF review" src={api.artifactPreviewUrl(acrfArtifact.download_url)} className="h-[48rem] w-full rounded-lg border border-white/10 bg-white" /> : null}
         </DerivedArtifactReview>
@@ -371,8 +372,8 @@ function StageButton({ active, icon, number, label, onClick }: { active: boolean
   return <button type="button" role="tab" aria-selected={active} onClick={onClick} className={`focus-ring flex items-center gap-3 rounded-xl border p-3 text-left transition ${active ? "border-violet-500/40 bg-violet-500/10 text-white" : "border-white/10 bg-white/[0.02] text-zinc-500 hover:border-white/20 hover:text-zinc-300"}`}><span className={`grid h-8 w-8 place-items-center rounded-lg ${active ? "bg-violet-500/20 text-violet-300" : "bg-white/[0.04]"}`}>{icon}</span><span><span className="block text-[9px] font-black tracking-[0.16em]">{number}</span><span className="text-sm font-bold">{label}</span></span></button>;
 }
 
-function DerivedArtifactReview({ title, description, artifact, children }: { title: string; description: string; artifact?: Artifact; children: ReactNode }) {
-  return <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]"><header className="flex flex-wrap items-start justify-between gap-4 border-b border-white/10 p-4"><div><p className="text-sm font-extrabold text-zinc-100">{title}</p><p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">{description}</p></div>{artifact && <Button asChild type="button" variant="outline" size="sm"><a href={api.artifactUrl(artifact.download_url)}><Download size={14} />Download {artifact.name}</a></Button>}</header><div className="p-4">{artifact ? children : <EmptyReview text={`${title} will appear after the SDTM artifacts are generated.`} />}</div></section>;
+function DerivedArtifactReview({ title, description, artifact, missingMessage, children }: { title: string; description: string; artifact?: Artifact; missingMessage?: string; children: ReactNode }) {
+  return <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]"><header className="flex flex-wrap items-start justify-between gap-4 border-b border-white/10 p-4"><div><p className="text-sm font-extrabold text-zinc-100">{title}</p><p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">{description}</p></div>{artifact && <Button asChild type="button" variant="outline" size="sm"><a href={api.artifactUrl(artifact.download_url)}><Download size={14} />Download {artifact.name}</a></Button>}</header><div className="p-4">{artifact ? children : <EmptyReview text={missingMessage ?? `${title} will appear after the SDTM artifacts are generated.`} />}</div></section>;
 }
 
 function XMLArtifactPreview({ artifact }: { artifact?: Artifact }) {

@@ -47,11 +47,11 @@ export const workflows: WorkflowDefinition[] = [
     id: "sdtm",
     title: "SDTM mapping and code generation",
     shortTitle: "SDTM artifacts",
-    description: "Review a normalized EDC source schema, then progress through domain mapping, variable/value-level mapping, and rule augmentation before rendering draft artifacts.",
+    description: "Generate reviewed SDTM mappings, metadata, and R/SAS code from EDC JSON/XLSX, with an optional blank CRF for aCRF output.",
     eyebrow: "04 · STANDARDIZE",
     icon: Files,
     accepts: ".pdf,.json,.xlsx,.docx,.txt,.md",
-    filePrompt: "Select the blank CRF PDF first, then EDC JSON/XLSX, plus optional protocol context.",
+    filePrompt: "Select an EDC JSON/XLSX. A blank CRF PDF is optional and is needed only to generate the aCRF; protocol context is also optional.",
   },
   {
     id: "tlf",
