@@ -11,11 +11,11 @@ import { Card, CardContent, CardHeader } from "./ui/card";
 import { EDCSourceReviewEditor, type EDCSourceSpecificationDraft } from "./edc-source-review-editor";
 import { SDTMDomainMappingReview, SDTMVariableMappingReview, type SDTMDomainMappingPlanDraft, type SDTMVariableMappingPlanDraft } from "./sdtm-mapping-stage-review";
 import { SDTMReviewEditor, type SDTMPlanDraft } from "./sdtm-review-editor";
-import { TLFShellReview, TLFReviewEditor, type TLFAnalysisPlanDraft, type TLFPlanDraft } from "./tlf-review-editor";
+import { TLFJsonEditor, TLFShellReview, TLFTableOfContents, TLFReviewEditor, type TLFAnalysisPlanDraft, type TLFPlanDraft } from "./tlf-review-editor";
 import { StatusBadge } from "./status-badge";
 
 export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) {
-  const [tab, setTab] = useState<"preview" | "edit" | "agent" | "artifacts" | "warnings">(
+  const [tab, setTab] = useState<"preview" | "edit" | "json" | "agent" | "artifacts" | "warnings">(
     job.workflow === "sdtm" && job.status === "succeeded" ? "edit" : "preview",
   );
   const [draft, setDraft] = useState(() => JSON.stringify(job.result, null, 2));
@@ -112,12 +112,12 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
         {job.status === "review_required" ? (
           <div className="py-5">{job.workflow === "tlf" ? <TLFShellReview value={tlfDraft} onChange={(next) => setTlfDraft(next)} onApprove={(next: TLFAnalysisPlanDraft) => approveTlfShellMutation.mutate(next)} saving={approveTlfShellMutation.isPending} error={approveTlfShellMutation.error?.message} /> : job.review_stage === "domain_mapping" ? <SDTMDomainMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMDomainMappingPlanDraft) => approveDomainMutation.mutate(next)} saving={approveDomainMutation.isPending} error={approveDomainMutation.error?.message} /> : job.review_stage === "variable_mapping" ? <SDTMVariableMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMVariableMappingPlanDraft) => approveVariableMutation.mutate(next)} saving={approveVariableMutation.isPending} error={approveVariableMutation.error?.message} /> : <EDCSourceReviewEditor value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: EDCSourceSpecificationDraft) => approveSourceMutation.mutate(next)} saving={approveSourceMutation.isPending} error={approveSourceMutation.error?.message} />}</div>
         ) : <><div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist">
-          {(["preview", ...(job.status === "succeeded" ? ["edit" as const] : []), "agent", "artifacts", "warnings"] as const).map((item) => (
-            <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold capitalize ${tab === item ? "border-b-2 border-clinical-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{item === "edit" && job.workflow === "sdtm" ? "SDTM review" : item}</button>
+          {(["preview", ...(job.status === "succeeded" ? ["edit" as const, ...(job.workflow === "tlf" ? ["json" as const] : [])] : []), "agent", "artifacts", "warnings"] as const).map((item) => (
+            <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold capitalize ${tab === item ? "border-b-2 border-clinical-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{item === "edit" ? (job.workflow === "sdtm" ? "SDTM review" : job.workflow === "tlf" ? "Shell" : "Edit") : item === "json" ? "Advanced JSON" : item}</button>
           ))}
         </div>
         <div className="min-h-72 py-5">
-          {tab === "preview" && (job.result ? <StructuredPreview value={job.result} /> : <EmptyState text="A structured preview will appear when generation completes." />)}
+          {tab === "preview" && (job.result ? (job.workflow === "tlf" ? <TLFTableOfContents value={tlfDraft} onEdit={() => setTab("edit")} /> : <StructuredPreview value={job.result} />) : <EmptyState text="A structured preview will appear when generation completes." />)}
           {tab === "edit" && (
             job.workflow === "sdtm" ? <SDTMReviewEditor value={sdtmDraft} artifacts={job.artifacts} onChange={(next) => setSdtmDraft(next)} onSave={(next: SDTMPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : job.workflow === "tlf" ? <TLFReviewEditor value={tlfDraft} onChange={(next) => setTlfDraft(next)} onSave={(next: TLFPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : <div className="space-y-4">
               <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm leading-6 text-blue-200">Edit the validated structured result below. Saving rebuilds DOCX, PDF, XLSX, XML, code, and ZIP artifacts without another model call.</div>
@@ -126,6 +126,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
               <Button variant="clinical" onClick={saveDraft} disabled={updateMutation.isPending}><Save size={16} />{updateMutation.isPending ? "Validating and rebuilding…" : "Save revision and rebuild artifacts"}</Button>
             </div>
           )}
+          {tab === "json" && job.workflow === "tlf" && <TLFJsonEditor value={tlfDraft} onSave={(next) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} />}
           {tab === "agent" && (agentQuery.data ? (
             <div className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-3">

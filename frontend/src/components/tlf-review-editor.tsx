@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Copy, Plus, Save, Trash2 } from "lucide-react";
 import { Button } from "./ui/button";
 
@@ -33,11 +33,23 @@ const areaClass = "focus-ring min-h-20 w-full rounded-md border border-white/15 
 export function TLFShellReview({ value, onChange, onApprove, saving, error }: {
   value: Record<string, unknown>; onChange: (value: TLFAnalysisPlanDraft) => void; onApprove: (value: TLFAnalysisPlanDraft) => void; saving: boolean; error?: string;
 }) {
-  return <TLFReviewEditor value={value} onChange={(next) => onChange(toAnalysisPlan(next))} onSave={() => undefined} saving={saving} error={error} shellReview onApproveShell={(next) => onApprove(toAnalysisPlan(next))} />;
+  const [view, setView] = useState<"preview" | "shell" | "json">("preview");
+  return <div className="space-y-5">
+    <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.06] p-4">
+      <p className="text-xs font-black uppercase tracking-[0.14em] text-violet-300">TLF shell review required</p>
+      <p className="mt-1 text-sm text-zinc-300">Review the output index, then use the guided Shell editor to make changes. Programming will not start until you approve the shell.</p>
+    </div>
+    <div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist" aria-label="TLF shell review views">
+      {([['preview', 'Preview'], ['shell', 'Shell'], ['json', 'Advanced JSON']] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold ${view === key ? "border-b-2 border-violet-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{label}</button>)}
+    </div>
+    {view === "preview" && <TLFTableOfContents value={value} onEdit={() => setView("shell")} />}
+    {view === "shell" && <TLFReviewEditor value={value} onChange={(next) => onChange(toAnalysisPlan(next))} onSave={() => undefined} saving={saving} error={error} shellReview onApproveShell={(next) => onApprove(toAnalysisPlan(next))} hideIntro />}
+    {view === "json" && <TLFJsonEditor value={value} onApply={(next) => { onChange(toAnalysisPlan(normalizePlan(next))); setView("shell"); }} />}
+  </div>;
 }
 
-export function TLFReviewEditor({ value, onChange, onSave, saving, error, shellReview = false, onApproveShell }: {
-  value: Record<string, unknown>; onChange: (value: TLFPlanDraft) => void; onSave: (value: TLFPlanDraft) => void; saving: boolean; error?: string; shellReview?: boolean; onApproveShell?: (value: TLFPlanDraft) => void;
+export function TLFReviewEditor({ value, onChange, onSave, saving, error, shellReview = false, onApproveShell, hideIntro = false }: {
+  value: Record<string, unknown>; onChange: (value: TLFPlanDraft) => void; onSave: (value: TLFPlanDraft) => void; saving: boolean; error?: string; shellReview?: boolean; onApproveShell?: (value: TLFPlanDraft) => void; hideIntro?: boolean;
 }) {
   const plan = useMemo(() => normalizePlan(value), [value]);
   const [selected, setSelected] = useState(plan.outputs[0]?.output_id ?? "");
@@ -84,10 +96,10 @@ export function TLFReviewEditor({ value, onChange, onSave, saving, error, shellR
   });
 
   return <div className="space-y-5">
-    <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.06] p-4">
+    {!hideIntro && <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.06] p-4">
       <p className="text-xs font-black uppercase tracking-[0.14em] text-violet-300">{shellReview ? "TLF shell review required" : "TLF review workspace"}</p>
       <p className="mt-1 text-sm text-zinc-300">{shellReview ? "Review the source-grounded output inventory, analysis metadata, and display shells. Programming augmentation will not start until you approve this shell." : "Review source-grounded outputs, analysis metadata, display rules, and non-executed program scaffolds. Saving revalidates the full plan and rebuilds every artifact."}</p>
-    </div>
+    </div>}
     <div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist" aria-label="TLF review stages">
       {([
         ["inventory", "1 · Output inventory"],
@@ -119,6 +131,45 @@ export function TLFReviewEditor({ value, onChange, onSave, saving, error, shellR
     {shellReview ? <Button variant="clinical" onClick={() => onApproveShell?.(plan)} disabled={saving || !plan.outputs.length || approvalIssues.length > 0}><Save size={16} />{saving ? "Approving shell…" : "Approve shell and generate programs"}</Button> : <Button variant="clinical" onClick={() => onSave(plan)} disabled={saving || !plan.outputs.length}><Save size={16} />{saving ? "Validating and rebuilding…" : "Save review and rebuild artifacts"}</Button>}
   </div>;
 }
+
+export function TLFTableOfContents({ value, onEdit }: { value: Record<string, unknown>; onEdit?: () => void }) {
+  const plan = useMemo(() => normalizePlan(value), [value]);
+  const counts: Record<OutputType, number> = { table: 0, listing: 0, figure: 0 };
+  plan.outputs.forEach((output) => { counts[output.output_type] += 1; });
+  return <div className="space-y-5">
+    <div className="flex flex-wrap items-start justify-between gap-4 rounded-xl border border-white/10 bg-white/[0.02] p-5">
+      <div><p className="text-[10px] font-black uppercase tracking-[0.14em] text-zinc-500">TLF package</p><h3 className="mt-1 text-lg font-black text-zinc-100">{plan.study_name}</h3><p className="mt-1 text-sm text-zinc-400">{plan.analysis_standard}</p></div>
+      <div className="flex gap-2">{([['table', counts.table], ['listing', counts.listing], ['figure', counts.figure]] as const).map(([type, count]) => <div key={type} className="min-w-20 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-center"><p className="text-lg font-black text-zinc-100">{count}</p><p className="text-[9px] font-black uppercase tracking-wider text-zinc-500">{type}{count === 1 ? '' : 's'}</p></div>)}</div>
+    </div>
+    <section className="overflow-hidden rounded-xl border border-white/10 bg-white/[0.02]">
+      <div className="flex items-center justify-between gap-3 border-b border-white/10 px-4 py-3"><div><h3 className="text-sm font-black text-zinc-100">Table of contents</h3><p className="mt-0.5 text-xs text-zinc-500">The ordered list of planned tables, listings, and figures.</p></div>{onEdit && <Button type="button" size="sm" variant="outline" onClick={onEdit}>Edit shells</Button>}</div>
+      {plan.outputs.length ? <div className="overflow-x-auto"><table className="min-w-full border-collapse text-left text-sm"><thead className="bg-white/[0.035] text-[10px] font-black uppercase tracking-wider text-zinc-500"><tr><th className="px-4 py-2.5">No.</th><th className="px-4 py-2.5">Output</th><th className="px-4 py-2.5">Title</th><th className="px-4 py-2.5">Section</th><th className="px-4 py-2.5">Population</th><th className="px-4 py-2.5">Status</th></tr></thead><tbody>{plan.outputs.map((output, index) => <tr key={`${output.output_id}-${index}`} className="border-t border-white/[0.07]"><td className="px-4 py-3 font-mono text-xs text-zinc-600">{String(index + 1).padStart(2, '0')}</td><td className="px-4 py-3"><span className="font-mono text-xs font-black text-violet-300">{output.output_id}</span><span className="ml-2 rounded bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-black uppercase text-zinc-400">{output.output_type}</span></td><td className="max-w-md px-4 py-3 font-semibold text-zinc-200">{output.title}</td><td className="px-4 py-3 text-xs text-zinc-400">{output.section}</td><td className="px-4 py-3 text-xs text-zinc-400">{output.population}</td><td className="px-4 py-3"><span className={`rounded-full px-2 py-1 text-[9px] font-black uppercase ${output.readiness === 'ready' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>{output.readiness}</span></td></tr>)}</tbody></table></div> : <p className="p-8 text-center text-sm text-zinc-500">No outputs have been defined.</p>}
+    </section>
+    {(plan.assumptions.length > 0 || plan.unresolved_items.length > 0) && <div className="grid gap-4 md:grid-cols-2">{plan.assumptions.length > 0 && <SummaryList title="Assumptions" items={plan.assumptions} />}{plan.unresolved_items.length > 0 && <SummaryList title="Items requiring confirmation" items={plan.unresolved_items} warning />}</div>}
+  </div>;
+}
+
+export function TLFJsonEditor({ value, onApply, onSave, saving = false, error }: { value: Record<string, unknown>; onApply?: (value: Record<string, unknown>) => void; onSave?: (value: Record<string, unknown>) => void; saving?: boolean; error?: string }) {
+  const [draft, setDraft] = useState(() => JSON.stringify(value, null, 2));
+  const [parseError, setParseError] = useState<string | null>(null);
+  useEffect(() => setDraft(JSON.stringify(value, null, 2)), [value]);
+  const submit = () => {
+    try {
+      const parsed: unknown = JSON.parse(draft);
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("The TLF shell must be a JSON object.");
+      setParseError(null);
+      (onSave ?? onApply)?.(parsed as Record<string, unknown>);
+    } catch (caught) { setParseError(caught instanceof Error ? caught.message : "Enter valid JSON."); }
+  };
+  return <div className="space-y-4">
+    <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.07] px-4 py-3 text-sm leading-6 text-amber-100"><strong>Advanced editor.</strong> This view is intended for technical reviewers. Most users should make changes in the Shell tab.</div>
+    <textarea aria-label="Advanced TLF JSON" value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} className="focus-ring min-h-[32rem] w-full rounded-xl border border-white/15 bg-[#0d0d0f] p-4 font-mono text-xs leading-5 text-zinc-200" />
+    {(parseError || error) && <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">{parseError ?? error}</div>}
+    <Button type="button" variant="clinical" onClick={submit} disabled={saving}><Save size={16} />{saving ? "Validating and rebuilding…" : onSave ? "Save JSON and rebuild artifacts" : "Apply JSON to shell"}</Button>
+  </div>;
+}
+
+function SummaryList({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) { return <section className={`rounded-xl border p-4 ${warning ? 'border-amber-500/20 bg-amber-500/[0.06]' : 'border-white/10 bg-white/[0.02]'}`}><h3 className="text-sm font-black text-zinc-100">{title}</h3><ul className="mt-2 space-y-1 text-xs leading-5 text-zinc-400">{items.map((item, index) => <li key={`${item}-${index}`}>• {item}</li>)}</ul></section>; }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) { return <section className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-4"><h3 className="text-sm font-black text-zinc-100">{title}</h3>{children}</section>; }
 function Label({ text }: { text: string }) { return <span className="mb-1.5 block text-[10px] font-black uppercase tracking-wider text-zinc-500">{text}</span>; }

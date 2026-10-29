@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { TLFShellReview, TLFReviewEditor } from "@/components/tlf-review-editor";
+import { TLFJsonEditor, TLFShellReview, TLFTableOfContents, TLFReviewEditor } from "@/components/tlf-review-editor";
 
 const plan = {
   study_name: "SYN-101",
@@ -34,6 +34,9 @@ describe("TLFReviewEditor", () => {
     render(<TLFShellReview value={plan} onChange={vi.fn()} onApprove={approve} saving={false} />);
 
     expect(screen.getByText("TLF shell review required")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Preview" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("Table of contents")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Shell" }));
     expect(screen.queryByRole("tab", { name: "3 · Programming augmentation" })).not.toBeInTheDocument();
     expect(screen.getByText("Approve shell and generate programs")).toBeEnabled();
     fireEvent.click(screen.getByText("Approve shell and generate programs"));
@@ -66,5 +69,26 @@ describe("TLFReviewEditor", () => {
     expect(onChange).toHaveBeenCalled();
     fireEvent.click(screen.getByText("Save review and rebuild artifacts"));
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ study_name: "SYN-101" }));
+  });
+
+  it("presents the preview as a table of contents", () => {
+    render(<TLFTableOfContents value={plan} />);
+
+    expect(screen.getByText("Table of contents")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Output" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Title" })).toBeInTheDocument();
+    expect(screen.getByText("T-01")).toBeInTheDocument();
+    expect(screen.getByText("Change from baseline")).toBeInTheDocument();
+    expect(screen.getAllByText("table").length).toBeGreaterThan(0);
+  });
+
+  it("keeps JSON editing as an advanced option", () => {
+    const onApply = vi.fn();
+    render(<TLFJsonEditor value={plan} onApply={onApply} />);
+
+    expect(screen.getByText("Advanced editor.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Advanced TLF JSON"), { target: { value: JSON.stringify({ ...plan, study_name: "SYN-102" }) } });
+    fireEvent.click(screen.getByText("Apply JSON to shell"));
+    expect(onApply).toHaveBeenCalledWith(expect.objectContaining({ study_name: "SYN-102" }));
   });
 });
