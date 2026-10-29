@@ -130,6 +130,14 @@ def test_use_case_registry_is_exposed() -> None:
         "Rule augmentation",
     ]
     assert "domain_rule_augmentations" in sdtm["result_schema"]["properties"]
+    tlf = next(item for item in definitions if item["id"] == "tlf")
+    assert tlf["stages"] == [
+        "Output inventory",
+        "Analysis & display specification",
+        "Programming augmentation",
+    ]
+    assert "programs" in tlf["result_schema"]["properties"]
+    assert "xlsx" in tlf["output_formats"]
 
 
 def test_agent_registry_is_exposed() -> None:

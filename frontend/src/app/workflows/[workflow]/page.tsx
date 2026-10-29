@@ -42,6 +42,8 @@ export default function WorkflowPage() {
   const workspaceLabel = workflow === "clinical-document" && discipline === "data-management" ? "Data management" : workflow === "sdtm" || workflow === "tlf" ? "Stats programming" : "Biostats";
   const executionSteps = workflow === "sdtm"
     ? ["Validate and scan input", "Normalize EDC source specification", "User source review", "Draft domain mapping", "User domain review", "Draft variable & value-level mapping", "User variable & VLM review", "Rule augmentation", "Validate and render artifacts"]
+    : workflow === "tlf"
+      ? ["Validate and scan input", "Output inventory", "Analysis & display specification", "Programming augmentation", "Validate and render artifacts"]
     : ["Validate and scan input", "Inspect workflow contract", "Investigate all source chunks", "Validate and render artifacts"];
   return (
     <div className="mx-auto max-w-[1440px] px-5 py-8 lg:px-10 lg:py-10">

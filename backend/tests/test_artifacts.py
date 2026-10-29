@@ -9,7 +9,7 @@ from reportlab.pdfgen import canvas
 
 from app.artifacts import add_manifest_and_bundle, render_clinical_document, render_edc, render_protocol, render_sdtm, render_tlf
 from app.core_conformance import CoreConformanceError, CoreConformanceResult
-from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMDomainMapping, SDTMDomainRuleAugmentation, SDTMPlan, SDTMRuleAugmentation, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFPlan, TLFSpec
+from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMDomainMapping, SDTMDomainRuleAugmentation, SDTMPlan, SDTMRuleAugmentation, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFFigureSpec, TLFPlan, TLFProgramSpec, TLFRow, TLFSpec
 from app.usdm import USDM_VERSION, validate_usdm
 
 
@@ -133,7 +133,25 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
     assert "annotated-crf.pdf" not in {path.name for path in code_only_paths}
     assert {"define.xml", "build-sdtm.R", "build-sdtm.sas"} <= {path.name for path in code_only_paths}
 
-    tlf = TLFPlan(study_name="SYN-101", outputs=[TLFSpec(output_id="T-01", output_type="table", title="Disposition", columns=[TLFColumn(heading="Treatment")])])
+    tlf = TLFPlan(
+        study_name="SYN-101",
+        outputs=[
+            TLFSpec(output_id="T-01", output_type="table", title="Disposition", columns=[TLFColumn(column_id="TRT", heading="Treatment")], rows=[TLFRow(row_id="R1", label="Randomized")]),
+            TLFSpec(output_id="L-01", output_type="listing", title="Adverse events", columns=[TLFColumn(column_id="TERM", heading="Preferred term", source="ADAE.AEDECOD")]),
+            TLFSpec(output_id="TLF-SETUP", output_type="figure", title="Mean change", figure=TLFFigureSpec(geometry="line", x_axis="AVISIT", y_axis="CHG")),
+        ],
+        programs=[
+            TLFProgramSpec(output_id="T-01", input_datasets=["ADSL"], r_code="table(adsl$TRT01P)", sas_code="proc freq data=adsl; run;"),
+            TLFProgramSpec(output_id="L-01", input_datasets=["ADAE"]),
+            TLFProgramSpec(output_id="TLF-SETUP", input_datasets=["ADEFF"]),
+        ],
+    )
     tlf_paths = render_tlf(tlf, tmp_path, ["r", "sas"])
     assert Document(next(path for path in tlf_paths if path.name == "tlf-shells.docx")).tables
-    assert (tmp_path / "build-tlfs.R").is_file()
+    workbook = load_workbook(tmp_path / "tlf-specifications.xlsx")
+    assert {"Output Inventory", "Populations", "Source Mapping", "Display Elements", "Programming", "Assumptions and Blockers"} <= set(workbook.sheetnames)
+    assert (tmp_path / "tlf-setup.R").is_file()
+    assert (tmp_path / "tlf-setup.sas").is_file()
+    assert "table(adsl$TRT01P)" in (tmp_path / "t-01.R").read_text(encoding="utf-8")
+    assert (tmp_path / "l-01.sas").is_file()
+    assert (tmp_path / "tlf-setup-2.R").is_file()

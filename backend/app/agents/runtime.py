@@ -582,8 +582,37 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
             problems.append("Each SDTM domain-variable pair must have exactly one augmented rule.")
         if "3.4" not in value.standard:
             problems.append("The draft must identify SDTMIG 3.4 as its baseline.")
-    elif workflow == "tlf":
-        output_ids = [item.output_id for item in value.outputs]
+    elif workflow in {"tlf-output-inventory", "tlf-analysis-specification", "tlf"}:
+        output_ids = [item.output_id.casefold() for item in value.outputs]
         if len(output_ids) != len(set(output_ids)):
-            problems.append("TLF output_id values must be unique.")
+            problems.append("TLF output_id values must be unique (case-insensitive).")
+        if workflow in {"tlf-analysis-specification", "tlf"}:
+            for item in value.outputs:
+                column_ids = [column.column_id.casefold() for column in item.columns]
+                row_ids = [row.row_id.casefold() for row in item.rows]
+                if len(column_ids) != len(set(column_ids)):
+                    problems.append(f"TLF output {item.output_id} has duplicate column identifiers.")
+                if len(row_ids) != len(set(row_ids)):
+                    problems.append(f"TLF output {item.output_id} has duplicate row identifiers.")
+                known_datasets = {dataset.casefold() for dataset in item.analysis_datasets}
+                for variable in item.source_variables:
+                    if variable.dataset.casefold() not in known_datasets:
+                        problems.append(
+                            f"TLF output {item.output_id} source variable {variable.dataset}.{variable.variable} "
+                            "references an undeclared analysis dataset."
+                        )
+        if workflow == "tlf":
+            program_ids = [program.output_id.casefold() for program in value.programs]
+            if len(program_ids) != len(set(program_ids)):
+                problems.append("TLF program output identifiers must be unique (case-insensitive).")
+            missing = set(output_ids) - set(program_ids)
+            extra = set(program_ids) - set(output_ids)
+            for output_id in sorted(missing):
+                problems.append(f"TLF output {output_id} is missing a programming augmentation.")
+            for output_id in sorted(extra):
+                problems.append(f"TLF program {output_id} does not reference a defined output.")
+    elif workflow == "tlf-programming-augmentation":
+        program_ids = [program.output_id.casefold() for program in value.programs]
+        if len(program_ids) != len(set(program_ids)):
+            problems.append("TLF program output identifiers must be unique (case-insensitive).")
     return list(dict.fromkeys(problems))

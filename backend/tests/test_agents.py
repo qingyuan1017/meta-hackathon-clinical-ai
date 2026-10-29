@@ -15,6 +15,7 @@ from app.schemas import EDCDesign, EDCForm, EDCVisit, StudySummary
 from app.use_cases.base import UseCaseContext
 from app.use_cases.protocol_extraction import ProtocolExtractionUseCase
 from app.use_cases.sdtm import SDTMUseCase
+from app.use_cases.tlf import TLFUseCase
 
 
 def test_sdtm_submission_requires_edc_but_not_crf() -> None:
@@ -481,3 +482,60 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
         "Rule augmentation",
     ]
     assert {event["stage"] for event in progress["events"]} == {"Rule augmentation"}
+
+
+async def test_tlf_use_case_runs_three_ordered_specification_stages(tmp_path) -> None:
+    inventory = {
+        "study_name": "SYN-101",
+        "outputs": [{"output_id": "T-01", "output_type": "table", "title": "Change from baseline"}],
+    }
+    analysis = {
+        "study_name": "SYN-101",
+        "outputs": [{
+            "output_id": "T-01",
+            "output_type": "table",
+            "title": "Change from baseline",
+            "population": "Intent-to-Treat",
+            "population_filter": "ADSL.ITTFL = 'Y'",
+            "analysis_datasets": ["ADSL", "ADEFF"],
+            "source_variables": [{"dataset": "ADEFF", "variable": "CHG"}],
+            "treatment_variable": "ADSL.TRT01P",
+            "analysis_method": "ANCOVA",
+            "columns": [{"column_id": "TRT", "heading": "Treatment", "source": "ADSL.TRT01P", "format": "text"}],
+            "rows": [{"row_id": "LSMEAN", "label": "LS mean change", "source": "ADEFF.CHG", "statistic": "LS mean", "format": "8.2"}],
+            "source_reference": "SAP efficacy analysis",
+            "readiness": "ready",
+        }],
+    }
+    programming = {
+        "study_name": "SYN-101",
+        "programs": [{
+            "output_id": "T-01",
+            "input_datasets": ["ADSL", "ADEFF"],
+            "derivation_steps": ["Join ADSL and ADEFF", "Fit ANCOVA"],
+            "r_code": "fit <- lm(CHG ~ TRT01P + BASE, data = adeff)",
+            "sas_code": "proc glm data=adeff; model chg=trt01p base; run;",
+        }],
+    }
+    actions = []
+    for result in (inventory, analysis, programming):
+        actions.extend([
+            ("inspect_workflow_contract", {}),
+            ("read_source_chunk", {"index": 1}),
+            ("submit_result", {"result": result}),
+        ])
+    completions = ScriptedCompletions(actions)
+    settings = agent_settings(agent_max_turns=4)
+    ai = MetaAIClient(settings)
+    ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    sap = tmp_path / "sap.md"
+    sap.write_text("Analyze Week 12 change from baseline in the ITT population using ANCOVA.", encoding="utf-8")
+    progress_path = tmp_path / "agent" / "progress.json"
+
+    generated = await TLFUseCase().generate(UseCaseContext(inputs=[sap], options={"languages": ["r", "sas"]}, ai=ai, settings=settings, agent_progress_path=progress_path))
+
+    assert generated.value.programs[0].output_id == "T-01"
+    assert generated.value.outputs[0].readiness == "ready"
+    progress = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert progress["stage"] == "Programming augmentation"
+    assert progress["completed_stages"] == ["Output inventory", "Analysis & display specification", "Programming augmentation"]

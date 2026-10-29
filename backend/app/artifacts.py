@@ -543,40 +543,148 @@ def _one_line(value: str) -> str:
 def render_tlf(result: TLFPlan, output_dir: Path, languages: list[str]) -> list[Path]:
     json_path = output_dir / "tlf-specifications.json"
     json_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
+    xlsx_path = _render_tlf_xlsx(result, output_dir / "tlf-specifications.xlsx")
     document = Document()
     _document_header(document, f"TLF Shells — {result.study_name}")
     for index, output in enumerate(result.outputs):
         if index:
             document.add_page_break()
         document.add_heading(f"{output.output_id}: {output.title}", level=1)
-        document.add_paragraph(f"Type: {output.output_type.title()}\nPopulation: {output.population}")
-        table = document.add_table(rows=2, cols=max(1, len(output.columns)))
-        table.style = "Table Grid"
-        for column_index, column in enumerate(output.columns):
-            table.rows[0].cells[column_index].text = column.heading
-            table.rows[1].cells[column_index].text = f"{column.statistic}\nSource: {column.source}"
+        document.add_paragraph(
+            f"Type: {output.output_type.title()}\nSection: {output.section}\nPopulation: {output.population}\n"
+            f"Status: {output.readiness.upper()}\nSource: {output.source_reference}"
+        )
+        if output.output_type == "table":
+            table = document.add_table(rows=max(2, len(output.rows) + 1), cols=max(1, len(output.columns) + 1))
+            table.style = "Table Grid"
+            table.rows[0].cells[0].text = "Row"
+            for column_index, column in enumerate(output.columns, 1):
+                table.rows[0].cells[column_index].text = column.heading
+            for row_index, row in enumerate(output.rows, 1):
+                table.rows[row_index].cells[0].text = row.label
+                for column_index in range(1, len(table.columns)):
+                    table.rows[row_index].cells[column_index].text = f"<{row.statistic or 'value'}>"
+        elif output.output_type == "listing":
+            table = document.add_table(rows=2, cols=max(1, len(output.columns)))
+            table.style = "Table Grid"
+            for column_index, column in enumerate(output.columns):
+                table.rows[0].cells[column_index].text = column.heading
+                table.rows[1].cells[column_index].text = f"<{column.source}>"
+        else:
+            table = document.add_table(rows=1, cols=1)
+            table.style = "Table Grid"
+            figure = output.figure
+            table.cell(0, 0).text = (
+                f"FIGURE PLACEHOLDER\n{figure.geometry if figure else 'TODO: confirm figure type'}\n"
+                f"X: {figure.x_axis if figure else 'TODO'}\nY: {figure.y_axis if figure else 'TODO'}\n"
+                f"Group: {figure.group if figure else ''}"
+            )
         for footnote in output.footnotes:
             document.add_paragraph(footnote, style="Caption")
-        for note in output.programming_notes:
-            document.add_paragraph(f"TODO: {note}", style="Intense Quote")
+        for note in [*output.programming_notes, *output.blocking_items]:
+            document.add_paragraph(note, style="Intense Quote")
     docx_path = output_dir / "tlf-shells.docx"
     document.save(docx_path)
-    paths = [json_path, docx_path]
+    paths = [json_path, xlsx_path, docx_path]
+    programs = {program.output_id.casefold(): program for program in result.programs}
+    filenames: set[str] = {"tlf-setup"}
     if "r" in languages:
-        r_path = output_dir / "build-tlfs.R"
-        lines = [f"# {DISCLAIMER}", "library(dplyr)", "library(ggplot2)", ""]
+        setup = output_dir / "tlf-setup.R"
+        setup.write_text(f"# {DISCLAIMER}\nlibrary(dplyr)\nlibrary(ggplot2)\n", encoding="utf-8")
+        paths.append(setup)
         for output in result.outputs:
-            lines.extend([f"# {output.output_id}: {output.title}", f"# TODO: implement {output.output_type} using confirmed ADaM inputs", ""])
-        r_path.write_text("\n".join(lines), encoding="utf-8")
-        paths.append(r_path)
+            slug = _unique_program_slug(output.output_id, filenames)
+            r_path = output_dir / f"{slug}.R"
+            program = programs.get(output.output_id.casefold())
+            body = program.r_code if program else "# TODO: add programming augmentation"
+            r_path.write_text(
+                f"# {DISCLAIMER}\nsource(\"tlf-setup.R\")\n\n# {output.output_id}: {output.title}\n{body}\n",
+                encoding="utf-8",
+            )
+            paths.append(r_path)
     if "sas" in languages:
-        sas_path = output_dir / "build-tlfs.sas"
-        lines = [f"/* {DISCLAIMER} */", ""]
+        setup = output_dir / "tlf-setup.sas"
+        setup.write_text(f"/* {DISCLAIMER} */\noptions validvarname=upcase;\n", encoding="utf-8")
+        paths.append(setup)
+        filenames = {"tlf-setup"}
         for output in result.outputs:
-            lines.extend([f"/* {output.output_id}: {output.title} */", f"/* TODO: implement {output.output_type} using confirmed ADaM inputs */", ""])
-        sas_path.write_text("\n".join(lines), encoding="utf-8")
-        paths.append(sas_path)
+            slug = _unique_program_slug(output.output_id, filenames)
+            sas_path = output_dir / f"{slug}.sas"
+            program = programs.get(output.output_id.casefold())
+            body = program.sas_code if program else "/* TODO: add programming augmentation */"
+            sas_path.write_text(
+                f"/* {DISCLAIMER} */\n%include \"tlf-setup.sas\";\n\n/* {output.output_id}: {output.title} */\n{body}\n",
+                encoding="utf-8",
+            )
+            paths.append(sas_path)
     return paths
+
+
+def _render_tlf_xlsx(result: TLFPlan, path: Path) -> Path:
+    workbook = Workbook()
+    inventory = workbook.active
+    inventory.title = "Output Inventory"
+    inventory.append(["Output ID", "Type", "Title", "Section", "Purpose", "Population", "Source Reference", "Readiness"])
+    for output in result.outputs:
+        inventory.append([output.output_id, output.output_type, output.title, output.section, output.purpose, output.population, output.source_reference, output.readiness])
+
+    populations = workbook.create_sheet("Populations")
+    populations.append(["Output ID", "Population", "Filter", "Treatment Variable", "Analysis Method"])
+    for output in result.outputs:
+        populations.append([output.output_id, output.population, output.population_filter, output.treatment_variable, output.analysis_method])
+
+    sources = workbook.create_sheet("Source Mapping")
+    sources.append(["Output ID", "Dataset", "Variable", "Role", "Derivation"])
+    for output in result.outputs:
+        for variable in output.source_variables:
+            sources.append([output.output_id, variable.dataset, variable.variable, variable.role, variable.derivation])
+
+    display = workbook.create_sheet("Display Elements")
+    display.append(["Output ID", "Kind", "Element ID", "Label", "Source", "Statistic", "Condition", "Format"])
+    for output in result.outputs:
+        for column in output.columns:
+            display.append([output.output_id, "column", column.column_id, column.heading, column.source, column.statistic, "", column.format])
+        for row in output.rows:
+            display.append([output.output_id, "row", row.row_id, row.label, row.source, row.statistic, row.condition, row.format])
+        if output.figure:
+            display.append([output.output_id, "figure", "FIGURE", output.figure.geometry, output.figure.x_axis, output.figure.y_axis, output.figure.group, output.figure.panel])
+
+    programming = workbook.create_sheet("Programming")
+    programming.append(["Output ID", "Input Datasets", "Derivation Steps", "R Scaffold", "SAS Scaffold", "Review Notes"])
+    for program in result.programs:
+        programming.append([program.output_id, "; ".join(program.input_datasets), "\n".join(program.derivation_steps), program.r_code, program.sas_code, "; ".join(program.review_notes)])
+
+    assumptions = workbook.create_sheet("Assumptions and Blockers")
+    assumptions.append(["Type", "Output ID", "Text"])
+    assumptions.append(["Disclaimer", "", DISCLAIMER])
+    for item in result.assumptions:
+        assumptions.append(["Assumption", "", item])
+    for item in result.unresolved_items:
+        assumptions.append(["Unresolved", "", item])
+    for output in result.outputs:
+        for item in output.blocking_items:
+            assumptions.append(["Blocker", output.output_id, item])
+
+    for sheet in workbook.worksheets:
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for cell in sheet[1]:
+            bold = copy(cell.font)
+            bold.bold = True
+            cell.font = bold
+    workbook.save(path)
+    return path
+
+
+def _unique_program_slug(output_id: str, seen: set[str]) -> str:
+    base = _slug(output_id) or "tlf-output"
+    candidate = base
+    suffix = 2
+    while candidate.casefold() in seen:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    seen.add(candidate.casefold())
+    return candidate
 
 
 def add_manifest_and_bundle(paths: list[Path], output_dir: Path, workflow: str) -> list[Path]:

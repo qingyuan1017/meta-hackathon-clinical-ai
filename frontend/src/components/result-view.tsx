@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader } from "./ui/card";
 import { EDCSourceReviewEditor, type EDCSourceSpecificationDraft } from "./edc-source-review-editor";
 import { SDTMDomainMappingReview, SDTMVariableMappingReview, type SDTMDomainMappingPlanDraft, type SDTMVariableMappingPlanDraft } from "./sdtm-mapping-stage-review";
 import { SDTMReviewEditor, type SDTMPlanDraft } from "./sdtm-review-editor";
+import { TLFReviewEditor, type TLFPlanDraft } from "./tlf-review-editor";
 import { StatusBadge } from "./status-badge";
 
 export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) {
@@ -20,6 +21,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
   const [draft, setDraft] = useState(() => JSON.stringify(job.result, null, 2));
   const [sdtmDraft, setSdtmDraft] = useState<Record<string, unknown>>(() => asRecord(job.result));
   const [edcSourceDraft, setEdcSourceDraft] = useState<Record<string, unknown>>(() => asRecord(job.result));
+  const [tlfDraft, setTlfDraft] = useState<Record<string, unknown>>(() => asRecord(job.result));
   const [draftError, setDraftError] = useState<string | null>(null);
   const client = useQueryClient();
   const agentQuery = useQuery({
@@ -31,6 +33,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
     setDraft(JSON.stringify(job.result, null, 2));
     setSdtmDraft(asRecord(job.result));
     setEdcSourceDraft(asRecord(job.result));
+    setTlfDraft(asRecord(job.result));
   }, [job.id, job.result]);
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteJob(job.id),
@@ -109,7 +112,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
         <div className="min-h-72 py-5">
           {tab === "preview" && (job.result ? <StructuredPreview value={job.result} /> : <EmptyState text="A structured preview will appear when generation completes." />)}
           {tab === "edit" && (
-            job.workflow === "sdtm" ? <SDTMReviewEditor value={sdtmDraft} artifacts={job.artifacts} onChange={(next) => setSdtmDraft(next)} onSave={(next: SDTMPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : <div className="space-y-4">
+            job.workflow === "sdtm" ? <SDTMReviewEditor value={sdtmDraft} artifacts={job.artifacts} onChange={(next) => setSdtmDraft(next)} onSave={(next: SDTMPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : job.workflow === "tlf" ? <TLFReviewEditor value={tlfDraft} onChange={(next) => setTlfDraft(next)} onSave={(next: TLFPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : <div className="space-y-4">
               <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm leading-6 text-blue-200">Edit the validated structured result below. Saving rebuilds DOCX, PDF, XLSX, XML, code, and ZIP artifacts without another model call.</div>
               <textarea aria-label="Editable structured result" value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} className="focus-ring min-h-[32rem] w-full rounded-xl border border-white/15 bg-[#0d0d0f] p-4 font-mono text-xs leading-5 text-zinc-200" />
               {(draftError || updateMutation.error) && <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">{draftError ?? updateMutation.error?.message}</div>}
