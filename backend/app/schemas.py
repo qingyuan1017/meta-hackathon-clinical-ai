@@ -201,6 +201,17 @@ class SDTMVariableMappingPlan(BaseModel):
     unresolved_mappings: list[str] = Field(default_factory=list)
 
 
+class SDTMDomainMappingReview(BaseModel):
+    source_spec: EDCSourceSpecification
+    domain_mapping: SDTMDomainMappingPlan
+
+
+class SDTMVariableMappingReview(BaseModel):
+    source_spec: EDCSourceSpecification
+    domain_mapping: SDTMDomainMappingPlan
+    variable_mapping: SDTMVariableMappingPlan
+
+
 class SDTMDomainRuleAugmentation(BaseModel):
     rule_id: str
     target_domain: str
@@ -281,6 +292,7 @@ class JobRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    review_stage: Literal["edc_source", "domain_mapping", "variable_mapping"] | None = None
     result: dict | list | None = None
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
@@ -300,6 +312,14 @@ class JobResultUpdate(BaseModel):
 
 class EDCSourceSpecificationUpdate(BaseModel):
     source_spec: EDCSourceSpecification
+
+
+class SDTMDomainMappingUpdate(BaseModel):
+    domain_mapping: SDTMDomainMappingPlan
+
+
+class SDTMVariableMappingUpdate(BaseModel):
+    variable_mapping: SDTMVariableMappingPlan
 
 
 class UseCaseRead(BaseModel):

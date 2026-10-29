@@ -97,7 +97,8 @@ export function EDCSourceReviewEditor({ value, onChange, onApprove, saving, erro
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-4">
-        <p className="text-xs font-black uppercase tracking-[0.14em] text-amber-200">EDC source review required</p>
+        <p className="text-xs font-black uppercase tracking-[0.14em] text-amber-200">Review gate 1 of 3</p>
+        <p className="mt-1 text-base font-bold text-amber-100">EDC source review required</p>
         <p className="mt-1 text-sm leading-6 text-amber-100/80">The agent normalized the uploaded EDC into a source schema. Confirm dataset and variable identifiers before SDTM domain mapping begins.</p>
       </div>
 

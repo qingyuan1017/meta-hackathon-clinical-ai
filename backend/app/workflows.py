@@ -20,6 +20,7 @@ class WorkflowResult(BaseModel):
     result: dict[str, Any]
     paths: list[Path]
     warnings: list[str]
+    review_stage: str | None = None
 
 
 class WorkflowService:
@@ -80,6 +81,7 @@ class WorkflowService:
             result=prepared.value.model_dump(),
             paths=[],
             warnings=prepared.warnings,
+            review_stage=prepared.review_stage,
         )
 
     def render_revision(

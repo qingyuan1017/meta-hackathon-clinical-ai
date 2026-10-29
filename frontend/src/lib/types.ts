@@ -2,6 +2,7 @@ import type { components } from "./openapi";
 
 export type Workflow = "protocol-extraction" | "clinical-document" | "edc-design" | "sdtm" | "tlf";
 export type JobStatus = "queued" | "running" | "review_required" | "succeeded" | "failed";
+export type ReviewStage = "edc_source" | "domain_mapping" | "variable_mapping";
 
 export type Artifact = components["schemas"]["ArtifactRead"];
 
@@ -12,6 +13,7 @@ export interface Job extends Omit<components["schemas"]["JobRead"], "workflow" |
   error: string | null;
   warnings: string[];
   artifacts: Artifact[];
+  review_stage: ReviewStage | null;
 }
 
 export interface JobList { items: Job[]; total: number; page: number; page_size: number; }

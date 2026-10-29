@@ -11,7 +11,15 @@ from ..agents.runtime import verify_result
 from ..agents.sdtm import SOURCE_NORMALIZATION_AGENT, STAGE_AGENTS
 from ..artifacts import render_sdtm
 from ..parsers import parse_edc_source, parse_source
-from ..schemas import EDCSourceSpecification, SDTMDomainMappingPlan, SDTMPlan, SDTMRuleAugmentationPlan, SDTMVariableMappingPlan
+from ..schemas import (
+    EDCSourceSpecification,
+    SDTMDomainMappingPlan,
+    SDTMDomainMappingReview,
+    SDTMPlan,
+    SDTMRuleAugmentationPlan,
+    SDTMVariableMappingPlan,
+    SDTMVariableMappingReview,
+)
 from .base import ClinicalUseCase, GeneratedContent, UseCaseContext, UseCaseDescriptor
 from .utilities import normalize_languages
 
@@ -47,91 +55,114 @@ class SDTMUseCase(ClinicalUseCase):
             raise ValueError("SDTM generation requires an EDC JSON or XLSX specification. A blank CRF PDF is optional.")
 
     async def prepare_review(self, context: UseCaseContext) -> GeneratedContent | None:
-        if context.options.get("edc_source_spec") is not None:
-            self._approved_source_spec(context.options)
-            return None
-        _, edc = self._workflow_inputs(context.inputs)
-        outcome = await ClinicalAgentRunner(
-            definition=SOURCE_NORMALIZATION_AGENT,
-            result_model=EDCSourceSpecification,
-            ai=context.ai,
-            settings=context.settings,
-            progress_path=context.agent_progress_path,
-        ).run(
-            objective=(
-                "Normalize the deterministically extracted EDC metadata into a complete source dataset and "
-                "variable specification for human review. Preserve file, sheet, and row provenance; do not "
-                "perform any SDTM target mapping."
-            ),
-            source=parse_edc_source(edc),
-            options=context.options,
-            stage="EDC source normalization",
-        )
-        return GeneratedContent(
-            value=outcome.value,
-            warnings=[*outcome.warnings, *self.result_warnings(outcome.value)],
-        )
+        crf, edc = self._workflow_inputs(context.inputs)
+        if context.options.get("edc_source_spec") is None:
+            outcome = await ClinicalAgentRunner(
+                definition=SOURCE_NORMALIZATION_AGENT,
+                result_model=EDCSourceSpecification,
+                ai=context.ai,
+                settings=context.settings,
+                progress_path=context.agent_progress_path,
+            ).run(
+                objective=(
+                    "Normalize the deterministically extracted EDC metadata into a complete source dataset and "
+                    "variable specification for human review. Preserve file, sheet, and row provenance; do not "
+                    "perform any SDTM target mapping."
+                ),
+                source=parse_edc_source(edc),
+                options=self._agent_options(context.options),
+                stage="EDC source normalization",
+            )
+            return GeneratedContent(
+                value=outcome.value,
+                warnings=[*outcome.warnings, *self.result_warnings(outcome.value)],
+                review_stage="edc_source",
+            )
+
+        source_spec = self._approved_source_spec(context.options)
+        source, context_inputs = self._mapping_source(context, source_spec, crf, edc)
+        agent_options = self._agent_options(context.options)
+        stage_count = len(self.descriptor.stages)
+        if context.options.get("sdtm_domain_mapping") is None:
+            outcome = await ClinicalAgentRunner(
+                definition=_STAGE_AGENTS["domain-mapping"],
+                result_model=SDTMDomainMappingPlan,
+                ai=context.ai,
+                settings=context.settings,
+                progress_path=context.agent_progress_path,
+            ).run(
+                objective=(
+                    "Stage 1 of 3: determine every raw/SDTM source dataset to target SDTM dataset/domain mapping. "
+                    "Do not perform variable mapping or code generation. Return a draft for human review."
+                ),
+                source=f"{source}\n\nOPTIONAL STUDY CONTEXT\n{self.join_sources(context_inputs)}",
+                options=agent_options,
+                stage=self.descriptor.stages[0],
+                stage_index=1,
+                stage_count=stage_count,
+            )
+            mapping = cast(SDTMDomainMappingPlan, outcome.value)
+            self.validate_domain_mapping(source_spec, mapping)
+            return GeneratedContent(
+                value=SDTMDomainMappingReview(source_spec=source_spec, domain_mapping=mapping),
+                warnings=[*outcome.warnings, *self.result_warnings(mapping)],
+                review_stage="domain_mapping",
+            )
+
+        domain_mapping = self._approved_domain_mapping(context.options, source_spec)
+        if context.options.get("sdtm_variable_mapping") is None:
+            crf_source = self._crf_source(crf)
+            outcome = await ClinicalAgentRunner(
+                definition=_STAGE_AGENTS["variable-mapping"],
+                result_model=SDTMVariableMappingPlan,
+                ai=context.ai,
+                settings=context.settings,
+                progress_path=context.agent_progress_path,
+            ).run(
+                objective=(
+                    "Stage 2 of 3: preserve the user-approved domain plan and determine variable-level mappings, "
+                    "value-level metadata, and, only when a blank CRF is supplied, its exact labels for aCRF "
+                    "annotations. When no blank CRF is supplied, leave crf_source_label null. Do not generate "
+                    "code. Return a draft for human review."
+                ),
+                source=(
+                    f"{source}\n\nUSER-APPROVED DOMAIN MAPPING — PRESERVE\n"
+                    f"{domain_mapping.model_dump_json(indent=2)}\n\n{crf_source}\n\n"
+                    f"OPTIONAL STUDY CONTEXT\n{self.join_sources(context_inputs)}"
+                ),
+                options=agent_options,
+                stage=self.descriptor.stages[1],
+                stage_index=2,
+                stage_count=stage_count,
+                completed_stages=[self.descriptor.stages[0]],
+            )
+            variable_mapping = cast(SDTMVariableMappingPlan, outcome.value)
+            self.validate_variable_mapping(source_spec, domain_mapping, variable_mapping)
+            return GeneratedContent(
+                value=SDTMVariableMappingReview(
+                    source_spec=source_spec,
+                    domain_mapping=domain_mapping,
+                    variable_mapping=variable_mapping,
+                ),
+                warnings=[*outcome.warnings, *self.result_warnings(variable_mapping)],
+                review_stage="variable_mapping",
+            )
+
+        self._approved_variable_mapping(context.options, source_spec, domain_mapping)
+        return None
 
     async def generate(self, context: UseCaseContext) -> GeneratedContent:
         crf, edc = self._workflow_inputs(context.inputs)
         source_spec = self._approved_source_spec(context.options)
-        agent_options = {key: value for key, value in context.options.items() if key != "edc_source_spec"}
-        excluded_inputs = {edc, *([crf] if crf is not None else [])}
-        context_inputs = [path for path in context.inputs if path not in excluded_inputs]
-        crf_source = (
-            f"BLANK CRF TEXT\n{parse_source(crf)}"
-            if crf is not None
-            else "BLANK CRF NOT SUPPLIED\nDo not invent CRF labels or annotations. Leave crf_source_label null."
-        )
-        source = (
-            f"USER-APPROVED EDC SOURCE SPECIFICATION\n{source_spec.model_dump_json(indent=2)}\n\n"
-            f"OPTIONAL STUDY CONTEXT\n{self.join_sources(context_inputs)}"
-        )
+        domain_mapping = self._approved_domain_mapping(context.options, source_spec)
+        variable_mapping = self._approved_variable_mapping(context.options, source_spec, domain_mapping)
+        agent_options = self._agent_options(context.options)
+        source, context_inputs = self._mapping_source(context, source_spec, crf, edc)
+        source = f"{source}\n\nOPTIONAL STUDY CONTEXT\n{self.join_sources(context_inputs)}"
+        crf_source = self._crf_source(crf)
         stage_count = len(self.descriptor.stages)
-        domain_outcome = await ClinicalAgentRunner(
-            definition=_STAGE_AGENTS["domain-mapping"],
-            result_model=SDTMDomainMappingPlan,
-            ai=context.ai,
-            settings=context.settings,
-            progress_path=context.agent_progress_path,
-        ).run(
-            objective=(
-                "Stage 1 of 3: determine every raw/SDTM source dataset to target SDTM dataset/domain mapping. "
-                "Do not perform variable mapping or code generation."
-            ),
-            source=source,
-            options=agent_options,
-            stage=self.descriptor.stages[0],
-            stage_index=1,
-            stage_count=stage_count,
-        )
-
-        domain_json = domain_outcome.value.model_dump_json(indent=2)
-        variable_outcome = await ClinicalAgentRunner(
-            definition=_STAGE_AGENTS["variable-mapping"],
-            result_model=SDTMVariableMappingPlan,
-            ai=context.ai,
-            settings=context.settings,
-            progress_path=context.agent_progress_path,
-        ).run(
-            objective=(
-                "Stage 2 of 3: preserve the domain plan and determine variable-level mappings, value-level "
-                "metadata, and, only when a blank CRF is supplied, its exact labels for aCRF annotations. "
-                "When no blank CRF is supplied, leave crf_source_label null. Do not generate code."
-            ),
-            source=(
-                f"{source}\n\nSTAGE 1 DOMAIN MAPPING — PRESERVE\n{domain_json}\n\n"
-                f"{crf_source}"
-            ),
-            options=agent_options,
-            stage=self.descriptor.stages[1],
-            stage_index=2,
-            stage_count=stage_count,
-            completed_stages=[self.descriptor.stages[0]],
-            prior_events=domain_outcome.events,
-        )
-
-        variable_json = variable_outcome.value.model_dump_json(indent=2)
+        domain_json = domain_mapping.model_dump_json(indent=2)
+        variable_json = variable_mapping.model_dump_json(indent=2)
         rule_outcome = await ClinicalAgentRunner(
             definition=_STAGE_AGENTS["rule-augmentation"],
             result_model=SDTMRuleAugmentationPlan,
@@ -153,7 +184,6 @@ class SDTMUseCase(ClinicalUseCase):
             stage_index=3,
             stage_count=stage_count,
             completed_stages=list(self.descriptor.stages[:2]),
-            prior_events=variable_outcome.events,
         )
         rule_json = rule_outcome.value.model_dump_json(indent=2)
         lead_outcome = await ClinicalAgentRunner(
@@ -183,11 +213,17 @@ class SDTMUseCase(ClinicalUseCase):
         )
         result = cast(SDTMPlan, lead_outcome.value)
         problems = verify_result("sdtm", result)
+        if result.domain_mappings != domain_mapping.domain_mappings:
+            problems.append("Final generation changed the user-approved domain mapping.")
+        if result.datasets != variable_mapping.datasets:
+            problems.append("Final generation changed the user-approved variable or value-level mapping.")
+        if result.study_name != variable_mapping.study_name:
+            problems.append("Final generation changed the user-approved study name.")
+        if result.standard != variable_mapping.standard or result.define_standard != variable_mapping.define_standard:
+            problems.append("Final generation changed the user-approved SDTM or Define-XML standard.")
         if problems:
             raise ValueError(" ".join(problems))
         warnings = [
-            *domain_outcome.warnings,
-            *variable_outcome.warnings,
             *rule_outcome.warnings,
             *lead_outcome.warnings,
             *self.result_warnings(result),
@@ -227,3 +263,110 @@ class SDTMUseCase(ClinicalUseCase):
         if problems:
             raise ValueError(" ".join(problems))
         return validated
+
+    @classmethod
+    def _approved_domain_mapping(
+        cls,
+        options: dict[str, Any],
+        source_spec: EDCSourceSpecification,
+    ) -> SDTMDomainMappingPlan:
+        raw = options.get("sdtm_domain_mapping")
+        if not isinstance(raw, dict):
+            raise ValueError("SDTM generation requires an approved domain mapping.")
+        validated = SDTMDomainMappingPlan.model_validate(raw)
+        cls.validate_domain_mapping(source_spec, validated)
+        return validated
+
+    @classmethod
+    def _approved_variable_mapping(
+        cls,
+        options: dict[str, Any],
+        source_spec: EDCSourceSpecification,
+        domain_mapping: SDTMDomainMappingPlan,
+    ) -> SDTMVariableMappingPlan:
+        raw = options.get("sdtm_variable_mapping")
+        if not isinstance(raw, dict):
+            raise ValueError("SDTM generation requires an approved variable and value-level mapping.")
+        validated = SDTMVariableMappingPlan.model_validate(raw)
+        cls.validate_variable_mapping(source_spec, domain_mapping, validated)
+        return validated
+
+    @staticmethod
+    def validate_domain_mapping(
+        source_spec: EDCSourceSpecification,
+        mapping: SDTMDomainMappingPlan,
+    ) -> None:
+        problems = verify_result("sdtm-domain-mapping", mapping)
+        sources = {dataset.name.upper(): dataset for dataset in source_spec.datasets}
+        mapped_sources = {item.source_dataset.upper() for item in mapping.domain_mappings}
+        missing = sorted(set(sources) - mapped_sources)
+        unknown = sorted(mapped_sources - set(sources))
+        if missing:
+            problems.append(f"Every source dataset must be mapped; missing: {', '.join(missing)}.")
+        if unknown:
+            problems.append(f"Domain mapping references unknown source datasets: {', '.join(unknown)}.")
+        for item in mapping.domain_mappings:
+            source_dataset = sources.get(item.source_dataset.upper())
+            if source_dataset and item.source_type != source_dataset.source_type:
+                problems.append(
+                    f"{item.source_dataset} source type must remain {source_dataset.source_type}, not {item.source_type}."
+                )
+        if problems:
+            raise ValueError(" ".join(problems))
+
+    @staticmethod
+    def validate_variable_mapping(
+        source_spec: EDCSourceSpecification,
+        domain_mapping: SDTMDomainMappingPlan,
+        mapping: SDTMVariableMappingPlan,
+    ) -> None:
+        problems = verify_result("sdtm-variable-mapping", mapping)
+        mapped_sources: dict[str, set[str]] = {}
+        for item in domain_mapping.domain_mappings:
+            mapped_sources.setdefault(item.target_domain.upper(), set()).add(item.source_dataset.upper())
+        dataset_domains = {dataset.domain.upper() for dataset in mapping.datasets}
+        target_domains = set(mapped_sources)
+        missing = sorted(target_domains - dataset_domains)
+        extra = sorted(dataset_domains - target_domains)
+        if missing:
+            problems.append(f"Every approved target domain needs variable mapping; missing: {', '.join(missing)}.")
+        if extra:
+            problems.append(f"Variable mapping contains unapproved target domains: {', '.join(extra)}.")
+        known_sources = {dataset.name.upper() for dataset in source_spec.datasets}
+        for dataset in mapping.datasets:
+            allowed_sources = mapped_sources.get(dataset.domain.upper(), set())
+            for variable in dataset.variables:
+                source_name = variable.source_dataset.upper()
+                if source_name not in known_sources:
+                    problems.append(
+                        f"{dataset.domain}.{variable.name} references unknown source dataset {variable.source_dataset}."
+                    )
+                elif source_name not in allowed_sources:
+                    problems.append(
+                        f"{dataset.domain}.{variable.name} source {variable.source_dataset} is not approved for {dataset.domain}."
+                    )
+        if problems:
+            raise ValueError(" ".join(problems))
+
+    @staticmethod
+    def _agent_options(options: dict[str, Any]) -> dict[str, Any]:
+        excluded = {"edc_source_spec", "sdtm_domain_mapping", "sdtm_variable_mapping"}
+        return {key: value for key, value in options.items() if key not in excluded and not key.startswith("_")}
+
+    @staticmethod
+    def _crf_source(crf: Path | None) -> str:
+        if crf is None:
+            return "BLANK CRF NOT SUPPLIED\nDo not invent CRF labels or annotations. Leave crf_source_label null."
+        return f"BLANK CRF TEXT\n{parse_source(crf)}"
+
+    @staticmethod
+    def _mapping_source(
+        context: UseCaseContext,
+        source_spec: EDCSourceSpecification,
+        crf: Path | None,
+        edc: Path,
+    ) -> tuple[str, list[Path]]:
+        excluded_inputs = {edc, *([crf] if crf is not None else [])}
+        context_inputs = [path for path in context.inputs if path not in excluded_inputs]
+        source = f"USER-APPROVED EDC SOURCE SPECIFICATION\n{source_spec.model_dump_json(indent=2)}"
+        return source, context_inputs

@@ -1,0 +1,207 @@
+"use client";
+
+import { useMemo, useState, type DragEvent, type ReactNode } from "react";
+import { AlertTriangle, ArrowRight, Database, GripVertical, Plus, Save, Table2, Trash2 } from "lucide-react";
+import { Button } from "./ui/button";
+
+type SourceType = "raw" | "sdtm";
+type Relationship = "direct" | "split" | "merge" | "derived";
+type DataType = "Char" | "Num";
+
+interface SourceDataset { name: string; label: string; source_type: SourceType; }
+interface SourceSpecification { study_name: string; datasets: SourceDataset[]; }
+interface DomainMapping { source_dataset: string; source_type: SourceType; target_domain: string; relationship: Relationship; rationale: string; }
+
+export interface SDTMDomainMappingPlanDraft extends Record<string, unknown> {
+  study_name: string;
+  standard: string;
+  domain_mappings: DomainMapping[];
+  assumptions: string[];
+  unresolved_mappings: string[];
+}
+
+interface ValueLevelMetadata {
+  where_clause: string;
+  label: string;
+  data_type: DataType;
+  origin: string;
+  mapping_expression: string;
+  controlled_terms: string[];
+}
+
+interface SDTMVariable {
+  name: string;
+  label: string;
+  data_type: DataType;
+  source_dataset: string;
+  source_field: string;
+  origin: string;
+  mapping_expression: string;
+  controlled_terms: string[];
+  value_level_metadata: ValueLevelMetadata[];
+  crf_source_label: string | null;
+}
+
+interface SDTMDataset {
+  domain: string;
+  description: string;
+  structure: string;
+  key_variables: string[];
+  variables: SDTMVariable[];
+}
+
+export interface SDTMVariableMappingPlanDraft extends Record<string, unknown> {
+  study_name: string;
+  standard: string;
+  define_standard: string;
+  datasets: SDTMDataset[];
+  assumptions: string[];
+  unresolved_mappings: string[];
+}
+
+interface DomainReviewEnvelope { source_spec: SourceSpecification; domain_mapping: SDTMDomainMappingPlanDraft; }
+interface VariableReviewEnvelope extends DomainReviewEnvelope { variable_mapping: SDTMVariableMappingPlanDraft; }
+
+const inputClass = "focus-ring min-h-9 w-full rounded-md border border-white/10 bg-[#101012] px-2.5 py-2 text-xs text-zinc-200 placeholder:text-zinc-600";
+
+export function SDTMDomainMappingReview({ value, onChange, onApprove, saving, error }: {
+  value: Record<string, unknown>;
+  onChange: (value: Record<string, unknown>) => void;
+  onApprove: (value: SDTMDomainMappingPlanDraft) => void;
+  saving: boolean;
+  error?: string | null;
+}) {
+  const envelope = normalizeDomainEnvelope(value);
+  const plan = envelope.domain_mapping;
+  const [newDomain, setNewDomain] = useState("");
+  const [extraDomains, setExtraDomains] = useState<string[]>([]);
+  const domains = useMemo(() => Array.from(new Set([...plan.domain_mappings.map((item) => item.target_domain), ...extraDomains])).filter(Boolean), [extraDomains, plan.domain_mappings]);
+  const issues = domainIssues(envelope);
+  const update = (mutate: (next: SDTMDomainMappingPlanDraft) => void) => {
+    const nextPlan = structuredClone(plan);
+    mutate(nextPlan);
+    onChange({ ...value, source_spec: envelope.source_spec, domain_mapping: nextPlan });
+  };
+  const mapSource = (source: SourceDataset, targetDomain: string) => update((next) => {
+    if (next.domain_mappings.some((item) => item.source_dataset === source.name && item.target_domain === targetDomain)) return;
+    next.domain_mappings.push({ source_dataset: source.name, source_type: source.source_type, target_domain: targetDomain, relationship: "direct", rationale: "User-reviewed dataset mapping" });
+  });
+  const onDrop = (event: DragEvent, targetDomain: string) => {
+    event.preventDefault();
+    const source = envelope.source_spec.datasets.find((item) => item.name === event.dataTransfer.getData("text/x-sdtm-source"));
+    if (source) mapSource(source, targetDomain);
+  };
+  const addDomain = () => {
+    const domain = newDomain.trim().toUpperCase();
+    if (domain && !domains.includes(domain)) setExtraDomains((current) => [...current, domain]);
+    setNewDomain("");
+  };
+
+  return <div className="space-y-5">
+    <ReviewGateHeader step="2 of 3" title="Domain mapping review required" description="Confirm every normalized raw or existing-SDTM dataset is assigned to the correct target SDTM domain. Variable mapping will not start until you approve this plan." />
+    <div className="grid gap-4 md:grid-cols-2">
+      <label><EditorLabel>Study</EditorLabel><input value={plan.study_name} onChange={(event) => update((next) => { next.study_name = event.target.value; })} className={inputClass} /></label>
+      <label><EditorLabel>Target standard</EditorLabel><input value={plan.standard} onChange={(event) => update((next) => { next.standard = event.target.value; })} className={inputClass} /></label>
+    </div>
+    <div className="grid gap-5 xl:grid-cols-[290px_minmax(0,1fr)]">
+      <section className="rounded-xl border border-white/10 bg-[#141416] p-4">
+        <p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">Approved source inventory</p>
+        <p className="mt-1 text-xs leading-5 text-zinc-600">Drag each source onto one or more target domains.</p>
+        <div className="mt-4 space-y-2">{envelope.source_spec.datasets.map((source) => <div key={source.name} draggable onDragStart={(event) => { event.dataTransfer.setData("text/x-sdtm-source", source.name); event.dataTransfer.effectAllowed = "copy"; }} className="flex cursor-grab items-center gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 active:cursor-grabbing"><GripVertical size={15} className="text-zinc-600" /><div><p className="font-mono text-xs font-bold text-violet-200">{source.name}</p><p className="mt-1 text-[10px] text-zinc-500">{source.source_type.toUpperCase()} · {source.label}</p></div></div>)}</div>
+      </section>
+      <section className="space-y-3">
+        <div className="flex gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-3"><input aria-label="New target domain" value={newDomain} onChange={(event) => setNewDomain(event.target.value.toUpperCase())} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addDomain(); } }} placeholder="Add target domain, e.g. DM" className={inputClass} /><Button type="button" variant="outline" onClick={addDomain}><Plus size={14} />Domain</Button></div>
+        {domains.map((domain) => {
+          const mappings = plan.domain_mappings.map((mapping, index) => ({ mapping, index })).filter(({ mapping }) => mapping.target_domain === domain);
+          return <article key={domain} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDrop(event, domain)} className="rounded-xl border border-dashed border-violet-500/25 bg-violet-500/[0.035] p-4">
+            <div className="flex items-center justify-between"><div><p className="font-mono text-sm font-black text-violet-200">{domain}</p><p className="mt-1 text-xs text-zinc-600">Drop source datasets here</p></div><Database size={18} className="text-violet-400" /></div>
+            <div className="mt-3 space-y-2">{mappings.map(({ mapping, index }) => <div key={`${mapping.source_dataset}-${index}`} className="grid gap-2 rounded-lg border border-white/10 bg-[#141416] p-3 lg:grid-cols-[150px_120px_130px_minmax(180px,1fr)_36px]">
+              <div className="flex items-center gap-2 font-mono text-xs font-bold text-zinc-200">{mapping.source_dataset}<ArrowRight size={13} className="text-zinc-600" /></div>
+              <select value={mapping.source_type} disabled className={`${inputClass} opacity-70`}><option value="raw">Raw</option><option value="sdtm">SDTM</option></select>
+              <select value={mapping.relationship} onChange={(event) => update((next) => { next.domain_mappings[index].relationship = event.target.value as Relationship; })} className={inputClass}>{["direct", "split", "merge", "derived"].map((item) => <option key={item}>{item}</option>)}</select>
+              <input value={mapping.rationale} onChange={(event) => update((next) => { next.domain_mappings[index].rationale = event.target.value; })} placeholder="Mapping rationale" className={inputClass} />
+              <button type="button" aria-label={`Remove ${mapping.source_dataset} to ${domain}`} onClick={() => update((next) => { next.domain_mappings.splice(index, 1); })} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={14} /></button>
+            </div>)}{!mappings.length && <p className="rounded-lg border border-dashed border-white/10 p-4 text-center text-xs text-zinc-600">No source assigned yet.</p>}</div>
+          </article>;
+        })}
+      </section>
+    </div>
+    <ReviewNotes assumptions={plan.assumptions} unresolved={plan.unresolved_mappings} onAssumptions={(items) => update((next) => { next.assumptions = items; })} onUnresolved={(items) => update((next) => { next.unresolved_mappings = items; })} />
+    <ApprovalBar issues={issues} error={error} saving={saving} readyText="All normalized datasets have a reviewed target." actionText="Approve domains and build variable mapping" onApprove={() => onApprove(plan)} />
+  </div>;
+}
+
+export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, error }: {
+  value: Record<string, unknown>;
+  onChange: (value: Record<string, unknown>) => void;
+  onApprove: (value: SDTMVariableMappingPlanDraft) => void;
+  saving: boolean;
+  error?: string | null;
+}) {
+  const envelope = normalizeVariableEnvelope(value);
+  const plan = envelope.variable_mapping;
+  const [selectedDomain, setSelectedDomain] = useState(plan.datasets[0]?.domain ?? "");
+  const active = plan.datasets.find((dataset) => dataset.domain === selectedDomain) ?? plan.datasets[0];
+  const issues = variableIssues(envelope);
+  const update = (mutate: (next: SDTMVariableMappingPlanDraft) => void) => {
+    const nextPlan = structuredClone(plan);
+    mutate(nextPlan);
+    onChange({ ...value, source_spec: envelope.source_spec, domain_mapping: envelope.domain_mapping, variable_mapping: nextPlan });
+  };
+  const allowedSources = active ? envelope.domain_mapping.domain_mappings.filter((item) => item.target_domain === active.domain).map((item) => item.source_dataset) : [];
+
+  return <div className="space-y-5">
+    <ReviewGateHeader step="3 of 3" title="Variable and value-level mapping review required" description="Review each SDTM variable row and the VLM cells. Rule augmentation and code generation remain blocked until this matrix is approved." />
+    <div className="flex flex-wrap gap-2">{plan.datasets.map((dataset) => <button type="button" key={dataset.domain} onClick={() => setSelectedDomain(dataset.domain)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${active?.domain === dataset.domain ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 text-zinc-500"}`}>{dataset.domain}</button>)}</div>
+    {active && <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]">
+      <div className="grid gap-3 border-b border-white/10 p-4 lg:grid-cols-[180px_minmax(240px,1fr)_minmax(260px,1fr)_auto]">
+        <label><EditorLabel>Domain</EditorLabel><input value={active.domain} readOnly className={`${inputClass} font-mono font-bold text-violet-200 opacity-70`} /></label>
+        <label><EditorLabel>Description</EditorLabel><input value={active.description} onChange={(event) => updateDataset(plan, active.domain, update, "description", event.target.value)} className={inputClass} /></label>
+        <label><EditorLabel>Structure</EditorLabel><input value={active.structure} onChange={(event) => updateDataset(plan, active.domain, update, "structure", event.target.value)} className={inputClass} /></label>
+        <Button type="button" variant="outline" className="mt-5" onClick={() => update((next) => { const dataset = next.datasets.find((item) => item.domain === active.domain); if (dataset) dataset.variables.push(newVariable(allowedSources[0] ?? "")); })}><Plus size={14} />Variable</Button>
+      </div>
+      <div className="overflow-x-auto"><table className="w-full min-w-[1560px] border-collapse text-left text-xs"><thead className="bg-white/[0.03] text-[10px] uppercase tracking-wider text-zinc-500"><tr>{["SDTM variable", "Label / type", "Source dataset", "Source field", "Mapping value", "Origin / CT", "aCRF label", "VLM cells", ""].map((heading) => <th key={heading} className="border-b border-r border-white/10 px-3 py-2.5 font-black last:border-r-0">{heading}</th>)}</tr></thead><tbody>{active.variables.map((variable, variableIndex) => <tr key={`${variable.name}-${variableIndex}`} className="align-top">
+        <Cell><input value={variable.name} onChange={(event) => updateVariable(active.domain, variableIndex, update, "name", event.target.value.toUpperCase())} className={`${inputClass} font-mono font-bold text-violet-200`} /></Cell>
+        <Cell className="min-w-48"><input value={variable.label} onChange={(event) => updateVariable(active.domain, variableIndex, update, "label", event.target.value)} className={inputClass} /><select value={variable.data_type} onChange={(event) => updateVariable(active.domain, variableIndex, update, "data_type", event.target.value)} className={`${inputClass} mt-1`}><option>Char</option><option>Num</option></select></Cell>
+        <Cell><select value={variable.source_dataset} onChange={(event) => updateVariable(active.domain, variableIndex, update, "source_dataset", event.target.value)} className={inputClass}>{allowedSources.map((source) => <option key={source}>{source}</option>)}</select></Cell>
+        <Cell><input value={variable.source_field} onChange={(event) => updateVariable(active.domain, variableIndex, update, "source_field", event.target.value)} className={inputClass} /></Cell>
+        <Cell className="min-w-56"><textarea rows={3} value={variable.mapping_expression} onChange={(event) => updateVariable(active.domain, variableIndex, update, "mapping_expression", event.target.value)} className={inputClass} /></Cell>
+        <Cell className="min-w-44"><input value={variable.origin} onChange={(event) => updateVariable(active.domain, variableIndex, update, "origin", event.target.value)} className={inputClass} /><input value={variable.controlled_terms.join(", ")} onChange={(event) => updateVariable(active.domain, variableIndex, update, "controlled_terms", splitList(event.target.value))} placeholder="Controlled terms" className={`${inputClass} mt-1`} /></Cell>
+        <Cell><input value={variable.crf_source_label ?? ""} onChange={(event) => updateVariable(active.domain, variableIndex, update, "crf_source_label", event.target.value || null)} placeholder="Optional" className={inputClass} /></Cell>
+        <Cell className="min-w-[360px]"><div className="space-y-2">{variable.value_level_metadata.map((vlm, vlmIndex) => <div key={vlmIndex} className="rounded-lg border border-cyan-500/15 bg-cyan-500/[0.04] p-2"><div className="grid grid-cols-2 gap-1"><input value={vlm.where_clause} onChange={(event) => updateVlm(active.domain, variableIndex, vlmIndex, update, "where_clause", event.target.value)} placeholder="Where clause" className={inputClass} /><input value={vlm.label} onChange={(event) => updateVlm(active.domain, variableIndex, vlmIndex, update, "label", event.target.value)} placeholder="Label" className={inputClass} /></div><textarea rows={2} value={vlm.mapping_expression} onChange={(event) => updateVlm(active.domain, variableIndex, vlmIndex, update, "mapping_expression", event.target.value)} placeholder="Mapping value / expression" className={`${inputClass} mt-1`} /><div className="mt-1 flex gap-1"><input value={vlm.controlled_terms.join(", ")} onChange={(event) => updateVlm(active.domain, variableIndex, vlmIndex, update, "controlled_terms", splitList(event.target.value))} placeholder="Controlled terms" className={inputClass} /><button type="button" aria-label="Remove VLM" onClick={() => update((next) => { next.datasets.find((item) => item.domain === active.domain)?.variables[variableIndex].value_level_metadata.splice(vlmIndex, 1); })} className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-zinc-600 hover:text-rose-300"><Trash2 size={13} /></button></div></div>)}<button type="button" onClick={() => update((next) => { next.datasets.find((item) => item.domain === active.domain)?.variables[variableIndex].value_level_metadata.push(newVlm()); })} className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-white/10 py-2 text-[10px] font-black uppercase tracking-wider text-zinc-500 hover:text-cyan-300"><Plus size={12} />VLM cell</button></div></Cell>
+        <Cell><button type="button" aria-label={`Remove ${variable.name}`} onClick={() => update((next) => { next.datasets.find((item) => item.domain === active.domain)?.variables.splice(variableIndex, 1); })} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:text-rose-300"><Trash2 size={14} /></button></Cell>
+      </tr>)}</tbody></table></div>
+    </section>}
+    <ReviewNotes assumptions={plan.assumptions} unresolved={plan.unresolved_mappings} onAssumptions={(items) => update((next) => { next.assumptions = items; })} onUnresolved={(items) => update((next) => { next.unresolved_mappings = items; })} />
+    <ApprovalBar issues={issues} error={error} saving={saving} readyText="Every approved domain has a reviewable variable matrix." actionText="Approve mappings and generate rules/code" onApprove={() => onApprove(plan)} />
+  </div>;
+}
+
+function ReviewGateHeader({ step, title, description }: { step: string; title: string; description: string }) { return <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-4"><p className="text-xs font-black uppercase tracking-[0.14em] text-amber-200">Review gate {step}</p><p className="mt-1 text-base font-bold text-amber-100">{title}</p><p className="mt-1 text-sm leading-6 text-amber-100/75">{description}</p></div>; }
+function ReviewNotes({ assumptions, unresolved, onAssumptions, onUnresolved }: { assumptions: string[]; unresolved: string[]; onAssumptions: (items: string[]) => void; onUnresolved: (items: string[]) => void }) { return <section className="grid gap-4 md:grid-cols-2"><label><EditorLabel>Assumptions — one per line</EditorLabel><textarea value={assumptions.join("\n")} onChange={(event) => onAssumptions(splitLines(event.target.value))} className={`${inputClass} min-h-28`} /></label><label><EditorLabel>Unresolved mappings — one per line</EditorLabel><textarea value={unresolved.join("\n")} onChange={(event) => onUnresolved(splitLines(event.target.value))} className={`${inputClass} min-h-28`} /></label></section>; }
+function ApprovalBar({ issues, error, saving, readyText, actionText, onApprove }: { issues: string[]; error?: string | null; saving: boolean; readyText: string; actionText: string; onApprove: () => void }) { return <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between"><div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="flex items-center gap-2 text-xs font-bold text-emerald-300"><Table2 size={15} />{readyText}</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div><Button type="button" variant="clinical" onClick={onApprove} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Approving and resuming…" : actionText}</Button></div>; }
+function Cell({ children, className = "" }: { children: ReactNode; className?: string }) { return <td className={`border-b border-r border-white/[0.07] p-2 last:border-r-0 ${className}`}>{children}</td>; }
+function EditorLabel({ children }: { children: ReactNode }) { return <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">{children}</span>; }
+
+function normalizeDomainEnvelope(value: Record<string, unknown>): DomainReviewEnvelope {
+  const source = recordValue(value.source_spec);
+  const plan = recordValue(value.domain_mapping);
+  return { source_spec: { study_name: stringValue(source.study_name, "Untitled study"), datasets: arrayValue<SourceDataset>(source.datasets) }, domain_mapping: { ...plan, study_name: stringValue(plan.study_name, "Untitled study"), standard: stringValue(plan.standard, "SDTMIG 3.4"), domain_mappings: arrayValue<DomainMapping>(plan.domain_mappings), assumptions: arrayValue<string>(plan.assumptions), unresolved_mappings: arrayValue<string>(plan.unresolved_mappings) } };
+}
+function normalizeVariableEnvelope(value: Record<string, unknown>): VariableReviewEnvelope {
+  const domain = normalizeDomainEnvelope(value);
+  const plan = recordValue(value.variable_mapping);
+  return { ...domain, variable_mapping: { ...plan, study_name: stringValue(plan.study_name, "Untitled study"), standard: stringValue(plan.standard, "SDTMIG 3.4"), define_standard: stringValue(plan.define_standard, "Define-XML 2.1"), datasets: arrayValue<SDTMDataset>(plan.datasets).map((dataset) => ({ ...dataset, key_variables: arrayValue<string>(dataset.key_variables), variables: arrayValue<SDTMVariable>(dataset.variables).map((variable) => ({ ...variable, controlled_terms: arrayValue<string>(variable.controlled_terms), value_level_metadata: arrayValue<ValueLevelMetadata>(variable.value_level_metadata).map((vlm) => ({ ...vlm, controlled_terms: arrayValue<string>(vlm.controlled_terms) })) })) })), assumptions: arrayValue<string>(plan.assumptions), unresolved_mappings: arrayValue<string>(plan.unresolved_mappings) } };
+}
+function domainIssues(envelope: DomainReviewEnvelope): string[] { const issues: string[] = []; const sources = envelope.source_spec.datasets.map((item) => item.name); const mapped = new Set(envelope.domain_mapping.domain_mappings.map((item) => item.source_dataset)); sources.forEach((source) => { if (!mapped.has(source)) issues.push(`${source} must be mapped before approval.`); }); envelope.domain_mapping.domain_mappings.forEach((item) => { if (!sources.includes(item.source_dataset)) issues.push(`${item.source_dataset} is not in the approved source inventory.`); if (!item.target_domain.trim()) issues.push(`${item.source_dataset} needs a target domain.`); if (!item.rationale.trim()) issues.push(`${item.source_dataset} → ${item.target_domain} needs a rationale.`); }); return Array.from(new Set(issues)); }
+function variableIssues(envelope: VariableReviewEnvelope): string[] { const issues: string[] = []; const approved = new Map<string, Set<string>>(); envelope.domain_mapping.domain_mappings.forEach((item) => { const sources = approved.get(item.target_domain) ?? new Set<string>(); sources.add(item.source_dataset); approved.set(item.target_domain, sources); }); const datasets = new Map(envelope.variable_mapping.datasets.map((item) => [item.domain, item])); approved.forEach((sources, domain) => { const dataset = datasets.get(domain); if (!dataset) { issues.push(`${domain} needs a variable matrix.`); return; } if (!dataset.variables.length) issues.push(`${domain} needs at least one variable.`); dataset.variables.forEach((variable) => { if (!variable.name.trim()) issues.push(`${domain} has a variable without a target name.`); if (!sources.has(variable.source_dataset)) issues.push(`${domain}.${variable.name || "[unnamed]"} uses a source not approved for ${domain}.`); if (!variable.source_field.trim()) issues.push(`${domain}.${variable.name || "[unnamed]"} needs a source field.`); }); }); datasets.forEach((_dataset, domain) => { if (!approved.has(domain)) issues.push(`${domain} was not approved at the domain gate.`); }); return Array.from(new Set(issues)); }
+function updateDataset(_plan: SDTMVariableMappingPlanDraft, domain: string, update: (mutate: (next: SDTMVariableMappingPlanDraft) => void) => void, key: keyof SDTMDataset, value: unknown) { update((next) => { const dataset = next.datasets.find((item) => item.domain === domain); if (dataset) (dataset as unknown as Record<string, unknown>)[key] = value; }); }
+function updateVariable(domain: string, index: number, update: (mutate: (next: SDTMVariableMappingPlanDraft) => void) => void, key: keyof SDTMVariable, value: unknown) { update((next) => { const variable = next.datasets.find((item) => item.domain === domain)?.variables[index]; if (variable) (variable as unknown as Record<string, unknown>)[key] = value; }); }
+function updateVlm(domain: string, variableIndex: number, vlmIndex: number, update: (mutate: (next: SDTMVariableMappingPlanDraft) => void) => void, key: keyof ValueLevelMetadata, value: unknown) { update((next) => { const vlm = next.datasets.find((item) => item.domain === domain)?.variables[variableIndex]?.value_level_metadata[vlmIndex]; if (vlm) (vlm as unknown as Record<string, unknown>)[key] = value; }); }
+function newVariable(source: string): SDTMVariable { return { name: "NEWVAR", label: "New SDTM variable", data_type: "Char", source_dataset: source, source_field: "TODO", origin: "Assigned", mapping_expression: "TODO: review mapping", controlled_terms: [], value_level_metadata: [], crf_source_label: null }; }
+function newVlm(): ValueLevelMetadata { return { where_clause: "", label: "", data_type: "Char", origin: "CRF", mapping_expression: "", controlled_terms: [] }; }
+function recordValue(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
+function stringValue(value: unknown, fallback: string): string { return typeof value === "string" ? value : fallback; }
+function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
+function splitList(value: string): string[] { return value.split(",").map((item) => item.trim()).filter(Boolean); }
+function splitLines(value: string): string[] { return value.split("\n").map((item) => item.trim()).filter(Boolean); }

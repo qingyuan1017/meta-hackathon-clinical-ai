@@ -242,7 +242,7 @@ def test_reviewed_edc_source_spec_resumes_sdtm_job(monkeypatch) -> None:
             workflow="sdtm",
             title="SDTM source review",
             status="review_required",
-            options_json='{"deidentified_acknowledged": true, "languages": ["r"]}',
+            options_json='{"deidentified_acknowledged": true, "languages": ["r"], "_review_stage": "edc_source"}',
             input_files_json='["01-blank.pdf", "02-edc.json"]',
             result_json=json.dumps(source_spec),
         )
@@ -268,6 +268,112 @@ def test_reviewed_edc_source_spec_resumes_sdtm_job(monkeypatch) -> None:
             if stored:
                 session.delete(stored)
                 session.commit()
+
+
+def test_reviewed_domain_and_variable_mappings_resume_each_sdtm_gate(monkeypatch) -> None:
+    queued = []
+    monkeypatch.setattr("app.main.runner.enqueue", queued.append)
+    source_spec = {
+        "study_name": "SYN-101",
+        "datasets": [
+            {
+                "name": "RAW_DM",
+                "label": "Demographics",
+                "variables": [
+                    {
+                        "name": "AGE",
+                        "label": "Age",
+                        "data_type": "integer",
+                        "provenance": {"file": "edc.json"},
+                    }
+                ],
+                "provenance": {"file": "edc.json"},
+            }
+        ],
+    }
+    domain_mapping = {
+        "study_name": "SYN-101",
+        "domain_mappings": [
+            {
+                "source_dataset": "RAW_DM",
+                "source_type": "raw",
+                "target_domain": "DM",
+                "relationship": "direct",
+                "rationale": "Demographics source",
+            }
+        ],
+    }
+    variable_mapping = {
+        "study_name": "SYN-101",
+        "datasets": [
+            {
+                "domain": "DM",
+                "description": "Demographics",
+                "variables": [
+                    {
+                        "name": "AGE",
+                        "label": "Age",
+                        "data_type": "Num",
+                        "source_dataset": "RAW_DM",
+                        "source_field": "AGE",
+                    }
+                ],
+            }
+        ],
+    }
+
+    with SessionLocal() as session:
+        domain_job = Job(
+            workflow="sdtm",
+            title="Domain review",
+            status="review_required",
+            options_json=json.dumps({"edc_source_spec": source_spec, "_review_stage": "domain_mapping"}),
+            input_files_json='["01-edc.json"]',
+        )
+        variable_job = Job(
+            workflow="sdtm",
+            title="Variable review",
+            status="review_required",
+            options_json=json.dumps(
+                {
+                    "edc_source_spec": source_spec,
+                    "sdtm_domain_mapping": domain_mapping,
+                    "_review_stage": "variable_mapping",
+                }
+            ),
+            input_files_json='["01-edc.json"]',
+        )
+        session.add_all([domain_job, variable_job])
+        session.commit()
+        domain_job_id, variable_job_id = domain_job.id, variable_job.id
+    try:
+        with TestClient(app) as client:
+            domain_response = client.put(
+                f"/api/v1/jobs/{domain_job_id}/sdtm-domain-mapping",
+                json={"domain_mapping": domain_mapping},
+            )
+            variable_response = client.put(
+                f"/api/v1/jobs/{variable_job_id}/sdtm-variable-mapping",
+                json={"variable_mapping": variable_mapping},
+            )
+        assert domain_response.status_code == 202, domain_response.text
+        assert variable_response.status_code == 202, variable_response.text
+        assert domain_response.json()["review_stage"] is None
+        assert variable_response.json()["review_stage"] is None
+        assert queued == [domain_job_id, variable_job_id]
+        with SessionLocal() as session:
+            stored_domain = session.get(Job, domain_job_id)
+            stored_variable = session.get(Job, variable_job_id)
+            assert stored_domain is not None and stored_variable is not None
+            assert json.loads(stored_domain.options_json)["sdtm_domain_mapping"]["domain_mappings"][0]["target_domain"] == "DM"
+            assert json.loads(stored_variable.options_json)["sdtm_variable_mapping"]["datasets"][0]["domain"] == "DM"
+    finally:
+        with SessionLocal() as session:
+            for job_id in (domain_job_id, variable_job_id):
+                stored = session.get(Job, job_id)
+                if stored:
+                    session.delete(stored)
+            session.commit()
 
 
 def test_completed_result_can_be_revised_and_rerendered(monkeypatch) -> None:

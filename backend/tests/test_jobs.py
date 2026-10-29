@@ -22,7 +22,12 @@ async def test_sdtm_job_pauses_for_edc_source_review(tmp_path, monkeypatch) -> N
     class FakeWorkflowService:
         async def prepare_review(self, workflow, *, inputs, options, job_dir):
             assert workflow == "sdtm"
-            return WorkflowResult(result=source_spec, paths=[], warnings=["Review source metadata"])
+            return WorkflowResult(
+                result=source_spec,
+                paths=[],
+                warnings=["Review source metadata"],
+                review_stage="edc_source",
+            )
 
         async def execute(self, *_args, **_kwargs):
             raise AssertionError("Final generation must not run before source approval.")
@@ -46,6 +51,7 @@ async def test_sdtm_job_pauses_for_edc_source_review(tmp_path, monkeypatch) -> N
             stored = session.get(Job, job_id)
             assert stored is not None
             assert stored.status == "review_required"
+            assert json.loads(stored.options_json)["_review_stage"] == "edc_source"
             assert json.loads(stored.result_json)["study_name"] == "SYN-101"
             assert "Review source metadata" in json.loads(stored.warnings_json)
     finally:

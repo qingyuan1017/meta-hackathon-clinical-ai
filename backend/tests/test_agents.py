@@ -308,18 +308,11 @@ async def test_sdtm_use_case_normalizes_edc_for_review(tmp_path) -> None:
     )
 
     assert prepared is not None
+    assert prepared.review_stage == "edc_source"
     assert prepared.value.datasets[0].variables[0].name == "SUBJID"
-    assert await SDTMUseCase().prepare_review(
-        UseCaseContext(
-            inputs=[crf, edc],
-            options={"edc_source_spec": source_result},
-            ai=ai,
-            settings=settings,
-        )
-    ) is None
 
 
-async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None:
+async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generation(tmp_path) -> None:
     domain_result = {
         "study_name": "SYN-101",
         "domain_mappings": [
@@ -425,10 +418,50 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
         ],
     }
 
-    generated = await SDTMUseCase().generate(
+    domain_review = await SDTMUseCase().prepare_review(
         UseCaseContext(
             inputs=[edc],
             options={"languages": ["r", "sas"], "edc_source_spec": source_spec},
+            ai=ai,
+            settings=settings,
+            agent_progress_path=progress_path,
+        )
+    )
+    assert domain_review is not None
+    assert domain_review.review_stage == "domain_mapping"
+    assert domain_review.value.domain_mapping.domain_mappings[0].target_domain == "DM"
+
+    variable_review = await SDTMUseCase().prepare_review(
+        UseCaseContext(
+            inputs=[edc],
+            options={
+                "languages": ["r", "sas"],
+                "edc_source_spec": source_spec,
+                "sdtm_domain_mapping": domain_result,
+            },
+            ai=ai,
+            settings=settings,
+            agent_progress_path=progress_path,
+        )
+    )
+    assert variable_review is not None
+    assert variable_review.review_stage == "variable_mapping"
+    assert variable_review.value.variable_mapping.datasets[0].variables[0].name == "AGE"
+
+    approved_options = {
+        "languages": ["r", "sas"],
+        "edc_source_spec": source_spec,
+        "sdtm_domain_mapping": domain_result,
+        "sdtm_variable_mapping": variable_result,
+    }
+    assert await SDTMUseCase().prepare_review(
+        UseCaseContext(inputs=[edc], options=approved_options, ai=ai, settings=settings)
+    ) is None
+
+    generated = await SDTMUseCase().generate(
+        UseCaseContext(
+            inputs=[edc],
+            options=approved_options,
             ai=ai,
             settings=settings,
             agent_progress_path=progress_path,
@@ -447,8 +480,4 @@ async def test_sdtm_use_case_runs_three_ordered_mapping_stages(tmp_path) -> None
         "Variable & value-level mapping",
         "Rule augmentation",
     ]
-    assert {event["stage"] for event in progress["events"]} == {
-        "Domain mapping",
-        "Variable & value-level mapping",
-        "Rule augmentation",
-    }
+    assert {event["stage"] for event in progress["events"]} == {"Rule augmentation"}

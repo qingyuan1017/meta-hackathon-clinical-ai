@@ -24,9 +24,25 @@ from .db import get_db, initialize_database
 from .jobs import runner
 from .models import Artifact, Job
 from .parsers import parse_source
-from .schemas import AgentEventRead, AgentProgressRead, AgentRead, ArtifactRead, CDISCDatasetRead, DISCLAIMER, EDCSourceSpecificationUpdate, HealthRead, JobList, JobRead, JobResultUpdate, UseCaseRead
+from .schemas import (
+    AgentEventRead,
+    AgentProgressRead,
+    AgentRead,
+    ArtifactRead,
+    CDISCDatasetRead,
+    DISCLAIMER,
+    EDCSourceSpecificationUpdate,
+    HealthRead,
+    JobList,
+    JobRead,
+    JobResultUpdate,
+    SDTMDomainMappingUpdate,
+    SDTMVariableMappingUpdate,
+    UseCaseRead,
+)
 from .security import detect_identifiers, validate_upload_metadata, verify_signature
 from .use_cases import USE_CASES, get_use_case
+from .use_cases.sdtm import SDTMUseCase
 from .workflows import DOCUMENT_TYPES, WORKFLOWS, WorkflowService
 
 
@@ -347,6 +363,9 @@ def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     output_dir = settings.jobs_dir / job_id / "output"
     shutil.rmtree(output_dir, ignore_errors=True)
     job.artifacts.clear()
+    options = json.loads(job.options_json)
+    options.pop("_review_stage", None)
+    job.options_json = json.dumps(options, ensure_ascii=False)
     job.status = "queued"
     job.result_json = None
     job.warnings_json = "[]"
@@ -373,7 +392,8 @@ async def approve_edc_source_spec(
     job = db.get(Job, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
-    if job.workflow != "sdtm" or job.status != "review_required":
+    options = json.loads(job.options_json)
+    if job.workflow != "sdtm" or job.status != "review_required" or options.get("_review_stage") != "edc_source":
         raise HTTPException(status_code=409, detail="This job is not waiting for EDC source review.")
     problems = verify_result("sdtm-source-normalization", update.source_spec)
     if problems:
@@ -385,21 +405,65 @@ async def approve_edc_source_spec(
             status_code=422,
             detail=f"Potential direct identifiers detected in the EDC source specification: {', '.join(identifiers)}.",
         )
-    options = json.loads(job.options_json)
     options["edc_source_spec"] = update.source_spec.model_dump(mode="json")
-    job.options_json = json.dumps(options, ensure_ascii=False)
-    job.status = "queued"
-    job.result_json = None
-    job.warnings_json = "[]"
-    job.error = None
-    job.completed_at = None
-    job.updated_at = datetime.now(timezone.utc)
-    progress_path = settings.jobs_dir / job.id / "agent" / "progress.json"
-    progress_path.unlink(missing_ok=True)
-    db.commit()
-    db.refresh(job)
-    runner.enqueue(job.id)
-    return _job_read(job)
+    return _resume_sdtm_review(job, options, db)
+
+
+@app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-domain-mapping",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def approve_sdtm_domain_mapping(
+    job_id: str,
+    update: SDTMDomainMappingUpdate,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    """Approve the domain-level source-to-SDTM mapping and start variable mapping."""
+
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    if job.workflow != "sdtm" or job.status != "review_required" or options.get("_review_stage") != "domain_mapping":
+        raise HTTPException(status_code=409, detail="This job is not waiting for SDTM domain mapping review.")
+    source_spec = SDTMUseCase._approved_source_spec(options)
+    try:
+        SDTMUseCase.validate_domain_mapping(source_spec, update.domain_mapping)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _reject_review_identifiers(update.domain_mapping.model_dump_json(), "SDTM domain mapping")
+    options["sdtm_domain_mapping"] = update.domain_mapping.model_dump(mode="json")
+    return _resume_sdtm_review(job, options, db)
+
+
+@app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-variable-mapping",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def approve_sdtm_variable_mapping(
+    job_id: str,
+    update: SDTMVariableMappingUpdate,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    """Approve variable and value-level mappings and start rule/code generation."""
+
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    if job.workflow != "sdtm" or job.status != "review_required" or options.get("_review_stage") != "variable_mapping":
+        raise HTTPException(status_code=409, detail="This job is not waiting for SDTM variable mapping review.")
+    source_spec = SDTMUseCase._approved_source_spec(options)
+    domain_mapping = SDTMUseCase._approved_domain_mapping(options, source_spec)
+    try:
+        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, update.variable_mapping)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _reject_review_identifiers(update.variable_mapping.model_dump_json(), "SDTM variable mapping")
+    options["sdtm_variable_mapping"] = update.variable_mapping.model_dump(mode="json")
+    return _resume_sdtm_review(job, options, db)
 
 
 @app.put(f"{settings.api_prefix}/jobs/{{job_id}}/result", response_model=JobRead)
@@ -553,6 +617,10 @@ def _default_title(workflow: str, options: dict) -> str:
 def _job_read(job: Job, include_result: bool = True) -> JobRead:
     result = json.loads(job.result_json) if include_result and job.result_json else None
     warnings = json.loads(job.warnings_json or "[]") if include_result else []
+    options = json.loads(job.options_json)
+    review_stage = options.get("_review_stage") if job.status == "review_required" else None
+    if review_stage not in {"edc_source", "domain_mapping", "variable_mapping"}:
+        review_stage = None
     artifacts = [
         ArtifactRead(
             id=item.id,
@@ -573,11 +641,38 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
         created_at=job.created_at,
         updated_at=job.updated_at,
         completed_at=job.completed_at,
+        review_stage=review_stage,
         result=result,
         warnings=warnings,
         error=job.error,
         artifacts=artifacts,
     )
+
+
+def _reject_review_identifiers(serialized: str, label: str) -> None:
+    identifiers = detect_identifiers(serialized)
+    if identifiers:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Potential direct identifiers detected in the {label}: {', '.join(identifiers)}.",
+        )
+
+
+def _resume_sdtm_review(job: Job, options: dict, db: Session) -> JobRead:
+    options.pop("_review_stage", None)
+    job.options_json = json.dumps(options, ensure_ascii=False)
+    job.status = "queued"
+    job.result_json = None
+    job.warnings_json = "[]"
+    job.error = None
+    job.completed_at = None
+    job.updated_at = datetime.now(timezone.utc)
+    progress_path = settings.jobs_dir / job.id / "agent" / "progress.json"
+    progress_path.unlink(missing_ok=True)
+    db.commit()
+    db.refresh(job)
+    runner.enqueue(job.id)
+    return _job_read(job)
 
 
 def _safe_artifact_path(job_id: str, relative_path: str) -> Path:

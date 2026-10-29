@@ -241,6 +241,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/sdtm-domain-mapping": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Sdtm Domain Mapping
+         * @description Approve the domain-level source-to-SDTM mapping and start variable mapping.
+         */
+        put: operations["approve_sdtm_domain_mapping_api_v1_jobs__job_id__sdtm_domain_mapping_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/sdtm-variable-mapping": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Sdtm Variable Mapping
+         * @description Approve variable and value-level mappings and start rule/code generation.
+         */
+        put: operations["approve_sdtm_variable_mapping_api_v1_jobs__job_id__sdtm_variable_mapping_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/result": {
         parameters: {
             query?: never;
@@ -551,6 +591,8 @@ export interface components {
             updated_at: string;
             /** Completed At */
             completed_at: string | null;
+            /** Review Stage */
+            review_stage?: ("edc_source" | "domain_mapping" | "variable_mapping") | null;
             /** Result */
             result?: {
                 [key: string]: unknown;
@@ -568,6 +610,149 @@ export interface components {
             result: {
                 [key: string]: unknown;
             };
+        };
+        /** SDTMDataset */
+        SDTMDataset: {
+            /** Domain */
+            domain: string;
+            /** Description */
+            description: string;
+            /**
+             * Structure
+             * @default One record per subject per event
+             */
+            structure: string;
+            /** Key Variables */
+            key_variables?: string[];
+            /** Variables */
+            variables: components["schemas"]["SDTMVariable"][];
+        };
+        /** SDTMDomainMapping */
+        SDTMDomainMapping: {
+            /**
+             * Source Dataset
+             * @description Raw or existing-SDTM source dataset identifier
+             */
+            source_dataset: string;
+            /**
+             * Source Type
+             * @default raw
+             * @enum {string}
+             */
+            source_type: "raw" | "sdtm";
+            /**
+             * Target Domain
+             * @description Target SDTM dataset/domain identifier, such as DM or VS
+             */
+            target_domain: string;
+            /**
+             * Relationship
+             * @default direct
+             * @enum {string}
+             */
+            relationship: "direct" | "split" | "merge" | "derived";
+            /** Rationale */
+            rationale: string;
+        };
+        /** SDTMDomainMappingPlan */
+        SDTMDomainMappingPlan: {
+            /** Study Name */
+            study_name: string;
+            /**
+             * Standard
+             * @default SDTMIG 3.4
+             */
+            standard: string;
+            /** Domain Mappings */
+            domain_mappings: components["schemas"]["SDTMDomainMapping"][];
+            /** Assumptions */
+            assumptions?: string[];
+            /** Unresolved Mappings */
+            unresolved_mappings?: string[];
+        };
+        /** SDTMDomainMappingUpdate */
+        SDTMDomainMappingUpdate: {
+            domain_mapping: components["schemas"]["SDTMDomainMappingPlan"];
+        };
+        /** SDTMValueLevelMetadata */
+        SDTMValueLevelMetadata: {
+            /** Where Clause */
+            where_clause: string;
+            /** Label */
+            label: string;
+            /**
+             * Data Type
+             * @default Char
+             * @enum {string}
+             */
+            data_type: "Char" | "Num";
+            /**
+             * Origin
+             * @default CRF
+             */
+            origin: string;
+            /** Mapping Expression */
+            mapping_expression: string;
+            /** Controlled Terms */
+            controlled_terms?: string[];
+        };
+        /** SDTMVariable */
+        SDTMVariable: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /**
+             * Data Type
+             * @default Char
+             * @enum {string}
+             */
+            data_type: "Char" | "Num";
+            /** Source Dataset */
+            source_dataset: string;
+            /** Source Field */
+            source_field: string;
+            /**
+             * Origin
+             * @default CRF
+             */
+            origin: string;
+            /**
+             * Mapping Expression
+             * @default Direct
+             */
+            mapping_expression: string;
+            /** Controlled Terms */
+            controlled_terms?: string[];
+            /** Value Level Metadata */
+            value_level_metadata?: components["schemas"]["SDTMValueLevelMetadata"][];
+            /** Crf Source Label */
+            crf_source_label?: string | null;
+        };
+        /** SDTMVariableMappingPlan */
+        SDTMVariableMappingPlan: {
+            /** Study Name */
+            study_name: string;
+            /**
+             * Standard
+             * @default SDTMIG 3.4
+             */
+            standard: string;
+            /**
+             * Define Standard
+             * @default Define-XML 2.1
+             */
+            define_standard: string;
+            /** Datasets */
+            datasets: components["schemas"]["SDTMDataset"][];
+            /** Assumptions */
+            assumptions?: string[];
+            /** Unresolved Mappings */
+            unresolved_mappings?: string[];
+        };
+        /** SDTMVariableMappingUpdate */
+        SDTMVariableMappingUpdate: {
+            variable_mapping: components["schemas"]["SDTMVariableMappingPlan"];
         };
         /** UseCaseRead */
         UseCaseRead: {
@@ -1014,6 +1199,76 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["EDCSourceSpecificationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_sdtm_domain_mapping_api_v1_jobs__job_id__sdtm_domain_mapping_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SDTMDomainMappingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_sdtm_variable_mapping_api_v1_jobs__job_id__sdtm_variable_mapping_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SDTMVariableMappingUpdate"];
             };
         };
         responses: {

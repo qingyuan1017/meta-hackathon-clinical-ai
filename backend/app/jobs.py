@@ -61,6 +61,9 @@ class JobRunner:
                         return
                     job.result_json = json.dumps(review.result, ensure_ascii=False)
                     job.warnings_json = json.dumps([DISCLAIMER, *review.warnings], ensure_ascii=False)
+                    saved_options = json.loads(job.options_json)
+                    saved_options["_review_stage"] = review.review_stage
+                    job.options_json = json.dumps(saved_options, ensure_ascii=False)
                     job.status = "review_required"
                     job.completed_at = None
                     job.updated_at = datetime.now(timezone.utc)

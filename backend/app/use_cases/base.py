@@ -41,6 +41,7 @@ class UseCaseContext:
 class GeneratedContent:
     value: BaseModel
     warnings: list[str]
+    review_stage: str | None = None
 
 
 class ClinicalUseCase(ABC):

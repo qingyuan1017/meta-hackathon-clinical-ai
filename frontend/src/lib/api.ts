@@ -44,6 +44,18 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ source_spec: sourceSpec }),
     }),
+  approveSdtmDomainMapping: (id: string, domainMapping: Record<string, unknown>) =>
+    request<Job>(`/api/v1/jobs/${id}/sdtm-domain-mapping`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain_mapping: domainMapping }),
+    }),
+  approveSdtmVariableMapping: (id: string, variableMapping: Record<string, unknown>) =>
+    request<Job>(`/api/v1/jobs/${id}/sdtm-variable-mapping`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ variable_mapping: variableMapping }),
+    }),
   updateJobResult: (id: string, result: Record<string, unknown>) =>
     request<Job>(`/api/v1/jobs/${id}/result`, {
       method: "PUT",
