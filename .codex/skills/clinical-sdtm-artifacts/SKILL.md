@@ -19,7 +19,7 @@ After the ordered specialists finish, the registered SDTM lead rereads the user-
 
 - Query CDISC Library MCP tools for the exact SDTMIG product, domains, variables, and controlled terminology needed. Preserve returned version identifiers.
 - Poll the workbench job, complete the EDC source review gate when requested, and then review all three mapping stages, source-to-target traceability, origins, keys, derivations, value-level metadata, unresolved mappings, Define-XML references, aCRF annotations, and rule-to-code consistency.
-- In the web review editor, use drag-and-drop for raw-to-SDTM or SDTM-to-SDTM domain mappings, import versioned CDISC dataset metadata when needed, review variable/VLM cells, and treat sponsor SUPP additions as editable draft metadata.
+- In the web review editor, use the ordered Domain mapping, Variable & VLM, Rule augmentation, aCRF review, and Define-XML tabs. Use drag-and-drop for raw-to-SDTM or SDTM-to-SDTM domain mappings, import versioned CDISC dataset metadata when needed, review variable/VLM cells, and treat sponsor SUPP additions as editable draft metadata. The aCRF and Define-XML tabs are derived previews; revise their source metadata in the mapping tabs and rebuild.
 - Never execute generated R or SAS and never claim regulatory conformance.
 - For user-approved mapping changes, send the complete revised structured result to `workbench_update_job_result`. The API revalidates and rebuilds mappings, Define-XML, aCRF, program scaffolds, manifest, and ZIP without another model call.
 

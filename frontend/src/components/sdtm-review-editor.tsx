@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState, type DragEvent, type ReactNode } from "react";
-import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, GripVertical, Plus, Save, Table2, Trash2 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, Plus, Save, Table2, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { CDISCDataset } from "@/lib/types";
+import type { Artifact, CDISCDataset } from "@/lib/types";
 import { Button } from "./ui/button";
 
 type SourceType = "raw" | "sdtm";
@@ -82,13 +83,14 @@ export interface SDTMPlanDraft extends Record<string, unknown> {
   unresolved_mappings: string[];
 }
 
-type Stage = "domains" | "variables" | "rules";
+type Stage = "domains" | "variables" | "rules" | "acrf" | "define";
 
 const inputClass = "focus-ring min-h-9 w-full rounded-md border border-white/10 bg-[#101012] px-2.5 py-2 text-xs text-zinc-200 placeholder:text-zinc-600";
 const codeClass = "focus-ring min-h-28 w-full resize-y rounded-lg border border-white/10 bg-[#0a0a0c] p-3 font-mono text-xs leading-5 text-zinc-200 placeholder:text-zinc-700";
 
-export function SDTMReviewEditor({ value, onChange, onSave, saving, error }: {
+export function SDTMReviewEditor({ value, artifacts = [], onChange, onSave, saving, error }: {
   value: Record<string, unknown>;
+  artifacts?: Artifact[];
   onChange: (value: SDTMPlanDraft) => void;
   onSave: (value: SDTMPlanDraft) => void;
   saving: boolean;
@@ -117,6 +119,8 @@ export function SDTMReviewEditor({ value, onChange, onSave, saving, error }: {
   }, [customSources, plan.datasets, plan.domain_mappings]);
 
   const activeDataset = plan.datasets.find((dataset) => dataset.domain === selectedDomain) ?? plan.datasets[0];
+  const acrfArtifact = artifacts.find((artifact) => artifact.name === "annotated-crf.pdf");
+  const defineArtifact = artifacts.find((artifact) => artifact.name === "define.xml");
   const issues = reviewIssues(plan);
 
   const update = (mutate: (next: SDTMPlanDraft) => void) => {
@@ -217,15 +221,17 @@ export function SDTMReviewEditor({ value, onChange, onSave, saving, error }: {
     <div className="space-y-5">
       <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.06] p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div><p className="text-xs font-black uppercase tracking-[0.14em] text-violet-300">SDTM review workspace</p><p className="mt-1 text-sm text-zinc-300">Review mappings in order. Saving revalidates the complete plan and rebuilds the aCRF, metadata, and draft programs.</p></div>
+          <div><p className="text-xs font-black uppercase tracking-[0.14em] text-violet-300">SDTM review workspace</p><p className="mt-1 text-sm text-zinc-300">Review each mapping stage, then inspect the derived aCRF and Define-XML. Saving revalidates the complete plan and rebuilds every artifact.</p></div>
           <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-200">Draft · review required</span>
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-3">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5" role="tablist" aria-label="SDTM review steps">
         <StageButton active={stage === "domains"} icon={<Database size={16} />} number="01" label="Domain mapping" onClick={() => setStage("domains")} />
-        <StageButton active={stage === "variables"} icon={<Table2 size={16} />} number="02" label="Variable matrix" onClick={() => setStage("variables")} />
-        <StageButton active={stage === "rules"} icon={<Code2 size={16} />} number="03" label="Rule review" onClick={() => setStage("rules")} />
+        <StageButton active={stage === "variables"} icon={<Table2 size={16} />} number="02" label="Variable & VLM" onClick={() => setStage("variables")} />
+        <StageButton active={stage === "rules"} icon={<Code2 size={16} />} number="03" label="Rule augmentation" onClick={() => setStage("rules")} />
+        <StageButton active={stage === "acrf"} icon={<FileScan size={16} />} number="04" label="aCRF review" onClick={() => setStage("acrf")} />
+        <StageButton active={stage === "define"} icon={<FileCode2 size={16} />} number="05" label="Define-XML" onClick={() => setStage("define")} />
       </div>
 
       {stage === "domains" && (
@@ -333,6 +339,26 @@ export function SDTMReviewEditor({ value, onChange, onSave, saving, error }: {
         </div>
       )}
 
+      {stage === "acrf" && (
+        <DerivedArtifactReview
+          title="Annotated CRF review"
+          description="This draft is generated from the aCRF labels in Variable & VLM. Change those labels, save the reviewed mappings, and return here to inspect the rebuilt PDF."
+          artifact={acrfArtifact}
+        >
+          {acrfArtifact ? <iframe title="Annotated CRF review" src={api.artifactPreviewUrl(acrfArtifact.download_url)} className="h-[48rem] w-full rounded-lg border border-white/10 bg-white" /> : null}
+        </DerivedArtifactReview>
+      )}
+
+      {stage === "define" && (
+        <DerivedArtifactReview
+          title="Define-XML 2.1 review"
+          description="This draft is generated from the reviewed domains, variables, origins, controlled terms, and value-level metadata. Update those mapping tabs and save to rebuild the XML."
+          artifact={defineArtifact}
+        >
+          <XMLArtifactPreview artifact={defineArtifact} />
+        </DerivedArtifactReview>
+      )}
+
       <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
         <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="text-xs font-bold text-emerald-300">All mapping references are ready for schema validation.</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div>
         <Button type="button" variant="clinical" onClick={() => onSave(plan)} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Validating and rebuilding…" : "Save reviewed mappings"}</Button>
@@ -342,7 +368,23 @@ export function SDTMReviewEditor({ value, onChange, onSave, saving, error }: {
 }
 
 function StageButton({ active, icon, number, label, onClick }: { active: boolean; icon: ReactNode; number: string; label: string; onClick: () => void }) {
-  return <button type="button" onClick={onClick} className={`focus-ring flex items-center gap-3 rounded-xl border p-3 text-left transition ${active ? "border-violet-500/40 bg-violet-500/10 text-white" : "border-white/10 bg-white/[0.02] text-zinc-500 hover:border-white/20 hover:text-zinc-300"}`}><span className={`grid h-8 w-8 place-items-center rounded-lg ${active ? "bg-violet-500/20 text-violet-300" : "bg-white/[0.04]"}`}>{icon}</span><span><span className="block text-[9px] font-black tracking-[0.16em]">{number}</span><span className="text-sm font-bold">{label}</span></span></button>;
+  return <button type="button" role="tab" aria-selected={active} onClick={onClick} className={`focus-ring flex items-center gap-3 rounded-xl border p-3 text-left transition ${active ? "border-violet-500/40 bg-violet-500/10 text-white" : "border-white/10 bg-white/[0.02] text-zinc-500 hover:border-white/20 hover:text-zinc-300"}`}><span className={`grid h-8 w-8 place-items-center rounded-lg ${active ? "bg-violet-500/20 text-violet-300" : "bg-white/[0.04]"}`}>{icon}</span><span><span className="block text-[9px] font-black tracking-[0.16em]">{number}</span><span className="text-sm font-bold">{label}</span></span></button>;
+}
+
+function DerivedArtifactReview({ title, description, artifact, children }: { title: string; description: string; artifact?: Artifact; children: ReactNode }) {
+  return <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]"><header className="flex flex-wrap items-start justify-between gap-4 border-b border-white/10 p-4"><div><p className="text-sm font-extrabold text-zinc-100">{title}</p><p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">{description}</p></div>{artifact && <Button asChild type="button" variant="outline" size="sm"><a href={api.artifactUrl(artifact.download_url)}><Download size={14} />Download {artifact.name}</a></Button>}</header><div className="p-4">{artifact ? children : <EmptyReview text={`${title} will appear after the SDTM artifacts are generated.`} />}</div></section>;
+}
+
+function XMLArtifactPreview({ artifact }: { artifact?: Artifact }) {
+  const query = useQuery({
+    queryKey: ["artifact-text", artifact?.id],
+    queryFn: () => api.artifactText(artifact!.download_url),
+    enabled: Boolean(artifact),
+  });
+  if (!artifact) return null;
+  if (query.isPending) return <EmptyReview text="Loading Define-XML…" />;
+  if (query.isError) return <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">{query.error.message}</div>;
+  return <pre className="max-h-[48rem] overflow-auto rounded-lg border border-white/10 bg-[#09090b] p-4 font-mono text-xs leading-5 text-cyan-100"><code>{query.data}</code></pre>;
 }
 
 function SourceCard({ source }: { source: { name: string; type: SourceType } }) {

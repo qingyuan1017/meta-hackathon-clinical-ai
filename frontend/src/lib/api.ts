@@ -16,6 +16,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function requestText(path: string): Promise<string> {
+  const response = await fetch(`${API_URL}${path}`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Unable to load artifact (${response.status}).`);
+  return response.text();
+}
+
 export const api = {
   health: () => request<Health>("/api/v1/health"),
   useCases: () => request<UseCaseContract[]>("/api/v1/use-cases"),
@@ -46,5 +52,7 @@ export const api = {
     }),
   deleteJob: (id: string) => request<void>(`/api/v1/jobs/${id}`, { method: "DELETE" }),
   artifactUrl: (path: string) => `${API_URL}${path}`,
+  artifactPreviewUrl: (path: string) => `${API_URL}${path}?inline=true`,
+  artifactText: (path: string) => requestText(`${path}?inline=true`),
   bundleUrl: (id: string) => `${API_URL}/api/v1/jobs/${id}/bundle`,
 };

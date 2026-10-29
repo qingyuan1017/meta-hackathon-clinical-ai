@@ -472,14 +472,24 @@ def update_job_result(job_id: str, update: JobResultUpdate, db: Session = Depend
 
 
 @app.get(f"{settings.api_prefix}/jobs/{{job_id}}/artifacts/{{artifact_id}}")
-def download_artifact(job_id: str, artifact_id: str, db: Session = Depends(get_db)) -> FileResponse:
+def download_artifact(
+    job_id: str,
+    artifact_id: str,
+    inline: bool = Query(False),
+    db: Session = Depends(get_db),
+) -> FileResponse:
     artifact = db.scalar(select(Artifact).where(Artifact.id == artifact_id, Artifact.job_id == job_id))
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found.")
     path = _safe_artifact_path(job_id, artifact.relative_path)
     if not path.is_file():
         raise HTTPException(status_code=410, detail="Artifact file is no longer available.")
-    return FileResponse(path, media_type=artifact.media_type, filename=artifact.name)
+    return FileResponse(
+        path,
+        media_type=artifact.media_type,
+        filename=artifact.name,
+        content_disposition_type="inline" if inline else "attachment",
+    )
 
 
 @app.get(f"{settings.api_prefix}/jobs/{{job_id}}/bundle")

@@ -1074,7 +1074,9 @@ export interface operations {
     };
     download_artifact_api_v1_jobs__job_id__artifacts__artifact_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                inline?: boolean;
+            };
             header?: never;
             path: {
                 job_id: string;

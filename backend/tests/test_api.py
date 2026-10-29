@@ -4,10 +4,11 @@ from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
+from app.artifacts import artifact_record
 from app.db import SessionLocal
 from app.core_conformance import CoreConformanceResult
 from app.main import app, settings
-from app.models import Job
+from app.models import Artifact, Job
 from app.schemas import StudySummary
 
 
@@ -16,6 +17,40 @@ def test_health_does_not_expose_secret() -> None:
         response = client.get("/api/v1/health")
     assert response.status_code == 200
     assert "meta_api_key" not in response.json()
+
+
+def test_artifact_can_be_requested_inline_for_review() -> None:
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm",
+            title="Inline artifact review",
+            status="succeeded",
+            options_json="{}",
+            input_files_json="[]",
+        )
+        session.add(job)
+        session.flush()
+        job_dir = settings.jobs_dir / job.id
+        artifact_path = job_dir / "output" / "define.xml"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("<ODM />", encoding="utf-8")
+        artifact = Artifact(**artifact_record(artifact_path, job_dir))
+        job.artifacts.append(artifact)
+        session.commit()
+        job_id, artifact_id = job.id, artifact.id
+    try:
+        with TestClient(app) as client:
+            response = client.get(f"/api/v1/jobs/{job_id}/artifacts/{artifact_id}?inline=true")
+        assert response.status_code == 200
+        assert response.headers["content-disposition"].startswith("inline;")
+        assert response.text == "<ODM />"
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 def test_generation_requires_meta_configuration() -> None:

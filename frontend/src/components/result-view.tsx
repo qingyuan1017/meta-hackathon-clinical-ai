@@ -13,7 +13,9 @@ import { SDTMReviewEditor, type SDTMPlanDraft } from "./sdtm-review-editor";
 import { StatusBadge } from "./status-badge";
 
 export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) {
-  const [tab, setTab] = useState<"preview" | "edit" | "agent" | "artifacts" | "warnings">("preview");
+  const [tab, setTab] = useState<"preview" | "edit" | "agent" | "artifacts" | "warnings">(
+    job.workflow === "sdtm" && job.status === "succeeded" ? "edit" : "preview",
+  );
   const [draft, setDraft] = useState(() => JSON.stringify(job.result, null, 2));
   const [sdtmDraft, setSdtmDraft] = useState<Record<string, unknown>>(() => asRecord(job.result));
   const [edcSourceDraft, setEdcSourceDraft] = useState<Record<string, unknown>>(() => asRecord(job.result));
@@ -46,7 +48,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
       client.setQueryData(["job", job.id], updated);
       client.invalidateQueries({ queryKey: ["jobs"] });
       setDraftError(null);
-      setTab("preview");
+      setTab(job.workflow === "sdtm" ? "edit" : "preview");
     },
   });
   const approveSourceMutation = useMutation({
@@ -86,13 +88,13 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
           <div className="py-5"><EDCSourceReviewEditor value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: EDCSourceSpecificationDraft) => approveSourceMutation.mutate(next)} saving={approveSourceMutation.isPending} error={approveSourceMutation.error?.message} /></div>
         ) : <><div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist">
           {(["preview", ...(job.status === "succeeded" ? ["edit" as const] : []), "agent", "artifacts", "warnings"] as const).map((item) => (
-            <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold capitalize ${tab === item ? "border-b-2 border-clinical-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{item}</button>
+            <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold capitalize ${tab === item ? "border-b-2 border-clinical-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{item === "edit" && job.workflow === "sdtm" ? "SDTM review" : item}</button>
           ))}
         </div>
         <div className="min-h-72 py-5">
           {tab === "preview" && (job.result ? <StructuredPreview value={job.result} /> : <EmptyState text="A structured preview will appear when generation completes." />)}
           {tab === "edit" && (
-            job.workflow === "sdtm" ? <SDTMReviewEditor value={sdtmDraft} onChange={(next) => setSdtmDraft(next)} onSave={(next: SDTMPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : <div className="space-y-4">
+            job.workflow === "sdtm" ? <SDTMReviewEditor value={sdtmDraft} artifacts={job.artifacts} onChange={(next) => setSdtmDraft(next)} onSave={(next: SDTMPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : <div className="space-y-4">
               <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm leading-6 text-blue-200">Edit the validated structured result below. Saving rebuilds DOCX, PDF, XLSX, XML, code, and ZIP artifacts without another model call.</div>
               <textarea aria-label="Editable structured result" value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} className="focus-ring min-h-[32rem] w-full rounded-xl border border-white/15 bg-[#0d0d0f] p-4 font-mono text-xs leading-5 text-zinc-200" />
               {(draftError || updateMutation.error) && <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">{draftError ?? updateMutation.error?.message}</div>}

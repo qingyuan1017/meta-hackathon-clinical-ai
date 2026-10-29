@@ -15,15 +15,19 @@ const plan = {
 };
 
 describe("SDTMReviewEditor", () => {
-  it("presents ordered domain, variable, and rule review stages", () => {
+  it("presents ordered mapping stages plus separate aCRF and Define-XML review tabs", () => {
     render(<SDTMReviewEditor value={plan} onChange={vi.fn()} onSave={vi.fn()} saving={false} />);
 
     expect(screen.getByText("Domain mapping")).toBeInTheDocument();
     expect(screen.getAllByText("RAW_DM")).toHaveLength(2);
-    fireEvent.click(screen.getByText("Variable matrix"));
+    fireEvent.click(screen.getByText("Variable & VLM"));
     expect(screen.getByText("Each row is an SDTM variable. Value-level metadata is edited in the VLM column.")).toBeInTheDocument();
     expect(screen.getAllByDisplayValue("AGE")).toHaveLength(2);
-    fireEvent.click(screen.getByText("Rule review"));
+    fireEvent.click(screen.getByText("Rule augmentation"));
     expect(screen.getByText("DM.AGE")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("aCRF review"));
+    expect(screen.getByText("Annotated CRF review will appear after the SDTM artifacts are generated.")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Define-XML"));
+    expect(screen.getByText("Define-XML 2.1 review will appear after the SDTM artifacts are generated.")).toBeInTheDocument();
   });
 });
