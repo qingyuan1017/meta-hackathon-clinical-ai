@@ -371,7 +371,7 @@ class JobRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
-    review_stage: Literal["edc_source", "domain_mapping", "variable_mapping"] | None = None
+    review_stage: Literal["edc_source", "domain_mapping", "variable_mapping", "tlf_shell"] | None = None
     result: dict | list | None = None
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
@@ -399,6 +399,10 @@ class SDTMDomainMappingUpdate(BaseModel):
 
 class SDTMVariableMappingUpdate(BaseModel):
     variable_mapping: SDTMVariableMappingPlan
+
+
+class TLFShellPlanUpdate(BaseModel):
+    shell_plan: TLFAnalysisPlan
 
 
 class UseCaseRead(BaseModel):

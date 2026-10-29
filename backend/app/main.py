@@ -38,11 +38,13 @@ from .schemas import (
     JobResultUpdate,
     SDTMDomainMappingUpdate,
     SDTMVariableMappingUpdate,
+    TLFShellPlanUpdate,
     UseCaseRead,
 )
 from .security import detect_identifiers, validate_upload_metadata, verify_signature
 from .use_cases import USE_CASES, get_use_case
 from .use_cases.sdtm import SDTMUseCase
+from .use_cases.tlf import TLFUseCase
 from .workflows import DOCUMENT_TYPES, WORKFLOWS, WorkflowService
 
 
@@ -466,6 +468,33 @@ async def approve_sdtm_variable_mapping(
     return _resume_sdtm_review(job, options, db)
 
 
+@app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/tlf-shell",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def approve_tlf_shell(
+    job_id: str,
+    update: TLFShellPlanUpdate,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    """Approve the TLF shell and start programming augmentation."""
+
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    if job.workflow != "tlf" or job.status != "review_required" or options.get("_review_stage") != "tlf_shell":
+        raise HTTPException(status_code=409, detail="This job is not waiting for TLF shell review.")
+    try:
+        TLFUseCase.validate_shell_plan(update.shell_plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _reject_review_identifiers(update.shell_plan.model_dump_json(), "TLF shell")
+    options["tlf_shell_plan"] = update.shell_plan.model_dump(mode="json")
+    return _resume_review(job, options, db)
+
+
 @app.put(f"{settings.api_prefix}/jobs/{{job_id}}/result", response_model=JobRead)
 def update_job_result(job_id: str, update: JobResultUpdate, db: Session = Depends(get_db)) -> JobRead:
     """Validate a human revision and deterministically rebuild all downloadable artifacts."""
@@ -619,7 +648,7 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
     warnings = json.loads(job.warnings_json or "[]") if include_result else []
     options = json.loads(job.options_json)
     review_stage = options.get("_review_stage") if job.status == "review_required" else None
-    if review_stage not in {"edc_source", "domain_mapping", "variable_mapping"}:
+    if review_stage not in {"edc_source", "domain_mapping", "variable_mapping", "tlf_shell"}:
         review_stage = None
     artifacts = [
         ArtifactRead(
@@ -659,6 +688,10 @@ def _reject_review_identifiers(serialized: str, label: str) -> None:
 
 
 def _resume_sdtm_review(job: Job, options: dict, db: Session) -> JobRead:
+    return _resume_review(job, options, db)
+
+
+def _resume_review(job: Job, options: dict, db: Session) -> JobRead:
     options.pop("_review_stage", None)
     job.options_json = json.dumps(options, ensure_ascii=False)
     job.status = "queued"

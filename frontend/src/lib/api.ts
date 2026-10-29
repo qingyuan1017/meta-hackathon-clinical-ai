@@ -56,6 +56,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ variable_mapping: variableMapping }),
     }),
+  approveTlfShell: (id: string, shellPlan: Record<string, unknown>) =>
+    request<Job>(`/api/v1/jobs/${id}/tlf-shell`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ shell_plan: shellPlan }),
+    }),
   updateJobResult: (id: string, result: Record<string, unknown>) =>
     request<Job>(`/api/v1/jobs/${id}/result`, {
       method: "PUT",

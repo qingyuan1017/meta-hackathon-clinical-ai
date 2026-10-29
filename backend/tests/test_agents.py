@@ -484,7 +484,7 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
     assert {event["stage"] for event in progress["events"]} == {"Rule augmentation"}
 
 
-async def test_tlf_use_case_runs_three_ordered_specification_stages(tmp_path) -> None:
+async def test_tlf_use_case_pauses_for_shell_review_before_programming(tmp_path) -> None:
     inventory = {
         "study_name": "SYN-101",
         "outputs": [{"output_id": "T-01", "output_type": "table", "title": "Change from baseline"}],
@@ -532,7 +532,13 @@ async def test_tlf_use_case_runs_three_ordered_specification_stages(tmp_path) ->
     sap.write_text("Analyze Week 12 change from baseline in the ITT population using ANCOVA.", encoding="utf-8")
     progress_path = tmp_path / "agent" / "progress.json"
 
-    generated = await TLFUseCase().generate(UseCaseContext(inputs=[sap], options={"languages": ["r", "sas"]}, ai=ai, settings=settings, agent_progress_path=progress_path))
+    use_case = TLFUseCase()
+    review = await use_case.prepare_review(UseCaseContext(inputs=[sap], options={"languages": ["r", "sas"]}, ai=ai, settings=settings, agent_progress_path=progress_path))
+
+    assert review is not None
+    assert review.review_stage == "tlf_shell"
+    assert review.value.outputs[0].output_id == "T-01"
+    generated = await use_case.generate(UseCaseContext(inputs=[sap], options={"languages": ["r", "sas"], "tlf_shell_plan": review.value.model_dump(mode="json")}, ai=ai, settings=settings, agent_progress_path=progress_path))
 
     assert generated.value.programs[0].output_id == "T-01"
     assert generated.value.outputs[0].readiness == "ready"

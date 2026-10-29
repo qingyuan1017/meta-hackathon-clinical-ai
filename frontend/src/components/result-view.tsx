@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader } from "./ui/card";
 import { EDCSourceReviewEditor, type EDCSourceSpecificationDraft } from "./edc-source-review-editor";
 import { SDTMDomainMappingReview, SDTMVariableMappingReview, type SDTMDomainMappingPlanDraft, type SDTMVariableMappingPlanDraft } from "./sdtm-mapping-stage-review";
 import { SDTMReviewEditor, type SDTMPlanDraft } from "./sdtm-review-editor";
-import { TLFReviewEditor, type TLFPlanDraft } from "./tlf-review-editor";
+import { TLFShellReview, TLFReviewEditor, type TLFAnalysisPlanDraft, type TLFPlanDraft } from "./tlf-review-editor";
 import { StatusBadge } from "./status-badge";
 
 export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) {
@@ -76,6 +76,13 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
       client.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
+  const approveTlfShellMutation = useMutation({
+    mutationFn: (shell: Record<string, unknown>) => api.approveTlfShell(job.id, shell),
+    onSuccess: (updated) => {
+      client.setQueryData(["job", job.id], updated);
+      client.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
   const saveDraft = () => {
     try {
       const parsed: unknown = JSON.parse(draft);
@@ -102,8 +109,8 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
             <p className="mt-2 pl-6 text-xs text-blue-300">{agentQuery.data ? `Turn ${agentQuery.data.turn}/${agentQuery.data.max_turns} · current-stage source chunks ${agentQuery.data.read_source_chunks.length}/${agentQuery.data.total_source_chunks}` : "You can leave this page; local history will retain the job."}</p>
           </div>
         )}
-        {job.workflow === "sdtm" && job.status === "review_required" ? (
-          <div className="py-5">{job.review_stage === "domain_mapping" ? <SDTMDomainMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMDomainMappingPlanDraft) => approveDomainMutation.mutate(next)} saving={approveDomainMutation.isPending} error={approveDomainMutation.error?.message} /> : job.review_stage === "variable_mapping" ? <SDTMVariableMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMVariableMappingPlanDraft) => approveVariableMutation.mutate(next)} saving={approveVariableMutation.isPending} error={approveVariableMutation.error?.message} /> : <EDCSourceReviewEditor value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: EDCSourceSpecificationDraft) => approveSourceMutation.mutate(next)} saving={approveSourceMutation.isPending} error={approveSourceMutation.error?.message} />}</div>
+        {job.status === "review_required" ? (
+          <div className="py-5">{job.workflow === "tlf" ? <TLFShellReview value={tlfDraft} onChange={(next) => setTlfDraft(next)} onApprove={(next: TLFAnalysisPlanDraft) => approveTlfShellMutation.mutate(next)} saving={approveTlfShellMutation.isPending} error={approveTlfShellMutation.error?.message} /> : job.review_stage === "domain_mapping" ? <SDTMDomainMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMDomainMappingPlanDraft) => approveDomainMutation.mutate(next)} saving={approveDomainMutation.isPending} error={approveDomainMutation.error?.message} /> : job.review_stage === "variable_mapping" ? <SDTMVariableMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMVariableMappingPlanDraft) => approveVariableMutation.mutate(next)} saving={approveVariableMutation.isPending} error={approveVariableMutation.error?.message} /> : <EDCSourceReviewEditor value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: EDCSourceSpecificationDraft) => approveSourceMutation.mutate(next)} saving={approveSourceMutation.isPending} error={approveSourceMutation.error?.message} />}</div>
         ) : <><div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist">
           {(["preview", ...(job.status === "succeeded" ? ["edit" as const] : []), "agent", "artifacts", "warnings"] as const).map((item) => (
             <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold capitalize ${tab === item ? "border-b-2 border-clinical-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{item === "edit" && job.workflow === "sdtm" ? "SDTM review" : item}</button>

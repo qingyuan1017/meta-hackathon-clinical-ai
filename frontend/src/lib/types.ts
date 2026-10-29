@@ -2,11 +2,11 @@ import type { components } from "./openapi";
 
 export type Workflow = "protocol-extraction" | "clinical-document" | "edc-design" | "sdtm" | "tlf";
 export type JobStatus = "queued" | "running" | "review_required" | "succeeded" | "failed";
-export type ReviewStage = "edc_source" | "domain_mapping" | "variable_mapping";
+export type ReviewStage = "edc_source" | "domain_mapping" | "variable_mapping" | "tlf_shell";
 
 export type Artifact = components["schemas"]["ArtifactRead"];
 
-export interface Job extends Omit<components["schemas"]["JobRead"], "workflow" | "status" | "result" | "error" | "warnings" | "artifacts"> {
+export interface Job extends Omit<components["schemas"]["JobRead"], "workflow" | "status" | "result" | "error" | "warnings" | "artifacts" | "review_stage"> {
   workflow: Workflow;
   status: JobStatus;
   result: Record<string, unknown> | unknown[] | null;

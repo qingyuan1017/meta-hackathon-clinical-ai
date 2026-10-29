@@ -22,12 +22,22 @@ export interface TLFPlanDraft extends Record<string, unknown> {
   study_name: string; analysis_standard: string; outputs: TLFOutput[]; programs: TLFProgram[];
   assumptions: string[]; unresolved_items: string[];
 }
+export interface TLFAnalysisPlanDraft extends Record<string, unknown> {
+  study_name: string; analysis_standard: string; outputs: TLFOutput[];
+  assumptions: string[]; unresolved_items: string[];
+}
 
 const inputClass = "focus-ring h-9 w-full rounded-md border border-white/15 bg-[#111113] px-2.5 text-xs text-zinc-200";
 const areaClass = "focus-ring min-h-20 w-full rounded-md border border-white/15 bg-[#111113] px-2.5 py-2 text-xs leading-5 text-zinc-200";
 
-export function TLFReviewEditor({ value, onChange, onSave, saving, error }: {
-  value: Record<string, unknown>; onChange: (value: TLFPlanDraft) => void; onSave: (value: TLFPlanDraft) => void; saving: boolean; error?: string;
+export function TLFShellReview({ value, onChange, onApprove, saving, error }: {
+  value: Record<string, unknown>; onChange: (value: TLFAnalysisPlanDraft) => void; onApprove: (value: TLFAnalysisPlanDraft) => void; saving: boolean; error?: string;
+}) {
+  return <TLFReviewEditor value={value} onChange={(next) => onChange(toAnalysisPlan(next))} onSave={() => undefined} saving={saving} error={error} shellReview onApproveShell={(next) => onApprove(toAnalysisPlan(next))} />;
+}
+
+export function TLFReviewEditor({ value, onChange, onSave, saving, error, shellReview = false, onApproveShell }: {
+  value: Record<string, unknown>; onChange: (value: TLFPlanDraft) => void; onSave: (value: TLFPlanDraft) => void; saving: boolean; error?: string; shellReview?: boolean; onApproveShell?: (value: TLFPlanDraft) => void;
 }) {
   const plan = useMemo(() => normalizePlan(value), [value]);
   const [selected, setSelected] = useState(plan.outputs[0]?.output_id ?? "");
@@ -36,6 +46,7 @@ export function TLFReviewEditor({ value, onChange, onSave, saving, error }: {
   const activeIndex = Math.max(0, plan.outputs.findIndex((item) => item.output_id === selected));
   const active = plan.outputs[activeIndex];
   const filtered = plan.outputs.filter((item) => filter === "all" || item.output_type === filter);
+  const approvalIssues = shellReview ? shellIssues(plan) : [];
 
   const update = (mutate: (next: TLFPlanDraft) => void) => { const next = structuredClone(plan); mutate(next); onChange(next); };
   const updateOutput = (key: keyof TLFOutput, nextValue: unknown) => update((next) => {
@@ -74,15 +85,15 @@ export function TLFReviewEditor({ value, onChange, onSave, saving, error }: {
 
   return <div className="space-y-5">
     <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.06] p-4">
-      <p className="text-xs font-black uppercase tracking-[0.14em] text-violet-300">TLF review workspace</p>
-      <p className="mt-1 text-sm text-zinc-300">Review source-grounded outputs, analysis metadata, display rules, and non-executed program scaffolds. Saving revalidates the full plan and rebuilds every artifact.</p>
+      <p className="text-xs font-black uppercase tracking-[0.14em] text-violet-300">{shellReview ? "TLF shell review required" : "TLF review workspace"}</p>
+      <p className="mt-1 text-sm text-zinc-300">{shellReview ? "Review the source-grounded output inventory, analysis metadata, and display shells. Programming augmentation will not start until you approve this shell." : "Review source-grounded outputs, analysis metadata, display rules, and non-executed program scaffolds. Saving revalidates the full plan and rebuilds every artifact."}</p>
     </div>
     <div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist" aria-label="TLF review stages">
       {([
         ["inventory", "1 · Output inventory"],
         ["analysis", "2 · Analysis & display"],
         ["programming", "3 · Programming augmentation"],
-      ] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={stage === value} onClick={() => setStage(value)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold ${stage === value ? "border-b-2 border-violet-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{label}</button>)}
+      ] as const).filter(([value]) => !shellReview || value !== "programming").map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={stage === value} onClick={() => setStage(value)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold ${stage === value ? "border-b-2 border-violet-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{label}</button>)}
     </div>
     <div className="grid gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
       <aside className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
@@ -95,6 +106,7 @@ export function TLFReviewEditor({ value, onChange, onSave, saving, error }: {
           <Section title="Output overview"><div className="grid gap-3 md:grid-cols-3"><Field label="Output ID" value={active.output_id} onChange={(value) => updateOutput("output_id", value)} /><label><Label text="Type" /><select value={active.output_type} onChange={(event) => updateOutput("output_type", event.target.value)} className={inputClass}><option value="table">Table</option><option value="listing">Listing</option><option value="figure">Figure</option></select></label><Field label="Section" value={active.section} onChange={(value) => updateOutput("section", value)} /></div><Field label="Title" value={active.title} onChange={(value) => updateOutput("title", value)} /><Text label="Purpose" value={active.purpose} onChange={(value) => updateOutput("purpose", value)} /><Field label="SAP / protocol reference" value={active.source_reference} onChange={(value) => updateOutput("source_reference", value)} /></Section>
         </>}
         {stage === "analysis" && <>
+          <Section title="Shell preview"><ShellPreview output={active} /></Section>
           <Section title="Population and analysis"><div className="grid gap-3 md:grid-cols-2"><Field label="Population" value={active.population} onChange={(value) => updateOutput("population", value)} /><Field label="Population filter" value={active.population_filter} onChange={(value) => updateOutput("population_filter", value)} /><Field label="Treatment variable" value={active.treatment_variable} onChange={(value) => updateOutput("treatment_variable", value)} /><Field label="Analysis datasets (comma-separated)" value={active.analysis_datasets.join(", ")} onChange={(value) => updateOutput("analysis_datasets", splitComma(value))} /></div><Text label="Analysis method" value={active.analysis_method} onChange={(value) => updateOutput("analysis_method", value)} /><Text label="Selection criteria (one per line)" value={active.selection_criteria.join("\n")} onChange={(value) => updateOutput("selection_criteria", splitLines(value))} /><SourceVariables value={active.source_variables} onChange={(value) => updateOutput("source_variables", value)} /></Section>
           <Section title="Display specification">{active.output_type === "figure" ? <FigureEditor value={active.figure ?? newFigure()} onChange={(value) => updateOutput("figure", value)} /> : <DisplayGrid type={active.output_type} columns={active.columns} rows={active.rows} onColumns={(value) => updateOutput("columns", value)} onRows={(value) => updateOutput("rows", value)} />}<Text label="Sort order (one per line)" value={active.sort_order.join("\n")} onChange={(value) => updateOutput("sort_order", splitLines(value))} /><Text label="Footnotes (one per line)" value={active.footnotes.join("\n")} onChange={(value) => updateOutput("footnotes", splitLines(value))} /></Section>
         </>}
@@ -102,8 +114,9 @@ export function TLFReviewEditor({ value, onChange, onSave, saving, error }: {
         <Section title="Readiness blockers"><Text label="Blocking items (one per line)" value={active.blocking_items.join("\n")} onChange={(value) => updateOutput("blocking_items", splitLines(value))} />{active.readiness === "blocked" && <p className="text-xs text-amber-300">This output remains in the package but is marked blocked until its TODOs and blocking items are resolved.</p>}</Section>
       </main> : <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-white/15 text-sm text-zinc-500">Add an output to begin review.</div>}
     </div>
+    {approvalIssues.length > 0 && <ul className="space-y-1 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-sm text-amber-200">{approvalIssues.map((issue) => <li key={issue}>{issue}</li>)}</ul>}
     {error && <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">{error}</div>}
-    <Button variant="clinical" onClick={() => onSave(plan)} disabled={saving || !plan.outputs.length}><Save size={16} />{saving ? "Validating and rebuilding…" : "Save review and rebuild artifacts"}</Button>
+    {shellReview ? <Button variant="clinical" onClick={() => onApproveShell?.(plan)} disabled={saving || !plan.outputs.length || approvalIssues.length > 0}><Save size={16} />{saving ? "Approving shell…" : "Approve shell and generate programs"}</Button> : <Button variant="clinical" onClick={() => onSave(plan)} disabled={saving || !plan.outputs.length}><Save size={16} />{saving ? "Validating and rebuilding…" : "Save review and rebuild artifacts"}</Button>}
   </div>;
 }
 
@@ -116,6 +129,7 @@ function SourceVariables({ value, onChange }: { value: SourceVariable[]; onChang
 function DisplayGrid({ type, columns, rows, onColumns, onRows }: { type: OutputType; columns: TLFColumn[]; rows: TLFRow[]; onColumns: (value: TLFColumn[]) => void; onRows: (value: TLFRow[]) => void }) { return <div className="space-y-4"><ArrayEditor label="Columns" items={columns} fields={["column_id", "heading", "source", "statistic", "format"]} onChange={onColumns} create={() => ({ column_id: `COL${columns.length + 1}`, heading: "New column", source: "TODO: confirm source", statistic: "", format: "TODO: confirm format" })} />{type === "table" && <ArrayEditor label="Rows" items={rows} fields={["row_id", "label", "source", "statistic", "condition", "format"]} onChange={onRows} create={() => ({ row_id: `ROW${rows.length + 1}`, label: "New row", source: "TODO: confirm source", statistic: "", condition: "", format: "TODO: confirm format" })} />}</div>; }
 function ArrayEditor<T extends Record<string, string>>({ label, items, fields, onChange, create }: { label: string; items: T[]; fields: (keyof T)[]; onChange: (items: T[]) => void; create: () => T }) { return <div><div className="mb-2 flex items-center justify-between"><Label text={label} /><Button type="button" size="sm" variant="outline" onClick={() => onChange([...items, create()])}><Plus size={13} />Add</Button></div>{items.map((item, index) => <div key={index} className="mb-2 flex gap-2 overflow-x-auto">{fields.map((field) => <input key={String(field)} aria-label={`${label} ${String(field)}`} value={item[field]} placeholder={String(field)} onChange={(event) => { const next = structuredClone(items); next[index][field] = event.target.value as T[keyof T]; onChange(next); }} className={`${inputClass} min-w-32`} />)}<button type="button" aria-label={`Remove ${label.toLowerCase()} item`} onClick={() => onChange(items.filter((_, itemIndex) => itemIndex !== index))} className="text-rose-300"><Trash2 size={14} /></button></div>)}</div>; }
 function FigureEditor({ value, onChange }: { value: FigureSpec; onChange: (value: FigureSpec) => void }) { return <div className="grid gap-3 md:grid-cols-2">{(["geometry", "x_axis", "y_axis", "group", "panel"] as const).map((key) => <Field key={key} label={key.replace("_", " ")} value={value[key]} onChange={(nextValue) => onChange({ ...value, [key]: nextValue })} />)}</div>; }
+function ShellPreview({ output }: { output: TLFOutput }) { if (output.output_type === "figure") { const figure = output.figure; return <div className="grid min-h-56 place-items-center rounded-lg border border-dashed border-violet-500/30 bg-black/20 p-6 text-center"><div><p className="text-sm font-black text-violet-200">{figure?.geometry || "Figure placeholder"}</p><p className="mt-3 text-xs text-zinc-400">Y: {figure?.y_axis || "Not specified"}</p><div className="mx-auto my-3 h-24 w-48 border-b border-l border-zinc-600" /><p className="text-xs text-zinc-400">X: {figure?.x_axis || "Not specified"}{figure?.group ? ` · Group: ${figure.group}` : ""}</p></div></div>; } return <div className="overflow-x-auto rounded-lg border border-white/10"><table className="min-w-full border-collapse text-xs"><thead className="bg-white/[0.05]"><tr>{output.output_type === "table" && <th className="border-r border-white/10 px-3 py-2 text-left text-zinc-400">Row</th>}{output.columns.map((column) => <th key={column.column_id} className="border-r border-white/10 px-3 py-2 text-left text-zinc-200 last:border-r-0">{column.heading}</th>)}</tr></thead><tbody>{output.output_type === "table" ? output.rows.map((row) => <tr key={row.row_id} className="border-t border-white/10"><td className="border-r border-white/10 px-3 py-2 font-medium text-zinc-300">{row.label}</td>{output.columns.map((column) => <td key={column.column_id} className="border-r border-white/10 px-3 py-2 text-zinc-500 last:border-r-0">&lt;{row.statistic || column.statistic || "value"}&gt;</td>)}</tr>) : <tr className="border-t border-white/10">{output.columns.map((column) => <td key={column.column_id} className="border-r border-white/10 px-3 py-3 text-zinc-500 last:border-r-0">&lt;{column.source}&gt;</td>)}</tr>}</tbody></table>{!output.columns.length && <p className="p-6 text-center text-xs text-amber-300">Add display columns to preview this shell.</p>}</div>; }
 
 function normalizePlan(value: Record<string, unknown>): TLFPlanDraft {
   const rawOutputs = arrayValue<Record<string, unknown>>(value.outputs);
@@ -135,3 +149,5 @@ function splitLines(value: string): string[] { return value.split("\n").map((ite
 function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
 function stringValue(value: unknown, fallback = ""): string { return typeof value === "string" ? value : fallback; }
 function outputType(value: unknown): OutputType { return value === "listing" || value === "figure" ? value : "table"; }
+function toAnalysisPlan(plan: TLFPlanDraft): TLFAnalysisPlanDraft { return { study_name: plan.study_name, analysis_standard: plan.analysis_standard, outputs: plan.outputs, assumptions: plan.assumptions, unresolved_items: plan.unresolved_items }; }
+function shellIssues(plan: TLFPlanDraft): string[] { const issues: string[] = []; const ids = new Set<string>(); plan.outputs.forEach((output) => { const id = output.output_id.trim(); if (!id) issues.push("Every shell needs an output identifier."); else if (ids.has(id.toLowerCase())) issues.push(`Output identifier ${id} is duplicated.`); else ids.add(id.toLowerCase()); if (!output.title.trim()) issues.push(`${id || "Unnamed output"} needs a title.`); if (output.output_type === "table" && (!output.columns.length || !output.rows.length)) issues.push(`Table ${id || "[unnamed]"} needs at least one row and one column.`); if (output.output_type === "listing" && !output.columns.length) issues.push(`Listing ${id || "[unnamed]"} needs at least one column.`); if (output.output_type === "figure" && !output.figure) issues.push(`Figure ${id || "[unnamed]"} needs a figure specification.`); }); return Array.from(new Set(issues)); }

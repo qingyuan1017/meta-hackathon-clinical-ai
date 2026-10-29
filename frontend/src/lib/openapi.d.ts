@@ -592,7 +592,7 @@ export interface components {
             /** Completed At */
             completed_at: string | null;
             /** Review Stage */
-            review_stage?: ("edc_source" | "domain_mapping" | "variable_mapping") | null;
+            review_stage?: ("edc_source" | "domain_mapping" | "variable_mapping" | "tlf_shell") | null;
             /** Result */
             result?: {
                 [key: string]: unknown;
