@@ -11,7 +11,7 @@ INVENTORY_AGENT = AgentDefinition(
     id="clinical-tlf-output-inventory-agent",
     workflow="tlf-output-inventory",
     name="Clinical TLF Output Inventory Agent",
-    description="Extracts the source-supported TLF inventory without inventing conventional outputs.",
+    description="Builds a source-grounded TLF inventory augmented with clearly labeled conventional proposals.",
     instruction_file=_DIRECTORY / "output_inventory.md",
     remote_tools=(*CDISC_TOOLS, *PUBMED_TOOLS),
 )

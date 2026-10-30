@@ -57,7 +57,7 @@ export const workflows: WorkflowDefinition[] = [
     id: "tlf",
     title: "TLF artifact generation",
     shortTitle: "TLF artifacts",
-    description: "Progress from source-supported output inventory to analysis/display specifications and programming augmentation, then review editable shells and R/SAS scaffolds.",
+    description: "Approve the output table of contents, review detailed shells for every approved output, then review ADaM-linked R/SAS programming scaffolds.",
     eyebrow: "05 · ANALYZE",
     icon: TableProperties,
     accepts: ".pdf,.docx,.txt,.md,.json,.xlsx",

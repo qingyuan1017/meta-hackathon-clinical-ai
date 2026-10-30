@@ -11,7 +11,7 @@ from reportlab.pdfgen import canvas
 from app.agents.runtime import verify_result
 from app.ai import MetaAIClient
 from app.config import Settings
-from app.schemas import EDCDesign, EDCForm, EDCVisit, StudySummary
+from app.schemas import EDCDesign, EDCForm, EDCVisit, StudySummary, TLFInventoryPlan
 from app.use_cases.base import UseCaseContext
 from app.use_cases.protocol_extraction import ProtocolExtractionUseCase
 from app.use_cases.sdtm import SDTMUseCase
@@ -152,6 +152,18 @@ async def test_agent_reads_contract_and_source_then_submits_valid_result(tmp_pat
         "read_source_chunk",
         "submit_result",
     ]
+    assert trace["events"][0]["summary"].startswith("Reviewed the workflow contract")
+    assert trace["events"][1]["input_summary"] == "Requested source chunk 1 of 1."
+    assert trace["events"][1]["output_summary"] == "Reviewed source chunk 1; 0 chunk(s) remain."
+    assert trace["events"][1]["intent"].startswith("Review source chunk 1")
+    assert trace["events"][1]["input_details"] == {"Chunk requested": 1}
+    assert trace["events"][1]["output_details"]["Chunks remaining"] == 0
+    assert trace["events"][1]["evidence"] == ["Submitted source · chunk 1 of 1"]
+    assert trace["events"][1]["duration_ms"] >= 1
+    assert trace["events"][2]["output_summary"].endswith("was accepted.")
+    assert trace["events"][2]["output_details"]["Schema validation"] == "Passed"
+    assert "Synthetic protocol text" not in json.dumps(trace["events"])
+    assert all(event.get("occurred_at") for event in trace["events"])
     first_tools = {item["function"]["name"] for item in completions.requests[0]["tools"]}
     assert first_tools == {"inspect_workflow_contract", "read_source_chunk", "submit_result"}
     assert completions.requests[0]["messages"][0]["role"] == "system"
@@ -189,6 +201,52 @@ async def test_agent_refuses_submission_until_every_source_chunk_is_read(tmp_pat
     assert early_submit["name"] == "submit_result"
     assert early_submit["ok"] is False
     assert "Read every source chunk" in early_submit["error"]
+
+
+async def test_agent_revision_preserves_trace_and_receives_human_guidance(tmp_path) -> None:
+    completions = ScriptedCompletions([
+        ("inspect_workflow_contract", {}),
+        ("read_source_chunk", {"index": 1}),
+        ("submit_result", {"result": {"study_title": "Revised Synthetic Study"}}),
+    ])
+    settings = agent_settings()
+    ai = MetaAIClient(settings)
+    ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    progress_path = tmp_path / "progress.json"
+    progress_path.write_text(json.dumps({
+        "turn": 4,
+        "events": [{
+            "turn": 4,
+            "type": "user_feedback",
+            "actor": "user",
+            "summary": "Clarify the endpoint timing.",
+        }],
+    }), encoding="utf-8")
+
+    outcome = await ClinicalAgentRunner(
+        definition=get_agent("protocol-extraction"),
+        result_model=StudySummary,
+        ai=ai,
+        settings=settings,
+        progress_path=progress_path,
+    ).run(
+        objective="Revise the protocol extraction",
+        source="Synthetic protocol text",
+        options={
+            "review_feedback": [{"stage": "Extraction", "message": "Clarify the endpoint timing."}],
+            "_review_revision_result": {"study_title": "Initial Synthetic Study"},
+        },
+        stage="Extraction",
+    )
+
+    assert outcome.value.study_title == "Revised Synthetic Study"
+    trace = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert trace["events"][0]["actor"] == "user"
+    assert [event["turn"] for event in trace["events"][1:]] == [5, 6, 7]
+    initial_prompt = completions.requests[0]["messages"][1]["content"]
+    assert "HUMAN REVIEW GUIDANCE" in initial_prompt
+    assert "Clarify the endpoint timing." in initial_prompt
+    assert "Initial Synthetic Study" in initial_prompt
 
 
 async def test_protocol_extraction_runs_parallel_perspectives_then_reconciles(
@@ -481,10 +539,14 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
         "Variable & value-level mapping",
         "Rule augmentation",
     ]
-    assert {event["stage"] for event in progress["events"]} == {"Rule augmentation"}
+    assert {event["stage"] for event in progress["events"]} == {
+        "Domain mapping",
+        "Variable & value-level mapping",
+        "Rule augmentation",
+    }
 
 
-async def test_tlf_use_case_pauses_for_shell_review_before_programming(tmp_path) -> None:
+async def test_tlf_use_case_pauses_after_inventory_shell_and_programming(tmp_path) -> None:
     inventory = {
         "study_name": "SYN-101",
         "outputs": [{"output_id": "T-01", "output_type": "table", "title": "Change from baseline"}],
@@ -512,6 +574,7 @@ async def test_tlf_use_case_pauses_for_shell_review_before_programming(tmp_path)
         "programs": [{
             "output_id": "T-01",
             "input_datasets": ["ADSL", "ADEFF"],
+            "adam_sources": [{"dataset": "ADEFF", "variable": "CHG"}],
             "derivation_steps": ["Join ADSL and ADEFF", "Fit ANCOVA"],
             "r_code": "fit <- lm(CHG ~ TRT01P + BASE, data = adeff)",
             "sas_code": "proc glm data=adeff; model chg=trt01p base; run;",
@@ -533,15 +596,57 @@ async def test_tlf_use_case_pauses_for_shell_review_before_programming(tmp_path)
     progress_path = tmp_path / "agent" / "progress.json"
 
     use_case = TLFUseCase()
-    review = await use_case.prepare_review(UseCaseContext(inputs=[sap], options={"languages": ["r", "sas"]}, ai=ai, settings=settings, agent_progress_path=progress_path))
+    inventory_review = await use_case.prepare_review(UseCaseContext(inputs=[sap], options={"languages": ["r", "sas"]}, ai=ai, settings=settings, agent_progress_path=progress_path))
+    assert inventory_review is not None
+    assert inventory_review.review_stage == "tlf_inventory"
+    assert "conventional clinical-study TLF package" in json.dumps(completions.requests[:3])
 
-    assert review is not None
-    assert review.review_stage == "tlf_shell"
-    assert review.value.outputs[0].output_id == "T-01"
-    generated = await use_case.generate(UseCaseContext(inputs=[sap], options={"languages": ["r", "sas"], "tlf_shell_plan": review.value.model_dump(mode="json")}, ai=ai, settings=settings, agent_progress_path=progress_path))
+    inventory_options = {
+        "languages": ["r", "sas"],
+        "tlf_inventory_plan": inventory_review.value.model_dump(mode="json"),
+    }
+    shell_review = await use_case.prepare_review(UseCaseContext(inputs=[sap], options=inventory_options, ai=ai, settings=settings, agent_progress_path=progress_path))
+    assert shell_review is not None
+    assert shell_review.review_stage == "tlf_shell"
+    assert shell_review.value.outputs[0].output_id == "T-01"
+
+    shell_options = {
+        **inventory_options,
+        "tlf_shell_plan": shell_review.value.model_dump(mode="json"),
+    }
+    programming_review = await use_case.prepare_review(UseCaseContext(inputs=[sap], options=shell_options, ai=ai, settings=settings, agent_progress_path=progress_path))
+    assert programming_review is not None
+    assert programming_review.review_stage == "tlf_programming"
+    assert programming_review.value.programs[0].adam_sources[0].variable == "CHG"
+
+    generated = await use_case.generate(UseCaseContext(inputs=[sap], options={**shell_options, "tlf_programming_plan": programming_review.value.model_dump(mode="json")}, ai=ai, settings=settings, agent_progress_path=progress_path))
 
     assert generated.value.programs[0].output_id == "T-01"
     assert generated.value.outputs[0].readiness == "ready"
     progress = json.loads(progress_path.read_text(encoding="utf-8"))
     assert progress["stage"] == "Programming augmentation"
     assert progress["completed_stages"] == ["Output inventory", "Analysis & display specification", "Programming augmentation"]
+
+
+def test_tlf_inventory_tracks_source_supported_and_conventional_proposals() -> None:
+    plan = TLFInventoryPlan.model_validate({
+        "study_name": "SYN-101",
+        "outputs": [
+            {
+                "output_id": "T-01",
+                "output_type": "table",
+                "title": "Primary efficacy analysis",
+                "basis": "source_supported",
+            },
+            {
+                "output_id": "T-02",
+                "output_type": "table",
+                "title": "Demographics and baseline characteristics",
+                "basis": "conventional_proposal",
+                "source_reference": "CONVENTIONAL PROPOSAL — not specified in the SAP",
+            },
+        ],
+    })
+
+    assert plan.outputs[0].basis == "source_supported"
+    assert plan.outputs[1].basis == "conventional_proposal"

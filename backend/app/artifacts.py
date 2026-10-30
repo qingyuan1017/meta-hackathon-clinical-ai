@@ -544,6 +544,7 @@ def render_tlf(result: TLFPlan, output_dir: Path, languages: list[str]) -> list[
     json_path = output_dir / "tlf-specifications.json"
     json_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     xlsx_path = _render_tlf_xlsx(result, output_dir / "tlf-specifications.xlsx")
+    programs = {program.output_id.casefold(): program for program in result.programs}
     document = Document()
     _document_header(document, f"TLF Shells — {result.study_name}")
     for index, output in enumerate(result.outputs):
@@ -551,7 +552,8 @@ def render_tlf(result: TLFPlan, output_dir: Path, languages: list[str]) -> list[
             document.add_page_break()
         document.add_heading(f"{output.output_id}: {output.title}", level=1)
         document.add_paragraph(
-            f"Type: {output.output_type.title()}\nSection: {output.section}\nPopulation: {output.population}\n"
+            f"Type: {output.output_type.title()}\nBasis: {output.basis.replace('_', ' ').title()}\n"
+            f"Section: {output.section}\nPopulation: {output.population}\n"
             f"Status: {output.readiness.upper()}\nSource: {output.source_reference}"
         )
         if output.output_type == "table":
@@ -583,10 +585,22 @@ def render_tlf(result: TLFPlan, output_dir: Path, languages: list[str]) -> list[
             document.add_paragraph(footnote, style="Caption")
         for note in [*output.programming_notes, *output.blocking_items]:
             document.add_paragraph(note, style="Intense Quote")
+        program = programs.get(output.output_id.casefold())
+        if program and program.adam_sources:
+            document.add_heading("ADaM programming links", level=2)
+            source_table = document.add_table(rows=1, cols=4)
+            source_table.style = "Table Grid"
+            for index, heading in enumerate(("Dataset", "Variable", "Role", "Derivation")):
+                source_table.rows[0].cells[index].text = heading
+            for source in program.adam_sources:
+                cells = source_table.add_row().cells
+                cells[0].text = source.dataset
+                cells[1].text = source.variable
+                cells[2].text = source.role
+                cells[3].text = source.derivation
     docx_path = output_dir / "tlf-shells.docx"
     document.save(docx_path)
     paths = [json_path, xlsx_path, docx_path]
-    programs = {program.output_id.casefold(): program for program in result.programs}
     filenames: set[str] = {"tlf-setup"}
     if "r" in languages:
         setup = output_dir / "tlf-setup.R"
@@ -597,8 +611,9 @@ def render_tlf(result: TLFPlan, output_dir: Path, languages: list[str]) -> list[
             r_path = output_dir / f"{slug}.R"
             program = programs.get(output.output_id.casefold())
             body = program.r_code if program else "# TODO: add programming augmentation"
+            adam_links = ", ".join(f"{source.dataset}.{source.variable}" for source in (program.adam_sources if program else [])) or "TODO: confirm ADaM schema links"
             r_path.write_text(
-                f"# {DISCLAIMER}\nsource(\"tlf-setup.R\")\n\n# {output.output_id}: {output.title}\n{body}\n",
+                f"# {DISCLAIMER}\nsource(\"tlf-setup.R\")\n\n# {output.output_id}: {output.title}\n# Basis: {output.basis}\n# ADaM schema: {adam_links}\n{body}\n",
                 encoding="utf-8",
             )
             paths.append(r_path)
@@ -612,8 +627,9 @@ def render_tlf(result: TLFPlan, output_dir: Path, languages: list[str]) -> list[
             sas_path = output_dir / f"{slug}.sas"
             program = programs.get(output.output_id.casefold())
             body = program.sas_code if program else "/* TODO: add programming augmentation */"
+            adam_links = ", ".join(f"{source.dataset}.{source.variable}" for source in (program.adam_sources if program else [])) or "TODO: confirm ADaM schema links"
             sas_path.write_text(
-                f"/* {DISCLAIMER} */\n%include \"tlf-setup.sas\";\n\n/* {output.output_id}: {output.title} */\n{body}\n",
+                f"/* {DISCLAIMER} */\n%include \"tlf-setup.sas\";\n\n/* {output.output_id}: {output.title} */\n/* Basis: {output.basis} */\n/* ADaM schema: {adam_links} */\n{body}\n",
                 encoding="utf-8",
             )
             paths.append(sas_path)
@@ -624,9 +640,9 @@ def _render_tlf_xlsx(result: TLFPlan, path: Path) -> Path:
     workbook = Workbook()
     inventory = workbook.active
     inventory.title = "Output Inventory"
-    inventory.append(["Output ID", "Type", "Title", "Section", "Purpose", "Population", "Source Reference", "Readiness"])
+    inventory.append(["Output ID", "Type", "Title", "Basis", "Section", "Purpose", "Population", "Source Reference", "Readiness"])
     for output in result.outputs:
-        inventory.append([output.output_id, output.output_type, output.title, output.section, output.purpose, output.population, output.source_reference, output.readiness])
+        inventory.append([output.output_id, output.output_type, output.title, output.basis, output.section, output.purpose, output.population, output.source_reference, output.readiness])
 
     populations = workbook.create_sheet("Populations")
     populations.append(["Output ID", "Population", "Filter", "Treatment Variable", "Analysis Method"])
@@ -650,9 +666,13 @@ def _render_tlf_xlsx(result: TLFPlan, path: Path) -> Path:
             display.append([output.output_id, "figure", "FIGURE", output.figure.geometry, output.figure.x_axis, output.figure.y_axis, output.figure.group, output.figure.panel])
 
     programming = workbook.create_sheet("Programming")
-    programming.append(["Output ID", "Input Datasets", "Derivation Steps", "R Scaffold", "SAS Scaffold", "Review Notes"])
+    programming.append(["Output ID", "Input Datasets", "ADaM Schema Links", "Derivation Steps", "R Scaffold", "SAS Scaffold", "Review Notes"])
     for program in result.programs:
-        programming.append([program.output_id, "; ".join(program.input_datasets), "\n".join(program.derivation_steps), program.r_code, program.sas_code, "; ".join(program.review_notes)])
+        adam_links = "; ".join(
+            f"{source.dataset}.{source.variable} [{source.role}; {source.derivation}]"
+            for source in program.adam_sources
+        )
+        programming.append([program.output_id, "; ".join(program.input_datasets), adam_links, "\n".join(program.derivation_steps), program.r_code, program.sas_code, "; ".join(program.review_notes)])
 
     assumptions = workbook.create_sheet("Assumptions and Blockers")
     assumptions.append(["Type", "Output ID", "Text"])
