@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from time import perf_counter
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -60,6 +61,14 @@ class ClinicalAgentRunner:
         completed_stages: list[str] | None = None,
         prior_events: list[dict[str, Any]] | None = None,
     ) -> AgentOutcome:
+        saved_trace = self._load_trace()
+        if prior_events is None and isinstance(saved_trace.get("events"), list):
+            prior_events = [event for event in saved_trace["events"] if isinstance(event, dict)]
+        preserved_events = list(prior_events or [])
+        stage_turn_floor = (stage_index - 1) * self.settings.agent_max_turns
+        prior_turns = [event.get("turn", 0) for event in preserved_events]
+        base_turn = max([stage_turn_floor, *[int(value) for value in prior_turns if isinstance(value, int)]])
+
         all_chunks = chunk_text(source, self.settings.chunk_characters)
         chunks = all_chunks[: self.settings.max_source_chunks]
         warnings: list[str] = []
@@ -73,13 +82,40 @@ class ClinicalAgentRunner:
             "remote_calls": 0,
             "submitted": None,
         }
+        prompt_options = {
+            key: value
+            for key, value in options.items()
+            if key not in {"review_feedback", "_review_revision_result"}
+        }
+        review_entries = options.get("review_feedback")
+        current_feedback = [
+            item
+            for item in review_entries
+            if isinstance(item, dict) and (not stage or item.get("stage") == stage) and str(item.get("message", "")).strip()
+        ] if isinstance(review_entries, list) else []
+        feedback_section = ""
+        if current_feedback:
+            guidance = "\n".join(
+                f"{index}. {str(item['message']).strip()}"
+                for index, item in enumerate(current_feedback, start=1)
+            )
+            baseline = options.get("_review_revision_result")
+            baseline_text = json.dumps(baseline, ensure_ascii=False) if baseline is not None else "Not available"
+            feedback_section = (
+                "\n\nHUMAN REVIEW GUIDANCE\n"
+                f"{guidance}\n\nCURRENT DRAFT TO REVISE\n{baseline_text}\n\n"
+                "Apply the guidance in order; newer guidance overrides older conflicting guidance. "
+                "Treat it as a user decision, not as source evidence. Preserve source traceability and "
+                "leave unsupported requests explicit rather than inventing facts."
+            )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.definition.instructions()},
             {
                 "role": "user",
                 "content": (
-                    f"OBJECTIVE\n{objective}\n\nOPTIONS\n{json.dumps(options, ensure_ascii=False)}\n\n"
+                    f"OBJECTIVE\n{objective}\n\nOPTIONS\n{json.dumps(prompt_options, ensure_ascii=False)}\n\n"
                     f"SOURCE INVENTORY\n{len(chunks)} chunk(s) are available through read_source_chunk."
+                    f"{feedback_section}"
                 ),
             }
         ]
@@ -88,8 +124,8 @@ class ClinicalAgentRunner:
             "workflow": self.definition.workflow,
             "model": self.settings.meta_model,
             "status": "running",
-            "turn": 0,
-            "max_turns": self.settings.agent_max_turns * stage_count,
+            "turn": base_turn,
+            "max_turns": max(self.settings.agent_max_turns * stage_count, base_turn + self.settings.agent_max_turns),
             "stage": stage,
             "stage_index": stage_index,
             "stage_count": stage_count,
@@ -99,7 +135,7 @@ class ClinicalAgentRunner:
             "started_at": self._now(),
             "updated_at": self._now(),
             "messages": messages,
-            "events": list(prior_events or []),
+            "events": preserved_events,
         }
         self._save_trace(trace)
 
@@ -133,7 +169,7 @@ class ClinicalAgentRunner:
                 message = response.choices[0].message
                 assistant = message.model_dump(exclude_none=True)
                 messages.append(assistant)
-                trace["turn"] = ((stage_index - 1) * self.settings.agent_max_turns) + turn
+                trace["turn"] = base_turn + turn
                 trace["messages"] = messages
 
                 calls = list(message.tool_calls or [])
@@ -145,7 +181,19 @@ class ClinicalAgentRunner:
                         }
                     )
                     trace["events"].append(
-                        {"turn": trace["turn"], "type": "plain_text_rejected", "stage": stage}
+                        {
+                            "turn": trace["turn"],
+                            "type": "plain_text_rejected",
+                            "stage": stage,
+                            "summary": "The agent responded without using a required tool, so the turn was rejected.",
+                            "intent": "Continue the workflow with one auditable, approved action.",
+                            "input_summary": "No tool request was received.",
+                            "output_summary": "The agent was instructed to retry with exactly one approved tool.",
+                            "input_details": {"Tool requests": 0},
+                            "output_details": {"Policy": "Exactly one approved tool is required per turn."},
+                            "evidence": [],
+                            "occurred_at": self._now(),
+                        }
                     )
                     trace["updated_at"] = self._now()
                     self._save_trace(trace)
@@ -167,6 +215,14 @@ class ClinicalAgentRunner:
                             "type": "multiple_tools_rejected",
                             "count": len(calls),
                             "stage": stage,
+                            "summary": "The agent requested multiple tools in one turn, which this workflow does not allow.",
+                            "intent": "Continue the workflow with one auditable, approved action.",
+                            "input_summary": f"Requested {len(calls)} tools in a single turn.",
+                            "output_summary": "All requests were rejected and the agent was instructed to retry with one tool.",
+                            "input_details": {"Tool requests": len(calls)},
+                            "output_details": {"Policy": "Only one tool may run per turn."},
+                            "evidence": [],
+                            "occurred_at": self._now(),
                         }
                     )
                     trace["updated_at"] = self._now()
@@ -174,6 +230,7 @@ class ClinicalAgentRunner:
                     continue
 
                 call = calls[0]
+                tool_started = perf_counter()
                 arguments, argument_error = self._arguments(call.function.arguments)
                 if argument_error:
                     result = {"ok": False, "error": argument_error}
@@ -200,6 +257,8 @@ class ClinicalAgentRunner:
                 )
                 trace["messages"] = messages
                 trace["read_source_chunks"] = sorted(state["read_chunks"])
+                occurred_at = self._now()
+                duration_ms = max(round((perf_counter() - tool_started) * 1000), 1)
                 trace["events"].append(
                     {
                         "turn": trace["turn"],
@@ -208,9 +267,32 @@ class ClinicalAgentRunner:
                         "stage": stage,
                         "ok": bool(result.get("ok")),
                         "error": result.get("error"),
+                        "summary": self._tool_summary(call.function.name),
+                        "intent": self._tool_intent(call.function.name, arguments),
+                        "input_summary": self._input_summary(
+                            call.function.name,
+                            arguments,
+                            chunk_count=len(chunks),
+                        ),
+                        "output_summary": self._output_summary(
+                            call.function.name,
+                            result,
+                            state=state,
+                            chunk_count=len(chunks),
+                        ),
+                        "input_details": self._input_details(call.function.name, arguments),
+                        "output_details": self._output_details(
+                            call.function.name,
+                            result,
+                            state=state,
+                            chunk_count=len(chunks),
+                        ),
+                        "evidence": self._evidence_references(call.function.name, arguments, result),
+                        "duration_ms": duration_ms,
+                        "occurred_at": occurred_at,
                     }
                 )
-                trace["updated_at"] = self._now()
+                trace["updated_at"] = occurred_at
                 if state["submitted"] is not None:
                     trace["status"] = "completed"
                     if stage and stage not in trace["completed_stages"]:
@@ -407,6 +489,219 @@ class ClinicalAgentRunner:
         ]
 
     @staticmethod
+    def _tool_summary(name: str) -> str:
+        summaries = {
+            "inspect_workflow_contract": "Reviewed the workflow contract, validation rules, and expected result structure.",
+            "read_source_chunk": "Read one bounded section of the submitted source material.",
+            "submit_result": "Submitted the structured draft for schema and cross-reference validation.",
+        }
+        return summaries.get(
+            name,
+            "Queried an approved read-only reference service to support the draft.",
+        )
+
+    @staticmethod
+    def _tool_intent(name: str, arguments: dict[str, Any]) -> str:
+        if name == "inspect_workflow_contract":
+            return "Understand the required output structure and validation gates before drafting."
+        if name == "read_source_chunk":
+            index = arguments.get("index", "requested")
+            return f"Review source chunk {index} so the draft is grounded in the submitted material."
+        if name == "submit_result":
+            return "Validate the complete structured draft and finish the current workflow stage."
+        return f"Use the approved {name.replace('_', ' ')} reference service to resolve or support draft details."
+
+    @classmethod
+    def _input_details(cls, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name == "inspect_workflow_contract":
+            return {"Parameters": "None"}
+        if name == "read_source_chunk":
+            return {"Chunk requested": arguments.get("index", "Invalid or missing")}
+        if name == "submit_result":
+            draft = arguments.get("result")
+            if not isinstance(draft, dict):
+                return {"Draft payload": "Invalid or missing"}
+            details: dict[str, Any] = {
+                "Top-level fields": len(draft),
+                "Field names": list(draft)[:12],
+            }
+            collections = {
+                key: len(value)
+                for key, value in draft.items()
+                if isinstance(value, list)
+            }
+            if collections:
+                details["Collection sizes"] = collections
+            return details
+
+        details = {}
+        for key, value in list(arguments.items())[:12]:
+            details[key.replace("_", " ").title()] = cls._safe_trace_value(key, value)
+        return details or {"Parameters": "None"}
+
+    @classmethod
+    def _output_details(
+        cls,
+        name: str,
+        result: dict[str, Any],
+        *,
+        state: dict[str, Any],
+        chunk_count: int,
+    ) -> dict[str, Any]:
+        if result.get("ok") is False:
+            details: dict[str, Any] = {
+                "Status": "Rejected",
+                "Reason": str(result.get("error", "The tool did not accept the request."))[:500],
+            }
+            unread = result.get("unread")
+            if isinstance(unread, list):
+                details["Unread source chunks"] = unread[:20]
+            problems = result.get("problems")
+            if isinstance(problems, list):
+                details["Validation issue count"] = len(problems)
+                details["Validation issues"] = [cls._problem_text(item) for item in problems[:8]]
+            return details
+
+        if name == "inspect_workflow_contract":
+            schema = result.get("result_schema")
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            rules = result.get("submission_rules")
+            return {
+                "Status": "Loaded",
+                "Workflow": result.get("workflow", "Unknown"),
+                "Available source chunks": result.get("source_chunks", chunk_count),
+                "Required result fields": list(properties)[:20],
+                "Submission rules": rules[:10] if isinstance(rules, list) else [],
+            }
+        if name == "read_source_chunk":
+            return {
+                "Status": "Reviewed",
+                "Chunk": f"{result.get('index')} of {result.get('total', chunk_count)}",
+                "Chunks reviewed": len(state["read_chunks"]),
+                "Chunks remaining": max(chunk_count - len(state["read_chunks"]), 0),
+                "Source text": "Used by the agent but omitted from the trace.",
+            }
+        if name == "submit_result":
+            return {
+                "Schema validation": "Passed",
+                "Cross-reference validation": "Passed",
+                "Draft status": "Accepted",
+            }
+
+        details = {"Status": "Completed"}
+        for key, value in result.items():
+            if key in {"ok", "error", "content", "text", "body", "payload", "result"}:
+                if key == "result":
+                    details["Result"] = cls._safe_trace_value(key, value)
+                continue
+            details[key.replace("_", " ").title()] = cls._safe_trace_value(key, value)
+            if len(details) >= 10:
+                break
+        return details
+
+    @staticmethod
+    def _evidence_references(
+        name: str, arguments: dict[str, Any], result: dict[str, Any]
+    ) -> list[str]:
+        if name == "inspect_workflow_contract":
+            return [f"Workflow contract · {result.get('workflow', 'selected workflow')}"]
+        if name == "read_source_chunk":
+            return [f"Submitted source · chunk {result.get('index', arguments.get('index', '?'))} of {result.get('total', '?')}"]
+        if name == "submit_result":
+            if result.get("ok") is False:
+                return ["Backend schema and cross-reference validators"]
+            return [
+                "All submitted source chunks",
+                "Backend schema validation",
+                "Deterministic cross-reference verification",
+            ]
+        return [f"Approved external reference tool · {name.replace('_', ' ')}"]
+
+    @staticmethod
+    def _safe_trace_value(key: str, value: Any) -> Any:
+        normalized = key.casefold()
+        if any(token in normalized for token in ("content", "text", "body", "document", "payload")):
+            return "Hidden from trace"
+        if isinstance(value, str):
+            return value[:240] + ("…" if len(value) > 240 else "")
+        if isinstance(value, (bool, int, float)) or value is None:
+            return value
+        if isinstance(value, list):
+            if all(isinstance(item, (str, bool, int, float)) or item is None for item in value[:8]):
+                return value[:8]
+            return f"{len(value)} item(s)"
+        if isinstance(value, dict):
+            return f"{len(value)} field(s)"
+        return str(value)[:240]
+
+    @staticmethod
+    def _problem_text(problem: Any) -> str:
+        if isinstance(problem, str):
+            return problem[:500]
+        if isinstance(problem, dict):
+            location = ".".join(str(item) for item in problem.get("loc", []))
+            message = str(problem.get("msg", problem.get("type", "Validation issue")))
+            return f"{location}: {message}"[:500] if location else message[:500]
+        return str(problem)[:500]
+
+    @staticmethod
+    def _input_summary(name: str, arguments: dict[str, Any], *, chunk_count: int) -> str:
+        if name == "inspect_workflow_contract":
+            return "No parameters; the contract is supplied by the selected workflow."
+        if name == "read_source_chunk":
+            index = arguments.get("index")
+            return f"Requested source chunk {index} of {chunk_count}."
+        if name == "submit_result":
+            result = arguments.get("result")
+            if isinstance(result, dict):
+                fields = list(result)[:8]
+                suffix = "…" if len(result) > len(fields) else ""
+                return f"Submitted {len(result)} top-level fields: {', '.join(fields)}{suffix}."
+            return "Submitted a draft result for validation."
+        parameter_names = sorted(arguments)
+        if not parameter_names:
+            return "No parameters were supplied."
+        return f"Supplied parameters: {', '.join(parameter_names)}. Values remain hidden in the source-safe trace."
+
+    @staticmethod
+    def _output_summary(
+        name: str,
+        result: dict[str, Any],
+        *,
+        state: dict[str, Any],
+        chunk_count: int,
+    ) -> str:
+        if result.get("ok") is False:
+            return "The request was not accepted; review the recorded error before the next turn."
+        if name == "inspect_workflow_contract":
+            schema = result.get("result_schema")
+            properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+            rules = result.get("submission_rules")
+            rule_count = len(rules) if isinstance(rules, list) else 0
+            return f"Loaded {len(properties)} top-level result fields and {rule_count} submission rules."
+        if name == "read_source_chunk":
+            index = result.get("index")
+            remaining = max(chunk_count - len(state["read_chunks"]), 0)
+            return f"Reviewed source chunk {index}; {remaining} chunk(s) remain."
+        if name == "submit_result":
+            return "The draft passed schema and cross-reference validation and was accepted."
+
+        facts: list[str] = []
+        for key, value in result.items():
+            if key in {"ok", "error"}:
+                continue
+            label = key.replace("_", " ")
+            if isinstance(value, list):
+                facts.append(f"{label}: {len(value)} item(s)")
+            elif isinstance(value, dict):
+                facts.append(f"{label}: {len(value)} field(s)")
+            elif isinstance(value, (bool, int, float)):
+                facts.append(f"{label}: {value}")
+            if len(facts) == 4:
+                break
+        return "; ".join(facts) + "." if facts else "The reference service completed successfully."
+
+    @staticmethod
     def _arguments(raw: str | None) -> tuple[dict[str, Any], str | None]:
         try:
             value = json.loads(raw or "{}")
@@ -423,6 +718,15 @@ class ClinicalAgentRunner:
         temporary = self.progress_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(trace, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         temporary.replace(self.progress_path)
+
+    def _load_trace(self) -> dict[str, Any]:
+        if self.progress_path is None or not self.progress_path.is_file():
+            return {}
+        try:
+            loaded = json.loads(self.progress_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
 
     @staticmethod
     def _now() -> str:
@@ -611,8 +915,54 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
                 problems.append(f"TLF output {output_id} is missing a programming augmentation.")
             for output_id in sorted(extra):
                 problems.append(f"TLF program {output_id} does not reference a defined output.")
+            outputs_by_id = {output.output_id.casefold(): output for output in value.outputs}
+            for program in value.programs:
+                input_datasets = {dataset.casefold() for dataset in program.input_datasets}
+                adam_links = [
+                    (source.dataset.casefold(), source.variable.casefold())
+                    for source in program.adam_sources
+                ]
+                if len(adam_links) != len(set(adam_links)):
+                    problems.append(f"TLF program {program.output_id} has duplicate ADaM schema links.")
+                for source in program.adam_sources:
+                    if source.dataset.casefold() not in input_datasets:
+                        problems.append(
+                            f"TLF program {program.output_id} ADaM link {source.dataset}.{source.variable} "
+                            "references an undeclared input dataset."
+                        )
+                output = outputs_by_id.get(program.output_id.casefold())
+                if output is not None:
+                    expected_links = {
+                        (source.dataset.casefold(), source.variable.casefold())
+                        for source in output.source_variables
+                    }
+                    actual_links = set(adam_links)
+                    for dataset, variable in sorted(expected_links - actual_links):
+                        problems.append(
+                            f"TLF program {program.output_id} is missing the approved ADaM schema link "
+                            f"{dataset.upper()}.{variable.upper()}."
+                        )
+                    for dataset, variable in sorted(actual_links - expected_links):
+                        problems.append(
+                            f"TLF program {program.output_id} ADaM schema link "
+                            f"{dataset.upper()}.{variable.upper()} is not defined in the approved shell."
+                        )
     elif workflow == "tlf-programming-augmentation":
         program_ids = [program.output_id.casefold() for program in value.programs]
         if len(program_ids) != len(set(program_ids)):
             problems.append("TLF program output identifiers must be unique (case-insensitive).")
+        for program in value.programs:
+            input_datasets = {dataset.casefold() for dataset in program.input_datasets}
+            adam_links = [
+                (source.dataset.casefold(), source.variable.casefold())
+                for source in program.adam_sources
+            ]
+            if len(adam_links) != len(set(adam_links)):
+                problems.append(f"TLF program {program.output_id} has duplicate ADaM schema links.")
+            for source in program.adam_sources:
+                if source.dataset.casefold() not in input_datasets:
+                    problems.append(
+                        f"TLF program {program.output_id} ADaM link {source.dataset}.{source.variable} "
+                        "references an undeclared input dataset."
+                    )
     return list(dict.fromkeys(problems))

@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { ArrowUpRight, Bot, Download, FolderClock, ShieldCheck, Sparkles } from "lucide-react";
 import { ConfigStatus } from "@/components/config-status";
-import { RecentJobs } from "@/components/recent-jobs";
 import { workspaceGroups } from "@/lib/workflows";
 import { API_URL } from "@/lib/api";
 
@@ -41,7 +40,8 @@ export default function HomePage() {
       <section className="mt-10" aria-labelledby="workspaces-heading">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Functional areas</p>
-          <h2 id="workspaces-heading" className="mt-1 text-xl font-semibold tracking-tight text-zinc-100">Clinical development workbenches</h2>
+          <h2 id="workspaces-heading" className="mt-1 text-xl font-semibold tracking-tight text-zinc-100">Clinical development modules</h2>
+          <p className="mt-2 text-sm text-zinc-500">Each module keeps its own generation history, review queue, and artifacts together.</p>
         </div>
         <div className="mt-5 grid gap-4 xl:grid-cols-3">
           {workspaceGroups.map((group, groupIndex) => (
@@ -67,13 +67,12 @@ export default function HomePage() {
         </div>
       </section>
 
-      <div className="mt-10 grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <RecentJobs />
+      <div className="mt-10">
         <section className="rounded-xl border border-white/10 bg-[#18181b] p-5 text-white shadow-sm" aria-labelledby="samples-heading">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-300">Safe starting points</p>
           <h2 id="samples-heading" className="mt-2 text-lg font-semibold">Synthetic sample inputs</h2>
           <p className="mt-2 text-sm leading-5 text-zinc-400">Fictional files for exercising every workflow without sensitive data.</p>
-          <div className="mt-5 grid grid-cols-2 gap-2">
+          <div className="mt-5 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
             {[["synthetic-protocol.md", "Protocol"], ["blank-crf.pdf", "Blank CRF"], ["edc-specification.json", "EDC spec"], ["synthetic-sap.md", "SAP"], ["adam-metadata.json", "ADaM"]].map(([file, label]) => (
               <a key={file} href={`${API_URL}/api/v1/samples/${file}`} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2.5 text-xs font-medium text-zinc-200 transition hover:bg-white/10"><Download size={13} />{label}</a>
             ))}
