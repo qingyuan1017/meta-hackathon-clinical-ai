@@ -5,6 +5,7 @@ import re
 from contextlib import AsyncExitStack
 from typing import Any, TypeVar
 
+import httpx
 from mcp import Client as MCPClient
 from openai import AsyncOpenAI
 from pydantic import BaseModel, ValidationError
@@ -52,6 +53,43 @@ class MetaAIClient:
             timeout=self.settings.ai_timeout_seconds,
             max_retries=2,
         )
+
+    async def transcribe_wav(self, audio: bytes, filename: str = "guidance.wav") -> dict[str, Any]:
+        """Transcribe a normalized mono PCM WAV with Meta Muse Voice Transcribe."""
+
+        request = {
+            "mode": "PUSH_TO_TALK",
+            "model": self.settings.meta_transcription_model,
+            "audioEncoding": "WAV",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.settings.transcription_timeout_seconds) as client:
+                response = await client.post(
+                    self.settings.meta_transcription_url,
+                    headers={"Authorization": f"Bearer {self.settings.meta_api_key}"},
+                    files={
+                        "request": (None, json.dumps(request), "application/json"),
+                        "audio": (filename, audio, "audio/wav"),
+                    },
+                )
+        except httpx.HTTPError as exc:
+            raise AIResponseError("Meta voice transcription could not be reached.") from exc
+        if response.status_code != 200:
+            detail = {
+                400: "The recording could not be decoded or exceeded the duration limit.",
+                401: "The Meta API credential was not accepted.",
+                413: "The recording exceeded Meta's upload limit.",
+                429: "Meta voice transcription is rate limited; try again shortly.",
+            }.get(response.status_code, "Meta voice transcription failed.")
+            raise AIResponseError(detail)
+        try:
+            result = response.json()
+        except ValueError as exc:
+            raise AIResponseError("Meta voice transcription returned invalid JSON.") from exc
+        transcript = result.get("transcript") if isinstance(result, dict) else None
+        if not isinstance(transcript, str) or not transcript.strip():
+            raise AIResponseError("No speech was detected in the recording.")
+        return result
 
     async def generate_structured(
         self,

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import shutil
+import wave
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import Literal
 from uuid import uuid4
@@ -18,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from .agents import AGENTS, get_agent
 from .agents.runtime import verify_result
+from .ai import AIResponseError, MetaAIClient
 from .artifacts import artifact_record
 from .config import get_settings
 from .db import get_db, initialize_database
@@ -36,10 +39,14 @@ from .schemas import (
     JobList,
     JobRead,
     JobResultUpdate,
+    ReviewFeedbackUpdate,
     SDTMDomainMappingUpdate,
     SDTMVariableMappingUpdate,
+    TLFInventoryPlanUpdate,
+    TLFProgrammingPlanUpdate,
     TLFShellPlanUpdate,
     UseCaseRead,
+    VoiceTranscriptionRead,
 )
 from .security import detect_identifiers, validate_upload_metadata, verify_signature
 from .use_cases import USE_CASES, get_use_case
@@ -89,6 +96,7 @@ def health(db: Session = Depends(get_db)) -> HealthRead:
         meta_configured=settings.meta_configured,
         meta_base_url=settings.meta_api_base_url,
         meta_model=settings.meta_model or None,
+        meta_transcription_model=settings.meta_transcription_model or None,
     )
 
 
@@ -311,6 +319,7 @@ def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentP
             agent_id=definition.id,
             workflow=job.workflow,
             status=job.status,
+            model=settings.meta_model,
             turn=0,
             max_turns=settings.agent_max_turns,
             stage=None,
@@ -319,6 +328,8 @@ def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentP
             completed_stages=[],
             total_source_chunks=0,
             read_source_chunks=[],
+            started_at=None,
+            updated_at=None,
             events=[],
         )
     try:
@@ -329,10 +340,20 @@ def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentP
         AgentEventRead(
             turn=int(event.get("turn", 0)),
             type=str(event.get("type", "unknown")),
+            actor=event.get("actor") if event.get("actor") in {"agent", "user", "system"} else "agent",
             name=str(event["name"]) if event.get("name") else None,
             stage=str(event["stage"]) if event.get("stage") else None,
             ok=event.get("ok") if isinstance(event.get("ok"), bool) else None,
             error=str(event["error"])[:500] if event.get("error") else None,
+            summary=str(event["summary"])[:4000] if event.get("summary") else None,
+            intent=str(event["intent"])[:4000] if event.get("intent") else None,
+            input_summary=str(event["input_summary"])[:4000] if event.get("input_summary") else None,
+            output_summary=str(event["output_summary"])[:4000] if event.get("output_summary") else None,
+            input_details=event.get("input_details") if isinstance(event.get("input_details"), dict) else {},
+            output_details=event.get("output_details") if isinstance(event.get("output_details"), dict) else {},
+            evidence=[str(item)[:500] for item in event.get("evidence", []) if isinstance(item, (str, int, float))],
+            duration_ms=int(event["duration_ms"]) if isinstance(event.get("duration_ms"), (int, float)) else None,
+            occurred_at=event.get("occurred_at"),
         )
         for event in progress.get("events", [])
         if isinstance(event, dict)
@@ -341,6 +362,7 @@ def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentP
         agent_id=definition.id,
         workflow=job.workflow,
         status=str(progress.get("status", job.status)),
+        model=str(progress["model"]) if progress.get("model") else settings.meta_model,
         turn=int(progress.get("turn", 0)),
         max_turns=int(progress.get("max_turns", settings.agent_max_turns)),
         stage=str(progress["stage"]) if progress.get("stage") else None,
@@ -349,12 +371,93 @@ def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentP
         completed_stages=[str(item) for item in progress.get("completed_stages", [])],
         total_source_chunks=int(progress.get("total_source_chunks", 0)),
         read_source_chunks=[int(item) for item in progress.get("read_source_chunks", [])],
+        started_at=progress.get("started_at"),
+        updated_at=progress.get("updated_at"),
         events=events,
     )
 
 
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/feedback",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def submit_review_feedback(
+    job_id: str,
+    update: ReviewFeedbackUpdate,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    """Record human guidance and rerun the current review stage without approving it."""
+
+    if not settings.meta_configured:
+        raise HTTPException(status_code=503, detail="Meta API key and model are not configured.")
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    review_stage = options.get("_review_stage")
+    if job.status != "review_required" or not isinstance(review_stage, str):
+        raise HTTPException(status_code=409, detail="This job is not waiting for human review feedback.")
+
+    message = update.message.strip()
+    if not message:
+        raise HTTPException(status_code=422, detail="Review feedback cannot be empty.")
+    _reject_review_identifiers(message, "review feedback")
+    submitted_at = datetime.now(timezone.utc).isoformat()
+    prior_feedback = options.get("review_feedback")
+    feedback = list(prior_feedback) if isinstance(prior_feedback, list) else []
+    feedback.append({"stage": review_stage, "message": message, "submitted_at": submitted_at})
+    options["review_feedback"] = feedback
+    if job.result_json:
+        options["_review_revision_result"] = json.loads(job.result_json)
+    _append_user_feedback_event(job, review_stage, message, submitted_at)
+    return _resume_review(job, options, db, preserve_review_context=True)
+
+
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/transcription",
+    response_model=VoiceTranscriptionRead,
+)
+async def transcribe_review_guidance(
+    job_id: str,
+    audio: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> VoiceTranscriptionRead:
+    """Transcribe synthetic/de-identified review guidance without storing the audio."""
+
+    if not settings.meta_voice_configured:
+        raise HTTPException(status_code=503, detail="Meta voice transcription is not configured.")
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    if job.status != "review_required" or not isinstance(options.get("_review_stage"), str):
+        raise HTTPException(status_code=409, detail="This job is not waiting for human review guidance.")
+    if audio.content_type not in {"audio/wav", "audio/wave", "audio/x-wav"}:
+        raise HTTPException(status_code=415, detail="Voice guidance must be a WAV recording.")
+
+    limit = settings.max_audio_mb * 1024 * 1024
+    payload = await audio.read(limit + 1)
+    await audio.close()
+    if not payload:
+        raise HTTPException(status_code=422, detail="The voice recording is empty.")
+    if len(payload) > limit:
+        raise HTTPException(status_code=413, detail=f"Voice recordings are limited to {settings.max_audio_mb} MB.")
+    _validate_voice_wav(payload)
+    try:
+        result = await MetaAIClient(settings).transcribe_wav(payload)
+    except AIResponseError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return VoiceTranscriptionRead(
+        transcript=str(result["transcript"]).strip(),
+        model=settings.meta_transcription_model,
+        duration_ms=int(result["audioDurationMs"]) if isinstance(result.get("audioDurationMs"), (int, float)) else None,
+        session_id=str(result["sessionId"]) if result.get("sessionId") else None,
+    )
+
+
 @app.post(f"{settings.api_prefix}/jobs/{{job_id}}/retry", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
-def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
+async def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     if not settings.meta_configured:
         raise HTTPException(status_code=503, detail="Meta API key and model are not configured.")
     job = db.get(Job, job_id)
@@ -367,12 +470,18 @@ def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     job.artifacts.clear()
     options = json.loads(job.options_json)
     options.pop("_review_stage", None)
+    if job.workflow == "tlf":
+        options.pop("tlf_inventory_plan", None)
+        options.pop("tlf_shell_plan", None)
+        options.pop("tlf_programming_plan", None)
     job.options_json = json.dumps(options, ensure_ascii=False)
     job.status = "queued"
     job.result_json = None
     job.warnings_json = "[]"
     job.error = None
     job.completed_at = None
+    progress_path = settings.jobs_dir / job.id / "agent" / "progress.json"
+    progress_path.unlink(missing_ok=True)
     db.commit()
     db.refresh(job)
     runner.enqueue(job.id)
@@ -469,6 +578,33 @@ async def approve_sdtm_variable_mapping(
 
 
 @app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/tlf-inventory",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def approve_tlf_inventory(
+    job_id: str,
+    update: TLFInventoryPlanUpdate,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    """Approve the output table of contents and start detailed shell generation."""
+
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    if job.workflow != "tlf" or job.status != "review_required" or options.get("_review_stage") != "tlf_inventory":
+        raise HTTPException(status_code=409, detail="This job is not waiting for TLF output inventory review.")
+    try:
+        TLFUseCase.validate_inventory_plan(update.inventory_plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _reject_review_identifiers(update.inventory_plan.model_dump_json(), "TLF output inventory")
+    options["tlf_inventory_plan"] = update.inventory_plan.model_dump(mode="json")
+    return _resume_review(job, options, db)
+
+
+@app.put(
     f"{settings.api_prefix}/jobs/{{job_id}}/tlf-shell",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
@@ -487,11 +623,43 @@ async def approve_tlf_shell(
     if job.workflow != "tlf" or job.status != "review_required" or options.get("_review_stage") != "tlf_shell":
         raise HTTPException(status_code=409, detail="This job is not waiting for TLF shell review.")
     try:
-        TLFUseCase.validate_shell_plan(update.shell_plan)
+        if options.get("tlf_inventory_plan") is None:
+            options["tlf_inventory_plan"] = TLFUseCase.inventory_from_shell(update.shell_plan).model_dump(mode="json")
+        TLFUseCase.validate_shell_plan(update.shell_plan, TLFUseCase._approved_inventory_plan(options))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _reject_review_identifiers(update.shell_plan.model_dump_json(), "TLF shell")
     options["tlf_shell_plan"] = update.shell_plan.model_dump(mode="json")
+    return _resume_review(job, options, db)
+
+
+@app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/tlf-programming",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def approve_tlf_programming(
+    job_id: str,
+    update: TLFProgrammingPlanUpdate,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    """Approve ADaM-linked programming scaffolds and render final artifacts."""
+
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    if job.workflow != "tlf" or job.status != "review_required" or options.get("_review_stage") != "tlf_programming":
+        raise HTTPException(status_code=409, detail="This job is not waiting for TLF programming review.")
+    try:
+        TLFUseCase.validate_programming_plan(
+            update.programming_plan,
+            TLFUseCase._approved_shell_plan(options),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _reject_review_identifiers(update.programming_plan.model_dump_json(), "TLF programming plan")
+    options["tlf_programming_plan"] = update.programming_plan.model_dump(mode="json")
     return _resume_review(job, options, db)
 
 
@@ -621,6 +789,26 @@ async def _save_limited(upload: UploadFile, destination: Path) -> None:
     await upload.close()
 
 
+def _validate_voice_wav(payload: bytes) -> None:
+    try:
+        with wave.open(BytesIO(payload), "rb") as recording:
+            channels = recording.getnchannels()
+            sample_width = recording.getsampwidth()
+            sample_rate = recording.getframerate()
+            frame_count = recording.getnframes()
+    except (wave.Error, EOFError) as exc:
+        raise HTTPException(status_code=422, detail="The voice recording is not a valid WAV file.") from exc
+    if channels != 1 or sample_width != 2 or sample_rate not in {16_000, 24_000}:
+        raise HTTPException(
+            status_code=422,
+            detail="Voice guidance must be mono 16-bit PCM WAV at 16 kHz or 24 kHz.",
+        )
+    if frame_count <= 0:
+        raise HTTPException(status_code=422, detail="The voice recording contains no audio frames.")
+    if frame_count > sample_rate * 600:
+        raise HTTPException(status_code=413, detail="Voice recordings are limited to 10 minutes.")
+
+
 def _validate_required_inputs(workflow: str, files: list[UploadFile], options: dict) -> None:
     use_case = get_use_case(workflow)
     filenames = [upload.filename or "" for upload in files]
@@ -648,7 +836,14 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
     warnings = json.loads(job.warnings_json or "[]") if include_result else []
     options = json.loads(job.options_json)
     review_stage = options.get("_review_stage") if job.status == "review_required" else None
-    if review_stage not in {"edc_source", "domain_mapping", "variable_mapping", "tlf_shell"}:
+    if review_stage not in {
+        "edc_source",
+        "domain_mapping",
+        "variable_mapping",
+        "tlf_inventory",
+        "tlf_shell",
+        "tlf_programming",
+    }:
         review_stage = None
     artifacts = [
         ArtifactRead(
@@ -691,21 +886,71 @@ def _resume_sdtm_review(job: Job, options: dict, db: Session) -> JobRead:
     return _resume_review(job, options, db)
 
 
-def _resume_review(job: Job, options: dict, db: Session) -> JobRead:
+def _resume_review(job: Job, options: dict, db: Session, *, preserve_review_context: bool = False) -> JobRead:
     options.pop("_review_stage", None)
+    if not preserve_review_context:
+        options.pop("review_feedback", None)
+        options.pop("_review_revision_result", None)
     job.options_json = json.dumps(options, ensure_ascii=False)
     job.status = "queued"
-    job.result_json = None
+    if not preserve_review_context:
+        job.result_json = None
     job.warnings_json = "[]"
     job.error = None
     job.completed_at = None
     job.updated_at = datetime.now(timezone.utc)
-    progress_path = settings.jobs_dir / job.id / "agent" / "progress.json"
-    progress_path.unlink(missing_ok=True)
     db.commit()
     db.refresh(job)
     runner.enqueue(job.id)
     return _job_read(job)
+
+
+def _append_user_feedback_event(job: Job, stage: str, message: str, occurred_at: str) -> None:
+    path = settings.jobs_dir / job.id / "agent" / "progress.json"
+    progress: dict = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                progress = loaded
+        except (OSError, json.JSONDecodeError):
+            progress = {}
+    events = progress.get("events")
+    if not isinstance(events, list):
+        events = []
+    event_turns = [event.get("turn", 0) for event in events if isinstance(event, dict)]
+    next_turn = max([int(progress.get("turn", 0)), *[int(value) for value in event_turns if isinstance(value, int)]]) + 1
+    events.append({
+        "turn": next_turn,
+        "type": "user_feedback",
+        "actor": "user",
+        "name": "review_feedback",
+        "stage": stage,
+        "summary": message,
+        "intent": "Guide a revision of the current draft without approving or advancing the workflow stage.",
+        "input_summary": message,
+        "output_summary": "The current stage was queued for an agent revision.",
+        "input_details": {"Review stage": stage},
+        "output_details": {"Decision": "Revise current stage"},
+        "evidence": ["Human review guidance"],
+        "occurred_at": occurred_at,
+    })
+    definition = get_agent(job.workflow)
+    progress.update({
+        "agent_id": progress.get("agent_id", definition.id),
+        "workflow": job.workflow,
+        "status": "queued",
+        "model": progress.get("model", settings.meta_model),
+        "turn": next_turn,
+        "max_turns": max(int(progress.get("max_turns", settings.agent_max_turns)), next_turn + settings.agent_max_turns),
+        "stage": stage,
+        "updated_at": occurred_at,
+        "events": events,
+    })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(progress, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
 
 
 def _safe_artifact_path(job_id: str, relative_path: str) -> Path:

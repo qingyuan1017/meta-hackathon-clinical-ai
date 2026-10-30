@@ -204,6 +204,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Review Feedback
+         * @description Record human guidance and rerun the current review stage without approving it.
+         */
+        post: operations["submit_review_feedback_api_v1_jobs__job_id__feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/transcription": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe Review Guidance
+         * @description Transcribe synthetic/de-identified review guidance without storing the audio.
+         */
+        post: operations["transcribe_review_guidance_api_v1_jobs__job_id__transcription_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/retry": {
         parameters: {
             query?: never;
@@ -281,6 +321,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/tlf-inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Tlf Inventory
+         * @description Approve the output table of contents and start detailed shell generation.
+         */
+        put: operations["approve_tlf_inventory_api_v1_jobs__job_id__tlf_inventory_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/tlf-shell": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Tlf Shell
+         * @description Approve the TLF shell and start programming augmentation.
+         */
+        put: operations["approve_tlf_shell_api_v1_jobs__job_id__tlf_shell_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/tlf-programming": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Tlf Programming
+         * @description Approve ADaM-linked programming scaffolds and render final artifacts.
+         */
+        put: operations["approve_tlf_programming_api_v1_jobs__job_id__tlf_programming_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/result": {
         parameters: {
             query?: never;
@@ -345,6 +445,12 @@ export interface components {
             turn: number;
             /** Type */
             type: string;
+            /**
+             * Actor
+             * @default agent
+             * @enum {string}
+             */
+            actor: "agent" | "user" | "system";
             /** Name */
             name?: string | null;
             /** Stage */
@@ -353,6 +459,28 @@ export interface components {
             ok?: boolean | null;
             /** Error */
             error?: string | null;
+            /** Summary */
+            summary?: string | null;
+            /** Intent */
+            intent?: string | null;
+            /** Input Summary */
+            input_summary?: string | null;
+            /** Output Summary */
+            output_summary?: string | null;
+            /** Input Details */
+            input_details?: {
+                [key: string]: unknown;
+            };
+            /** Output Details */
+            output_details?: {
+                [key: string]: unknown;
+            };
+            /** Evidence */
+            evidence?: string[];
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Occurred At */
+            occurred_at?: string | null;
         };
         /** AgentProgressRead */
         AgentProgressRead: {
@@ -362,6 +490,8 @@ export interface components {
             workflow: string;
             /** Status */
             status: string;
+            /** Model */
+            model?: string | null;
             /** Turn */
             turn: number;
             /** Max Turns */
@@ -384,6 +514,10 @@ export interface components {
             total_source_chunks: number;
             /** Read Source Chunks */
             read_source_chunks: number[];
+            /** Started At */
+            started_at?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
             /** Events */
             events: components["schemas"]["AgentEventRead"][];
         };
@@ -429,6 +563,11 @@ export interface components {
              * @default []
              */
             files: string[];
+        };
+        /** Body_transcribe_review_guidance_api_v1_jobs__job_id__transcription_post */
+        Body_transcribe_review_guidance_api_v1_jobs__job_id__transcription_post: {
+            /** Audio */
+            audio: string;
         };
         /** CDISCDatasetRead */
         CDISCDatasetRead: {
@@ -550,6 +689,8 @@ export interface components {
             meta_base_url: string;
             /** Meta Model */
             meta_model: string | null;
+            /** Meta Transcription Model */
+            meta_transcription_model: string | null;
             /**
              * Disclaimer
              * @default DRAFT — HACKATHON DEMONSTRATION ONLY. Not validated for clinical or regulatory use. Qualified experts must review all content.
@@ -592,7 +733,7 @@ export interface components {
             /** Completed At */
             completed_at: string | null;
             /** Review Stage */
-            review_stage?: ("edc_source" | "domain_mapping" | "variable_mapping" | "tlf_shell") | null;
+            review_stage?: ("edc_source" | "domain_mapping" | "variable_mapping" | "tlf_inventory" | "tlf_shell" | "tlf_programming") | null;
             /** Result */
             result?: {
                 [key: string]: unknown;
@@ -610,6 +751,11 @@ export interface components {
             result: {
                 [key: string]: unknown;
             };
+        };
+        /** ReviewFeedbackUpdate */
+        ReviewFeedbackUpdate: {
+            /** Message */
+            message: string;
         };
         /** SDTMDataset */
         SDTMDataset: {
@@ -754,6 +900,306 @@ export interface components {
         SDTMVariableMappingUpdate: {
             variable_mapping: components["schemas"]["SDTMVariableMappingPlan"];
         };
+        /** TLFAnalysisPlan */
+        TLFAnalysisPlan: {
+            /** Study Name */
+            study_name: string;
+            /**
+             * Analysis Standard
+             * @default ADaM metadata supplied by user
+             */
+            analysis_standard: string;
+            /** Outputs */
+            outputs: components["schemas"]["TLFSpec"][];
+            /** Assumptions */
+            assumptions?: string[];
+            /** Unresolved Items */
+            unresolved_items?: string[];
+        };
+        /** TLFColumn */
+        TLFColumn: {
+            /**
+             * Column Id
+             * @default COL
+             */
+            column_id: string;
+            /** Heading */
+            heading: string;
+            /**
+             * Source
+             * @default TODO: confirm source
+             */
+            source: string;
+            /**
+             * Statistic
+             * @default
+             */
+            statistic: string;
+            /**
+             * Format
+             * @default TODO: confirm format
+             */
+            format: string;
+        };
+        /** TLFFigureSpec */
+        TLFFigureSpec: {
+            /**
+             * Geometry
+             * @default TODO: confirm figure type
+             */
+            geometry: string;
+            /**
+             * X Axis
+             * @default TODO: confirm x-axis
+             */
+            x_axis: string;
+            /**
+             * Y Axis
+             * @default TODO: confirm y-axis
+             */
+            y_axis: string;
+            /**
+             * Group
+             * @default
+             */
+            group: string;
+            /**
+             * Panel
+             * @default
+             */
+            panel: string;
+        };
+        /** TLFInventoryOutput */
+        TLFInventoryOutput: {
+            /** Output Id */
+            output_id: string;
+            /**
+             * Output Type
+             * @enum {string}
+             */
+            output_type: "table" | "listing" | "figure";
+            /** Title */
+            title: string;
+            /**
+             * Basis
+             * @default source_supported
+             * @enum {string}
+             */
+            basis: "source_supported" | "conventional_proposal";
+            /**
+             * Section
+             * @default Not specified
+             */
+            section: string;
+            /**
+             * Purpose
+             * @default Not specified
+             */
+            purpose: string;
+            /**
+             * Population
+             * @default TODO: confirm population
+             */
+            population: string;
+            /**
+             * Source Reference
+             * @default TODO: confirm SAP/protocol reference
+             */
+            source_reference: string;
+        };
+        /** TLFInventoryPlan */
+        TLFInventoryPlan: {
+            /** Study Name */
+            study_name: string;
+            /**
+             * Analysis Standard
+             * @default ADaM metadata supplied by user
+             */
+            analysis_standard: string;
+            /** Outputs */
+            outputs: components["schemas"]["TLFInventoryOutput"][];
+            /** Assumptions */
+            assumptions?: string[];
+            /** Unresolved Items */
+            unresolved_items?: string[];
+        };
+        /** TLFInventoryPlanUpdate */
+        TLFInventoryPlanUpdate: {
+            inventory_plan: components["schemas"]["TLFInventoryPlan"];
+        };
+        /** TLFPlan */
+        TLFPlan: {
+            /** Study Name */
+            study_name: string;
+            /**
+             * Analysis Standard
+             * @default ADaM metadata supplied by user
+             */
+            analysis_standard: string;
+            /** Outputs */
+            outputs: components["schemas"]["TLFSpec"][];
+            /** Assumptions */
+            assumptions?: string[];
+            /** Unresolved Items */
+            unresolved_items?: string[];
+            /** Programs */
+            programs: components["schemas"]["TLFProgramSpec"][];
+        };
+        /** TLFProgramSpec */
+        TLFProgramSpec: {
+            /** Output Id */
+            output_id: string;
+            /** Input Datasets */
+            input_datasets?: string[];
+            /** Adam Sources */
+            adam_sources?: components["schemas"]["TLFSourceVariable"][];
+            /** Derivation Steps */
+            derivation_steps?: string[];
+            /**
+             * R Code
+             * @default # TODO: implement reviewed output logic
+             */
+            r_code: string;
+            /**
+             * Sas Code
+             * @default /* TODO: implement reviewed output logic *\/
+             */
+            sas_code: string;
+            /** Review Notes */
+            review_notes?: string[];
+        };
+        /** TLFProgrammingPlanUpdate */
+        TLFProgrammingPlanUpdate: {
+            programming_plan: components["schemas"]["TLFPlan"];
+        };
+        /** TLFRow */
+        TLFRow: {
+            /** Row Id */
+            row_id: string;
+            /** Label */
+            label: string;
+            /**
+             * Source
+             * @default TODO: confirm source
+             */
+            source: string;
+            /**
+             * Statistic
+             * @default
+             */
+            statistic: string;
+            /**
+             * Condition
+             * @default
+             */
+            condition: string;
+            /**
+             * Format
+             * @default TODO: confirm format
+             */
+            format: string;
+        };
+        /** TLFShellPlanUpdate */
+        TLFShellPlanUpdate: {
+            shell_plan: components["schemas"]["TLFAnalysisPlan"];
+        };
+        /** TLFSourceVariable */
+        TLFSourceVariable: {
+            /** Dataset */
+            dataset: string;
+            /** Variable */
+            variable: string;
+            /**
+             * Role
+             * @default Analysis input
+             */
+            role: string;
+            /**
+             * Derivation
+             * @default Direct
+             */
+            derivation: string;
+        };
+        /** TLFSpec */
+        TLFSpec: {
+            /** Output Id */
+            output_id: string;
+            /**
+             * Output Type
+             * @enum {string}
+             */
+            output_type: "table" | "listing" | "figure";
+            /** Title */
+            title: string;
+            /**
+             * Basis
+             * @default source_supported
+             * @enum {string}
+             */
+            basis: "source_supported" | "conventional_proposal";
+            /**
+             * Section
+             * @default Not specified
+             */
+            section: string;
+            /**
+             * Purpose
+             * @default Not specified
+             */
+            purpose: string;
+            /**
+             * Population
+             * @default TODO: confirm population
+             */
+            population: string;
+            /**
+             * Population Filter
+             * @default TODO: confirm population filter
+             */
+            population_filter: string;
+            /** Analysis Datasets */
+            analysis_datasets?: string[];
+            /** Source Variables */
+            source_variables?: components["schemas"]["TLFSourceVariable"][];
+            /** Selection Criteria */
+            selection_criteria?: string[];
+            /**
+             * Treatment Variable
+             * @default TODO: confirm treatment variable
+             */
+            treatment_variable: string;
+            /**
+             * Analysis Method
+             * @default TODO: confirm analysis method
+             */
+            analysis_method: string;
+            /** Columns */
+            columns?: components["schemas"]["TLFColumn"][];
+            /** Rows */
+            rows?: components["schemas"]["TLFRow"][];
+            figure?: components["schemas"]["TLFFigureSpec"] | null;
+            /** Sort Order */
+            sort_order?: string[];
+            /** Footnotes */
+            footnotes?: string[];
+            /** Display Notes */
+            display_notes?: string[];
+            /** Programming Notes */
+            programming_notes?: string[];
+            /**
+             * Source Reference
+             * @default TODO: confirm SAP/protocol reference
+             */
+            source_reference: string;
+            /**
+             * Readiness
+             * @default blocked
+             * @enum {string}
+             */
+            readiness: "ready" | "blocked";
+            /** Blocking Items */
+            blocking_items?: string[];
+        };
         /** UseCaseRead */
         UseCaseRead: {
             /** Id */
@@ -799,6 +1245,17 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VoiceTranscriptionRead */
+        VoiceTranscriptionRead: {
+            /** Transcript */
+            transcript: string;
+            /** Model */
+            model: string;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Session Id */
+            session_id?: string | null;
         };
     };
     responses: never;
@@ -1156,6 +1613,76 @@ export interface operations {
             };
         };
     };
+    submit_review_feedback_api_v1_jobs__job_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewFeedbackUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transcribe_review_guidance_api_v1_jobs__job_id__transcription_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_transcribe_review_guidance_api_v1_jobs__job_id__transcription_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceTranscriptionRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     retry_job_api_v1_jobs__job_id__retry_post: {
         parameters: {
             query?: never;
@@ -1269,6 +1796,111 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SDTMVariableMappingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_tlf_inventory_api_v1_jobs__job_id__tlf_inventory_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TLFInventoryPlanUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_tlf_shell_api_v1_jobs__job_id__tlf_shell_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TLFShellPlanUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_tlf_programming_api_v1_jobs__job_id__tlf_programming_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TLFProgrammingPlanUpdate"];
             };
         };
         responses: {

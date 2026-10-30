@@ -26,7 +26,11 @@ export const api = {
   health: () => request<Health>("/api/v1/health"),
   useCases: () => request<UseCaseContract[]>("/api/v1/use-cases"),
   useCase: (id: Workflow) => request<UseCaseContract>(`/api/v1/use-cases/${id}`),
-  jobs: (workflow?: Workflow) => request<JobList>(`/api/v1/jobs${workflow ? `?workflow=${workflow}` : ""}`),
+  jobs: (workflow?: Workflow, page = 1, pageSize = 20) => {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
+    if (workflow) params.set("workflow", workflow);
+    return request<JobList>(`/api/v1/jobs?${params.toString()}`);
+  },
   job: (id: string) => request<Job>(`/api/v1/jobs/${id}`),
   agentProgress: (id: string) => request<AgentProgress>(`/api/v1/jobs/${id}/agent`),
   sdtmDataset: (domain: string, version: string, standard: "sdtm" | "sdtmig" = "sdtmig") =>
@@ -38,6 +42,20 @@ export const api = {
     return request<Job>(`/api/v1/jobs/${workflow}`, { method: "POST", body: data });
   },
   retryJob: (id: string) => request<Job>(`/api/v1/jobs/${id}/retry`, { method: "POST" }),
+  submitReviewFeedback: (id: string, message: string) =>
+    request<Job>(`/api/v1/jobs/${id}/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    }),
+  transcribeReviewAudio: (id: string, audio: Blob) => {
+    const data = new FormData();
+    data.set("audio", audio, "guidance.wav");
+    return request<{ transcript: string; model: string; duration_ms: number | null; session_id: string | null }>(
+      `/api/v1/jobs/${id}/transcription`,
+      { method: "POST", body: data },
+    );
+  },
   approveEdcSource: (id: string, sourceSpec: Record<string, unknown>) =>
     request<Job>(`/api/v1/jobs/${id}/edc-source-spec`, {
       method: "PUT",
@@ -56,11 +74,23 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ variable_mapping: variableMapping }),
     }),
+  approveTlfInventory: (id: string, inventoryPlan: Record<string, unknown>) =>
+    request<Job>(`/api/v1/jobs/${id}/tlf-inventory`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inventory_plan: inventoryPlan }),
+    }),
   approveTlfShell: (id: string, shellPlan: Record<string, unknown>) =>
     request<Job>(`/api/v1/jobs/${id}/tlf-shell`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ shell_plan: shellPlan }),
+    }),
+  approveTlfProgramming: (id: string, programmingPlan: Record<string, unknown>) =>
+    request<Job>(`/api/v1/jobs/${id}/tlf-programming`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ programming_plan: programmingPlan }),
     }),
   updateJobResult: (id: string, result: Record<string, unknown>) =>
     request<Job>(`/api/v1/jobs/${id}/result`, {

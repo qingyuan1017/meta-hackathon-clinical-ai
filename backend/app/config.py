@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     meta_api_key: str = ""
     meta_api_base_url: str = "https://api.meta.ai/v1"
     meta_model: str = ""
+    meta_transcription_model: str = "muse-voice-transcribe-1.0"
+    max_audio_mb: int = 16
+    transcription_timeout_seconds: int = 300
     agent_max_turns: int = 20
     agent_max_remote_tool_calls: int = 6
     cdisc_mcp_enabled: bool = True
@@ -51,6 +54,14 @@ class Settings(BaseSettings):
     @property
     def meta_configured(self) -> bool:
         return bool(self.meta_api_key.strip() and self.meta_model.strip())
+
+    @property
+    def meta_voice_configured(self) -> bool:
+        return bool(self.meta_api_key.strip() and self.meta_transcription_model.strip())
+
+    @property
+    def meta_transcription_url(self) -> str:
+        return f"{self.meta_api_base_url.rstrip('/')}/asr/transcribe"
 
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

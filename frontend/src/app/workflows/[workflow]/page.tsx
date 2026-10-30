@@ -5,8 +5,10 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Bot, CheckCircle2, Circle, Info } from "lucide-react";
 import { ConfigStatus } from "@/components/config-status";
+import { AgentActivitySidebar } from "@/components/agent-activity-sidebar";
 import { ResultView } from "@/components/result-view";
 import { WorkflowForm } from "@/components/workflow-form";
+import { WorkflowJobHistory } from "@/components/workflow-job-history";
 import { api } from "@/lib/api";
 import type { Job, Workflow } from "@/lib/types";
 import { workflowById } from "@/lib/workflows";
@@ -43,18 +45,18 @@ export default function WorkflowPage() {
   const executionSteps = workflow === "sdtm"
     ? ["Validate and scan input", "Normalize EDC source specification", "User source review", "Draft domain mapping", "User domain review", "Draft variable & value-level mapping", "User variable & VLM review", "Rule augmentation", "Validate and render artifacts"]
     : workflow === "tlf"
-      ? ["Validate and scan input", "Output inventory", "Analysis & display specification", "Programming augmentation", "Validate and render artifacts"]
+      ? ["Validate and scan input", "Output table of contents", "User inventory review", "Detailed shell generation", "User shell review", "ADaM-linked programming", "User programming review", "Validate and render artifacts"]
     : ["Validate and scan input", "Inspect workflow contract", "Investigate all source chunks", "Validate and render artifacts"];
   return (
-    <div className="mx-auto max-w-[1440px] px-5 py-8 lg:px-10 lg:py-10">
+    <div className="mx-auto max-w-[1840px] px-5 py-8 lg:px-10 lg:py-10">
       <div className="border-b border-white/10 pb-6">
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-clinical-700">{workspaceLabel} / Workbench</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-clinical-700">{workspaceLabel} / {definition.shortTitle}</p>
         <div className="mt-2 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
           <div><h1 className="text-3xl font-semibold tracking-[-0.03em] text-white">{definition.title}</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">{definition.description}</p></div>
-          <Link href="/" className="focus-ring text-sm font-medium text-zinc-500 hover:text-white">Workspace overview</Link>
+          <Link href="/" className="focus-ring text-sm font-medium text-zinc-500 hover:text-white">All modules</Link>
         </div>
       </div>
-      <div className="mt-7 grid gap-7 xl:grid-cols-[260px_minmax(0,1fr)]">
+      <div className="mt-7 grid items-start gap-7 xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)_380px]">
         <aside>
           <div className="rounded-xl border border-white/10 bg-[#18181b] p-5 shadow-sm">
             <div className="grid h-10 w-10 place-items-center rounded-lg bg-clinical-500/15 text-violet-300"><Icon size={19} /></div>
@@ -62,6 +64,7 @@ export default function WorkflowPage() {
             <p className="mt-2 text-sm font-semibold leading-5 text-zinc-100">Specialist generation agent</p>
             <p className="mt-2 text-xs leading-5 text-zinc-400">Inputs are validated before the agent starts. Outputs follow the workflow schema before artifacts are rendered.</p>
           </div>
+          <div className="mt-4"><WorkflowJobHistory workflow={workflow} currentJobId={jobId} discipline={discipline} /></div>
           <div className="mt-4"><ConfigStatus compact /></div>
           <div className="mt-4 rounded-xl border border-white/10 bg-[#18181b] p-4">
             <p className="flex items-center gap-2 text-xs font-semibold text-zinc-100"><Info size={15} className="text-violet-300" /> Agent execution contract</p>
@@ -78,10 +81,11 @@ export default function WorkflowPage() {
             </div>
           )}
         </aside>
-        <section>
+        <section className="min-w-0">
           {jobId && jobQuery.data ? <ResultView job={jobQuery.data} onReset={reset} /> : jobId && jobQuery.isLoading ? <div className="grid min-h-96 place-items-center rounded-xl border border-white/10 bg-[#18181b] text-sm text-zinc-500">Loading job…</div> : <WorkflowForm workflow={workflow} discipline={discipline} enabled={Boolean(health.data?.meta_configured)} onCreated={onCreated} />}
           {jobQuery.error && <div className="rounded-xl border border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-300">{jobQuery.error.message}</div>}
         </section>
+        {jobId && jobQuery.data && <AgentActivitySidebar job={jobQuery.data} />}
       </div>
     </div>
   );

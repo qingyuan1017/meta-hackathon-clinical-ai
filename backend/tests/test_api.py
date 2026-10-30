@@ -1,5 +1,8 @@
+import io
 import json
 import shutil
+import wave
+from threading import Event
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -8,6 +11,7 @@ from app.artifacts import artifact_record
 from app.db import SessionLocal
 from app.core_conformance import CoreConformanceResult
 from app.main import app, settings
+from app.jobs import runner
 from app.models import Artifact, Job
 from app.schemas import StudySummary
 
@@ -66,6 +70,50 @@ def test_generation_requires_meta_configuration() -> None:
         assert response.status_code == 503
     finally:
         settings.meta_api_key, settings.meta_model = original_key, original_model
+
+
+def test_retry_schedules_job_on_application_event_loop(monkeypatch) -> None:
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key, settings.meta_model = "test", "test-model"
+    started = Event()
+    received_job_ids: list[str] = []
+
+    async def fake_run(job_id: str) -> None:
+        received_job_ids.append(job_id)
+        started.set()
+
+    monkeypatch.setattr(runner, "run", fake_run)
+    with SessionLocal() as session:
+        job = Job(
+            workflow="tlf",
+            title="Retry scheduling",
+            status="failed",
+            options_json='{"deidentified_acknowledged": true}',
+            input_files_json="[]",
+            error="Previous attempt failed.",
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    progress_path = settings.jobs_dir / job_id / "agent" / "progress.json"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text('{"status": "paused"}', encoding="utf-8")
+    try:
+        with TestClient(app) as client:
+            response = client.post(f"/api/v1/jobs/{job_id}/retry")
+            assert response.status_code == 202, response.text
+            assert response.json()["status"] == "queued"
+            assert started.wait(1)
+        assert received_job_ids == [job_id]
+        assert not progress_path.exists()
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
 
 
 def test_sdtm_job_accepts_edc_without_blank_crf(monkeypatch) -> None:
@@ -221,6 +269,85 @@ def test_queued_job_has_safe_agent_progress_summary() -> None:
                 if stored:
                     session.delete(stored)
                     session.commit()
+
+
+def test_agent_progress_returns_detailed_source_safe_turns() -> None:
+    with TestClient(app) as client:
+        with SessionLocal() as session:
+            job = Job(
+                workflow="protocol-extraction",
+                title="Detailed agent progress",
+                status="running",
+                options_json='{"deidentified_acknowledged": true}',
+                input_files_json='[]',
+            )
+            session.add(job)
+            session.commit()
+            job_id = job.id
+        progress_path = settings.jobs_dir / job_id / "agent" / "progress.json"
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        progress_path.write_text(
+            json.dumps(
+                {
+                    "agent_id": "clinical-protocol-extraction-agent",
+                    "workflow": "protocol-extraction",
+                    "model": "meta-test-model",
+                    "status": "running",
+                    "turn": 1,
+                    "max_turns": 20,
+                    "stage": "Extraction",
+                    "stage_index": 1,
+                    "stage_count": 2,
+                    "completed_stages": [],
+                    "total_source_chunks": 2,
+                    "read_source_chunks": [1],
+                    "started_at": "2026-10-30T12:00:00+00:00",
+                    "updated_at": "2026-10-30T12:00:01+00:00",
+                    "messages": [{"role": "tool", "content": "private source content"}],
+                    "events": [
+                        {
+                            "turn": 1,
+                            "type": "tool",
+                            "name": "read_source_chunk",
+                            "stage": "Extraction",
+                            "ok": True,
+                            "summary": "Read one bounded section of the submitted source material.",
+                            "intent": "Review source chunk 1 so the draft is grounded in the submitted material.",
+                            "input_summary": "Requested source chunk 1 of 2.",
+                            "output_summary": "Reviewed source chunk 1; 1 chunk(s) remain.",
+                            "input_details": {"Chunk requested": 1},
+                            "output_details": {"Status": "Reviewed", "Chunks remaining": 1},
+                            "evidence": ["Submitted source · chunk 1 of 2"],
+                            "duration_ms": 25,
+                            "occurred_at": "2026-10-30T12:00:01+00:00",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        try:
+            response = client.get(f"/api/v1/jobs/{job_id}/agent")
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["model"] == "meta-test-model"
+            assert payload["started_at"] == "2026-10-30T12:00:00Z"
+            assert payload["events"][0]["input_summary"] == "Requested source chunk 1 of 2."
+            assert payload["events"][0]["output_summary"].startswith("Reviewed source chunk 1")
+            assert payload["events"][0]["intent"].startswith("Review source chunk 1")
+            assert payload["events"][0]["input_details"] == {"Chunk requested": 1}
+            assert payload["events"][0]["output_details"]["Chunks remaining"] == 1
+            assert payload["events"][0]["evidence"] == ["Submitted source · chunk 1 of 2"]
+            assert payload["events"][0]["duration_ms"] == 25
+            assert "messages" not in payload
+            assert "private source content" not in response.text
+        finally:
+            with SessionLocal() as session:
+                stored = session.get(Job, job_id)
+                if stored:
+                    session.delete(stored)
+                    session.commit()
+            shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
 
 
 def test_reviewed_edc_source_spec_resumes_sdtm_job(monkeypatch) -> None:
@@ -384,6 +511,216 @@ def test_reviewed_domain_and_variable_mappings_resume_each_sdtm_gate(monkeypatch
             session.commit()
 
 
+def test_reviewed_tlf_inventory_resumes_shell_generation(monkeypatch) -> None:
+    queued = []
+    monkeypatch.setattr("app.main.runner.enqueue", queued.append)
+    inventory = {
+        "study_name": "SYN-101",
+        "outputs": [{
+            "output_id": "T-01",
+            "output_type": "table",
+            "title": "Change from baseline",
+            "population": "Intent-to-Treat",
+            "source_reference": "SAP 7.1",
+        }],
+    }
+    with SessionLocal() as session:
+        job = Job(
+            workflow="tlf",
+            title="TLF inventory review",
+            status="review_required",
+            options_json=json.dumps({"languages": ["r", "sas"], "_review_stage": "tlf_inventory"}),
+            input_files_json='["01-sap.md"]',
+            result_json=json.dumps(inventory),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    try:
+        with TestClient(app) as client:
+            response = client.put(f"/api/v1/jobs/{job_id}/tlf-inventory", json={"inventory_plan": inventory})
+        assert response.status_code == 202, response.text
+        assert response.json()["status"] == "queued"
+        assert queued == [job_id]
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            assert stored is not None
+            assert json.loads(stored.options_json)["tlf_inventory_plan"]["outputs"][0]["output_id"] == "T-01"
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+
+
+def test_review_feedback_records_user_turn_and_reruns_current_stage(monkeypatch) -> None:
+    queued = []
+    monkeypatch.setattr("app.main.runner.enqueue", queued.append)
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key, settings.meta_model = "test", "test-model"
+    draft = {
+        "study_name": "SYN-101",
+        "outputs": [{
+            "output_id": "T-01",
+            "output_type": "table",
+            "title": "Adverse events",
+            "population": "TODO: confirm population",
+            "source_reference": "SAP 7.1",
+        }],
+    }
+    with SessionLocal() as session:
+        job = Job(
+            workflow="tlf",
+            title="TLF feedback review",
+            status="review_required",
+            options_json=json.dumps({"languages": ["r"], "_review_stage": "tlf_inventory"}),
+            input_files_json='["01-sap.md"]',
+            result_json=json.dumps(draft),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    progress_path = settings.jobs_dir / job_id / "agent" / "progress.json"
+    progress_path.parent.mkdir(parents=True, exist_ok=True)
+    progress_path.write_text(json.dumps({
+        "agent_id": "clinical-tlf-artifacts-agent",
+        "workflow": "tlf",
+        "status": "completed",
+        "turn": 3,
+        "max_turns": 60,
+        "stage": "Output inventory",
+        "events": [{"turn": 3, "type": "tool", "name": "submit_result", "ok": True}],
+    }), encoding="utf-8")
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/feedback",
+                json={"message": "Use the Safety population for all adverse-event outputs."},
+            )
+        assert response.status_code == 202, response.text
+        assert response.json()["status"] == "queued"
+        assert response.json()["result"] == draft
+        assert queued == [job_id]
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            assert stored is not None
+            saved_options = json.loads(stored.options_json)
+            assert saved_options["review_feedback"][-1]["stage"] == "tlf_inventory"
+            assert saved_options["_review_revision_result"] == draft
+        trace = json.loads(progress_path.read_text(encoding="utf-8"))
+        assert trace["status"] == "queued"
+        assert trace["turn"] == 4
+        assert trace["events"][-1]["actor"] == "user"
+        assert trace["events"][-1]["summary"].startswith("Use the Safety population")
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
+def test_voice_guidance_is_transcribed_for_review_without_storing_audio(monkeypatch) -> None:
+    captured: list[bytes] = []
+
+    async def fake_transcribe(_client, audio: bytes, filename: str = "guidance.wav") -> dict:
+        captured.append(audio)
+        assert filename == "guidance.wav"
+        return {
+            "transcript": "Use the Safety population for every adverse-event output.",
+            "audioDurationMs": 1250,
+            "sessionId": "voice-session",
+        }
+
+    monkeypatch.setattr("app.main.MetaAIClient.transcribe_wav", fake_transcribe)
+    original_key, original_voice_model = settings.meta_api_key, settings.meta_transcription_model
+    settings.meta_api_key = "test"
+    settings.meta_transcription_model = "muse-voice-transcribe-1.0"
+    with SessionLocal() as session:
+        job = Job(
+            workflow="tlf",
+            title="TLF voice review",
+            status="review_required",
+            options_json=json.dumps({"_review_stage": "tlf_inventory"}),
+            input_files_json="[]",
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as recording:
+        recording.setnchannels(1)
+        recording.setsampwidth(2)
+        recording.setframerate(24_000)
+        recording.writeframes(b"\x00\x00" * 2_400)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/transcription",
+                files={"audio": ("guidance.wav", wav_buffer.getvalue(), "audio/wav")},
+            )
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "transcript": "Use the Safety population for every adverse-event output.",
+            "model": "muse-voice-transcribe-1.0",
+            "duration_ms": 1250,
+            "session_id": "voice-session",
+        }
+        assert len(captured) == 1
+        assert captured[0].startswith(b"RIFF")
+        assert not (settings.jobs_dir / job_id / "input" / "guidance.wav").exists()
+    finally:
+        settings.meta_api_key, settings.meta_transcription_model = original_key, original_voice_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
+def test_voice_guidance_rejects_non_wav_audio_before_meta_call(monkeypatch) -> None:
+    called = False
+
+    async def fake_transcribe(_client, _audio: bytes, filename: str = "guidance.wav") -> dict:
+        nonlocal called
+        called = True
+        return {"transcript": "unexpected"}
+
+    monkeypatch.setattr("app.main.MetaAIClient.transcribe_wav", fake_transcribe)
+    original_key = settings.meta_api_key
+    settings.meta_api_key = "test"
+    with SessionLocal() as session:
+        job = Job(
+            workflow="tlf",
+            title="Invalid voice review",
+            status="review_required",
+            options_json=json.dumps({"_review_stage": "tlf_inventory"}),
+            input_files_json="[]",
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/transcription",
+                files={"audio": ("guidance.webm", b"not wav", "audio/webm")},
+            )
+        assert response.status_code == 415
+        assert called is False
+    finally:
+        settings.meta_api_key = original_key
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+
+
 def test_reviewed_tlf_shell_resumes_programming_augmentation(monkeypatch) -> None:
     queued = []
     monkeypatch.setattr("app.main.runner.enqueue", queued.append)
@@ -405,12 +742,19 @@ def test_reviewed_tlf_shell_resumes_programming_augmentation(monkeypatch) -> Non
             "blocking_items": ["Confirm missing-data handling"],
         }],
     }
+    inventory = {
+        "study_name": shell["study_name"],
+        "outputs": [{
+            key: shell["outputs"][0][key]
+            for key in ("output_id", "output_type", "title", "population", "source_reference")
+        }],
+    }
     with SessionLocal() as session:
         job = Job(
             workflow="tlf",
             title="TLF shell review",
             status="review_required",
-            options_json=json.dumps({"languages": ["r", "sas"], "_review_stage": "tlf_shell"}),
+            options_json=json.dumps({"languages": ["r", "sas"], "tlf_inventory_plan": inventory, "_review_stage": "tlf_shell"}),
             input_files_json='["01-sap.md"]',
             result_json=json.dumps(shell),
         )
@@ -428,6 +772,80 @@ def test_reviewed_tlf_shell_resumes_programming_augmentation(monkeypatch) -> Non
             stored = session.get(Job, job_id)
             assert stored is not None
             assert json.loads(stored.options_json)["tlf_shell_plan"]["outputs"][0]["output_id"] == "T-01"
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+
+
+def test_reviewed_tlf_programming_resumes_final_render(monkeypatch) -> None:
+    queued = []
+    monkeypatch.setattr("app.main.runner.enqueue", queued.append)
+    shell = {
+        "study_name": "SYN-101",
+        "outputs": [{
+            "output_id": "T-01",
+            "output_type": "table",
+            "title": "Change from baseline",
+            "population": "Intent-to-Treat",
+            "population_filter": "ADSL.ITTFL = 'Y'",
+            "analysis_datasets": ["ADSL", "ADEFF"],
+            "source_variables": [{"dataset": "ADEFF", "variable": "CHG"}],
+            "treatment_variable": "ADSL.TRT01P",
+            "analysis_method": "ANCOVA",
+            "columns": [{"column_id": "TRT", "heading": "Treatment", "source": "ADSL.TRT01P", "format": "text"}],
+            "rows": [{"row_id": "LSMEAN", "label": "LS mean", "source": "ADEFF.CHG", "statistic": "LS mean", "format": "8.2"}],
+            "source_reference": "SAP 7.1",
+        }],
+    }
+    inventory = {
+        "study_name": shell["study_name"],
+        "outputs": [{
+            key: shell["outputs"][0][key]
+            for key in ("output_id", "output_type", "title", "population", "source_reference")
+        }],
+    }
+    programming = {
+        **shell,
+        "programs": [{
+            "output_id": "T-01",
+            "input_datasets": ["ADSL", "ADEFF"],
+            "adam_sources": [{"dataset": "ADEFF", "variable": "CHG"}],
+            "derivation_steps": ["Join ADSL and ADEFF", "Fit ANCOVA"],
+            "r_code": "fit <- lm(CHG ~ TRT01P + BASE, data = adeff)",
+            "sas_code": "proc glm data=adeff; model chg=trt01p base; run;",
+        }],
+    }
+    with SessionLocal() as session:
+        job = Job(
+            workflow="tlf",
+            title="TLF programming review",
+            status="review_required",
+            options_json=json.dumps({
+                "languages": ["r", "sas"],
+                "tlf_inventory_plan": inventory,
+                "tlf_shell_plan": shell,
+                "_review_stage": "tlf_programming",
+            }),
+            input_files_json='["01-sap.md"]',
+            result_json=json.dumps(programming),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    try:
+        with TestClient(app) as client:
+            response = client.put(f"/api/v1/jobs/{job_id}/tlf-programming", json={"programming_plan": programming})
+        assert response.status_code == 202, response.text
+        assert response.json()["status"] == "queued"
+        assert queued == [job_id]
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            assert stored is not None
+            saved = json.loads(stored.options_json)["tlf_programming_plan"]
+            assert saved["programs"][0]["adam_sources"][0]["variable"] == "CHG"
     finally:
         with SessionLocal() as session:
             stored = session.get(Job, job_id)

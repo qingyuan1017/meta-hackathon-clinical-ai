@@ -11,11 +11,11 @@ import { Card, CardContent, CardHeader } from "./ui/card";
 import { EDCSourceReviewEditor, type EDCSourceSpecificationDraft } from "./edc-source-review-editor";
 import { SDTMDomainMappingReview, SDTMVariableMappingReview, type SDTMDomainMappingPlanDraft, type SDTMVariableMappingPlanDraft } from "./sdtm-mapping-stage-review";
 import { SDTMReviewEditor, type SDTMPlanDraft } from "./sdtm-review-editor";
-import { TLFJsonEditor, TLFShellReview, TLFTableOfContents, TLFReviewEditor, type TLFAnalysisPlanDraft, type TLFPlanDraft } from "./tlf-review-editor";
+import { TLFInventoryReview, TLFJsonEditor, TLFProgrammingReview, TLFShellReview, TLFTableOfContents, TLFReviewEditor, type TLFAnalysisPlanDraft, type TLFInventoryPlanDraft, type TLFPlanDraft } from "./tlf-review-editor";
 import { StatusBadge } from "./status-badge";
 
 export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) {
-  const [tab, setTab] = useState<"preview" | "edit" | "json" | "agent" | "artifacts" | "warnings">(
+  const [tab, setTab] = useState<"preview" | "edit" | "json" | "artifacts" | "warnings">(
     job.workflow === "sdtm" && job.status === "succeeded" ? "edit" : "preview",
   );
   const [draft, setDraft] = useState(() => JSON.stringify(job.result, null, 2));
@@ -35,6 +35,9 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
     setEdcSourceDraft(asRecord(job.result));
     setTlfDraft(asRecord(job.result));
   }, [job.id, job.result]);
+  useEffect(() => {
+    setTab(job.workflow === "sdtm" && job.status === "succeeded" ? "edit" : "preview");
+  }, [job.id]);
   const deleteMutation = useMutation({
     mutationFn: () => api.deleteJob(job.id),
     onSuccess: () => { client.invalidateQueries({ queryKey: ["jobs"] }); onReset(); },
@@ -83,6 +86,20 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
       client.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
+  const approveTlfInventoryMutation = useMutation({
+    mutationFn: (inventory: Record<string, unknown>) => api.approveTlfInventory(job.id, inventory),
+    onSuccess: (updated) => {
+      client.setQueryData(["job", job.id], updated);
+      client.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
+  const approveTlfProgrammingMutation = useMutation({
+    mutationFn: (programming: Record<string, unknown>) => api.approveTlfProgramming(job.id, programming),
+    onSuccess: (updated) => {
+      client.setQueryData(["job", job.id], updated);
+      client.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
   const saveDraft = () => {
     try {
       const parsed: unknown = JSON.parse(draft);
@@ -110,9 +127,11 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
           </div>
         )}
         {job.status === "review_required" ? (
-          <div className="py-5">{job.workflow === "tlf" ? <TLFShellReview value={tlfDraft} onChange={(next) => setTlfDraft(next)} onApprove={(next: TLFAnalysisPlanDraft) => approveTlfShellMutation.mutate(next)} saving={approveTlfShellMutation.isPending} error={approveTlfShellMutation.error?.message} /> : job.review_stage === "domain_mapping" ? <SDTMDomainMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMDomainMappingPlanDraft) => approveDomainMutation.mutate(next)} saving={approveDomainMutation.isPending} error={approveDomainMutation.error?.message} /> : job.review_stage === "variable_mapping" ? <SDTMVariableMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMVariableMappingPlanDraft) => approveVariableMutation.mutate(next)} saving={approveVariableMutation.isPending} error={approveVariableMutation.error?.message} /> : <EDCSourceReviewEditor value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: EDCSourceSpecificationDraft) => approveSourceMutation.mutate(next)} saving={approveSourceMutation.isPending} error={approveSourceMutation.error?.message} />}</div>
+          <div className="py-5">
+            <div>{job.workflow === "tlf" ? (job.review_stage === "tlf_inventory" ? <TLFInventoryReview value={tlfDraft} onChange={(next) => setTlfDraft(next)} onApprove={(next: TLFInventoryPlanDraft) => approveTlfInventoryMutation.mutate(next)} saving={approveTlfInventoryMutation.isPending} error={approveTlfInventoryMutation.error?.message} /> : job.review_stage === "tlf_programming" ? <TLFProgrammingReview value={tlfDraft} onChange={(next) => setTlfDraft(next)} onApprove={(next: TLFPlanDraft) => approveTlfProgrammingMutation.mutate(next)} saving={approveTlfProgrammingMutation.isPending} error={approveTlfProgrammingMutation.error?.message} /> : <TLFShellReview value={tlfDraft} onChange={(next) => setTlfDraft(next)} onApprove={(next: TLFAnalysisPlanDraft) => approveTlfShellMutation.mutate(next)} saving={approveTlfShellMutation.isPending} error={approveTlfShellMutation.error?.message} />) : job.review_stage === "domain_mapping" ? <SDTMDomainMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMDomainMappingPlanDraft) => approveDomainMutation.mutate(next)} saving={approveDomainMutation.isPending} error={approveDomainMutation.error?.message} /> : job.review_stage === "variable_mapping" ? <SDTMVariableMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMVariableMappingPlanDraft) => approveVariableMutation.mutate(next)} saving={approveVariableMutation.isPending} error={approveVariableMutation.error?.message} /> : <EDCSourceReviewEditor value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: EDCSourceSpecificationDraft) => approveSourceMutation.mutate(next)} saving={approveSourceMutation.isPending} error={approveSourceMutation.error?.message} />}</div>
+          </div>
         ) : <><div className="flex flex-wrap gap-2 border-b border-white/10" role="tablist">
-          {(["preview", ...(job.status === "succeeded" ? ["edit" as const, ...(job.workflow === "tlf" ? ["json" as const] : [])] : []), "agent", "artifacts", "warnings"] as const).map((item) => (
+          {(["preview", ...(job.status === "succeeded" ? ["edit" as const, ...(job.workflow === "tlf" ? ["json" as const] : [])] : []), "artifacts", "warnings"] as const).map((item) => (
             <button key={item} role="tab" aria-selected={tab === item} onClick={() => setTab(item)} className={`focus-ring rounded-t-lg px-4 py-2.5 text-sm font-bold capitalize ${tab === item ? "border-b-2 border-clinical-500 text-violet-300" : "text-zinc-500 hover:text-zinc-300"}`}>{item === "edit" ? (job.workflow === "sdtm" ? "SDTM review" : job.workflow === "tlf" ? "Shell" : "Edit") : item === "json" ? "Advanced JSON" : item}</button>
           ))}
         </div>
@@ -120,24 +139,13 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
           {tab === "preview" && (job.result ? (job.workflow === "tlf" ? <TLFTableOfContents value={tlfDraft} onEdit={() => setTab("edit")} /> : <StructuredPreview value={job.result} />) : <EmptyState text="A structured preview will appear when generation completes." />)}
           {tab === "edit" && (
             job.workflow === "sdtm" ? <SDTMReviewEditor value={sdtmDraft} artifacts={job.artifacts} onChange={(next) => setSdtmDraft(next)} onSave={(next: SDTMPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : job.workflow === "tlf" ? <TLFReviewEditor value={tlfDraft} onChange={(next) => setTlfDraft(next)} onSave={(next: TLFPlanDraft) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} /> : <div className="space-y-4">
-              <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm leading-6 text-blue-200">Edit the validated structured result below. Saving rebuilds DOCX, PDF, XLSX, XML, code, and ZIP artifacts without another model call.</div>
-              <textarea aria-label="Editable structured result" value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} className="focus-ring min-h-[32rem] w-full rounded-xl border border-white/15 bg-[#0d0d0f] p-4 font-mono text-xs leading-5 text-zinc-200" />
-              {(draftError || updateMutation.error) && <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">{draftError ?? updateMutation.error?.message}</div>}
-              <Button variant="clinical" onClick={saveDraft} disabled={updateMutation.isPending}><Save size={16} />{updateMutation.isPending ? "Validating and rebuilding…" : "Save revision and rebuild artifacts"}</Button>
-            </div>
+                <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm leading-6 text-blue-200">Edit the validated structured result below. Saving rebuilds DOCX, PDF, XLSX, XML, code, and ZIP artifacts without another model call.</div>
+                <textarea aria-label="Editable structured result" value={draft} onChange={(event) => setDraft(event.target.value)} spellCheck={false} className="focus-ring min-h-[32rem] w-full rounded-xl border border-white/15 bg-[#0d0d0f] p-4 font-mono text-xs leading-5 text-zinc-200" />
+                {(draftError || updateMutation.error) && <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-3 text-sm text-rose-300">{draftError ?? updateMutation.error?.message}</div>}
+                <Button variant="clinical" onClick={saveDraft} disabled={updateMutation.isPending}><Save size={16} />{updateMutation.isPending ? "Validating and rebuilding…" : "Save revision and rebuild artifacts"}</Button>
+              </div>
           )}
           {tab === "json" && job.workflow === "tlf" && <TLFJsonEditor value={tlfDraft} onSave={(next) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} />}
-          {tab === "agent" && (agentQuery.data ? (
-            <div className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <AgentMetric label="Agent" value={agentQuery.data.agent_id} />
-                <AgentMetric label="Turns" value={`${agentQuery.data.turn} / ${agentQuery.data.max_turns}`} />
-                <AgentMetric label={agentQuery.data.stage ? "Current stage" : "Sources reviewed"} value={agentQuery.data.stage ?? `${agentQuery.data.read_source_chunks.length} / ${agentQuery.data.total_source_chunks}`} />
-              </div>
-              <ol className="space-y-2">{agentQuery.data.events.map((event, index) => <li key={`${event.turn}-${event.name ?? event.type}-${index}`} className="rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3"><div className="flex items-center justify-between gap-3"><span className="font-mono text-xs font-bold text-violet-300">TURN {event.turn}{event.stage ? ` · ${event.stage.toUpperCase()}` : ""}</span><span className={`text-xs font-bold ${event.ok === false ? "text-rose-300" : "text-emerald-300"}`}>{event.ok === false ? "REFUSED" : "COMPLETED"}</span></div><p className="mt-1 text-sm font-bold text-zinc-200">{event.name ?? event.type.replaceAll("_", " ")}</p>{event.error && <p className="mt-1 text-xs leading-5 text-rose-300">{event.error}</p>}</li>)}</ol>
-              {!agentQuery.data.events.length && <EmptyState text="The agent has not started a tool turn yet." />}
-            </div>
-          ) : <EmptyState text="Loading the sanitized agent trace…" />)}
           {tab === "artifacts" && (job.artifacts.length ? (
             <div className="space-y-2">
               {job.artifacts.map((artifact) => (
@@ -171,7 +179,5 @@ function StructuredPreview({ value, depth = 0 }: { value: unknown; depth?: numbe
 }
 
 function EmptyState({ text }: { text: string }) { return <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-white/15 bg-white/[0.02] text-center text-sm text-zinc-500">{text}</div>; }
-
-function AgentMetric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4"><p className="text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">{label}</p><p className="mt-1 break-words text-sm font-extrabold text-zinc-200">{value}</p></div>; }
 
 function asRecord(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }

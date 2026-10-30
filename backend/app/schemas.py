@@ -254,6 +254,7 @@ class TLFInventoryOutput(BaseModel):
     output_id: str
     output_type: Literal["table", "listing", "figure"]
     title: str
+    basis: Literal["source_supported", "conventional_proposal"] = "source_supported"
     section: str = "Not specified"
     purpose: str = "Not specified"
     population: str = "TODO: confirm population"
@@ -304,6 +305,7 @@ class TLFSpec(BaseModel):
     output_id: str
     output_type: Literal["table", "listing", "figure"]
     title: str
+    basis: Literal["source_supported", "conventional_proposal"] = "source_supported"
     section: str = "Not specified"
     purpose: str = "Not specified"
     population: str = "TODO: confirm population"
@@ -336,6 +338,7 @@ class TLFAnalysisPlan(BaseModel):
 class TLFProgramSpec(BaseModel):
     output_id: str
     input_datasets: list[str] = Field(default_factory=list)
+    adam_sources: list[TLFSourceVariable] = Field(default_factory=list)
     derivation_steps: list[str] = Field(default_factory=list)
     r_code: str = "# TODO: implement reviewed output logic"
     sas_code: str = "/* TODO: implement reviewed output logic */"
@@ -371,7 +374,14 @@ class JobRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
-    review_stage: Literal["edc_source", "domain_mapping", "variable_mapping", "tlf_shell"] | None = None
+    review_stage: Literal[
+        "edc_source",
+        "domain_mapping",
+        "variable_mapping",
+        "tlf_inventory",
+        "tlf_shell",
+        "tlf_programming",
+    ] | None = None
     result: dict | list | None = None
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
@@ -389,6 +399,17 @@ class JobResultUpdate(BaseModel):
     result: dict[str, Any]
 
 
+class ReviewFeedbackUpdate(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+
+
+class VoiceTranscriptionRead(BaseModel):
+    transcript: str
+    model: str
+    duration_ms: int | None = None
+    session_id: str | None = None
+
+
 class EDCSourceSpecificationUpdate(BaseModel):
     source_spec: EDCSourceSpecification
 
@@ -403,6 +424,14 @@ class SDTMVariableMappingUpdate(BaseModel):
 
 class TLFShellPlanUpdate(BaseModel):
     shell_plan: TLFAnalysisPlan
+
+
+class TLFInventoryPlanUpdate(BaseModel):
+    inventory_plan: TLFInventoryPlan
+
+
+class TLFProgrammingPlanUpdate(BaseModel):
+    programming_plan: TLFPlan
 
 
 class UseCaseRead(BaseModel):
@@ -441,16 +470,27 @@ class AgentRead(BaseModel):
 class AgentEventRead(BaseModel):
     turn: int
     type: str
+    actor: Literal["agent", "user", "system"] = "agent"
     name: str | None = None
     stage: str | None = None
     ok: bool | None = None
     error: str | None = None
+    summary: str | None = None
+    intent: str | None = None
+    input_summary: str | None = None
+    output_summary: str | None = None
+    input_details: dict[str, Any] = Field(default_factory=dict)
+    output_details: dict[str, Any] = Field(default_factory=dict)
+    evidence: list[str] = Field(default_factory=list)
+    duration_ms: int | None = None
+    occurred_at: datetime | None = None
 
 
 class AgentProgressRead(BaseModel):
     agent_id: str
     workflow: str
     status: str
+    model: str | None = None
     turn: int
     max_turns: int
     stage: str | None = None
@@ -459,6 +499,8 @@ class AgentProgressRead(BaseModel):
     completed_stages: list[str] = Field(default_factory=list)
     total_source_chunks: int
     read_source_chunks: list[int]
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
     events: list[AgentEventRead]
 
 
@@ -469,4 +511,5 @@ class HealthRead(BaseModel):
     meta_configured: bool
     meta_base_url: str
     meta_model: str | None
+    meta_transcription_model: str | None
     disclaimer: str = DISCLAIMER
