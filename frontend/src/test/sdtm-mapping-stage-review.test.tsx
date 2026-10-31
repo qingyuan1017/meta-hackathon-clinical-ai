@@ -1,6 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { SDTMDomainMappingReview, SDTMVariableMappingReview } from "@/components/sdtm-mapping-stage-review";
+import { ReviewDraftProvider } from "@/lib/review-draft-context";
+import type { Job } from "@/lib/types";
 
 const source = {
   study_name: "SYN-101",
@@ -78,5 +81,35 @@ describe("SDTM mapping review gates", () => {
     expect(approve).toHaveBeenCalledWith(expect.objectContaining({
       unmapped_datasets: [{ source_dataset: "AUDIT_LOG", rationale: "Operational metadata is outside SDTM tabulation scope." }],
     }));
+  });
+
+  it("shows each feedback decision inside its respective domain tab", () => {
+    const sourceWithAe = { ...source, datasets: [...source.datasets, { name: "RAW_AE", label: "Adverse events", source_type: "raw" }] };
+    const domainWithAe = { ...domain, domain_mappings: [...domain.domain_mappings, { source_dataset: "RAW_AE", source_type: "raw", target_domain: "AE", relationship: "direct", rationale: "AE source" }] };
+    const variableWithAe = structuredClone(variable);
+    variableWithAe.datasets.push({ domain: "AE", description: "Adverse Events", structure: "One record per event", key_variables: ["USUBJID", "AESEQ"], variables: [{ name: "AETERM", label: "Reported Term", data_type: "Char", source_dataset: "RAW_AE", source_field: "AETERM", origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] });
+    const result = { source_spec: sourceWithAe, domain_mapping: domainWithAe, variable_mapping: variableWithAe };
+    const reviewJob = {
+      id: "job-domain-feedback", workflow: "sdtm", status: "review_required", review_stage: "variable_mapping",
+      result, result_revision: "b".repeat(64),
+      review_patch: {
+        transaction_id: "patch-domains", status: "proposed", stage: "variable_mapping", message: "Revise both domains.",
+        scope: { paths: [], source_datasets: [], target_domains: ["DM", "AE"], variables: [] },
+        baseline_revision: "a".repeat(64), proposed_revision: "c".repeat(64), conflicts: [],
+        submitted_at: "2026-10-31T12:00:00Z", decided_at: null, reviewer: null,
+        operations: [
+          { path: "/variable_mapping/datasets/domain=DM/variables/name=AGE/mapping_expression", before: "Direct", after: "AGE" },
+          { path: "/variable_mapping/datasets/domain=AE/variables/name=AETERM/mapping_expression", before: "Direct", after: "trim(AETERM)" },
+        ],
+      },
+    } as Job;
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={reviewJob.id}><SDTMVariableMappingReview value={result} onChange={vi.fn()} onApprove={vi.fn()} saving={false} reviewJob={reviewJob} /></ReviewDraftProvider></QueryClientProvider>);
+
+    expect(screen.getByRole("region", { name: "DM feedback decision" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "AE feedback decision" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /AE\s*1/ }));
+    expect(screen.getByRole("region", { name: "AE feedback decision" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "DM feedback decision" })).not.toBeInTheDocument();
   });
 });

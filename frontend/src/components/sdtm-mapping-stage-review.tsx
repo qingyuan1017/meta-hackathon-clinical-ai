@@ -2,6 +2,8 @@
 
 import { useMemo, useState, type DragEvent, type ReactNode } from "react";
 import { AlertTriangle, ArrowRight, Database, GripVertical, Plus, Save, Table2, Trash2 } from "lucide-react";
+import type { Job } from "@/lib/types";
+import { groupOperationsByDomain, ReviewPatchPanel } from "./review-patch-panel";
 import { Button } from "./ui/button";
 
 type SourceType = "raw" | "sdtm";
@@ -66,12 +68,13 @@ interface VariableReviewEnvelope extends DomainReviewEnvelope { variable_mapping
 
 const inputClass = "focus-ring min-h-9 w-full rounded-md border border-white/10 bg-[#101012] px-2.5 py-2 text-xs text-zinc-200 placeholder:text-zinc-600";
 
-export function SDTMDomainMappingReview({ value, onChange, onApprove, saving, error }: {
+export function SDTMDomainMappingReview({ value, onChange, onApprove, saving, error, reviewJob }: {
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>) => void;
   onApprove: (value: SDTMDomainMappingPlanDraft) => void;
   saving: boolean;
   error?: string | null;
+  reviewJob?: Job;
 }) {
   const envelope = normalizeDomainEnvelope(value);
   const plan = envelope.domain_mapping;
@@ -135,25 +138,29 @@ export function SDTMDomainMappingReview({ value, onChange, onApprove, saving, er
               <input value={mapping.rationale} onChange={(event) => update((next) => { next.domain_mappings[index].rationale = event.target.value; })} placeholder="Mapping rationale" className={inputClass} />
               <button type="button" aria-label={`Remove ${mapping.source_dataset} to ${domain}`} onClick={() => update((next) => { next.domain_mappings.splice(index, 1); })} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={14} /></button>
             </div>)}{!mappings.length && <p className="rounded-lg border border-dashed border-white/10 p-4 text-center text-xs text-zinc-600">No source assigned yet.</p>}</div>
+            {reviewJob?.review_patch && <ReviewPatchPanel job={reviewJob} domain={domain} />}
           </article>;
         })}
         <article className="rounded-xl border border-dashed border-amber-500/25 bg-amber-500/[0.035] p-4">
           <div><p className="text-sm font-black text-amber-200">Not mapped to SDTM</p><p className="mt-1 text-xs text-zinc-600">These sources were considered and intentionally excluded from SDTM mapping.</p></div>
           <div className="mt-3 space-y-2">{plan.unmapped_datasets.map((item, index) => <div key={item.source_dataset} className="grid gap-2 rounded-lg border border-white/10 bg-[#141416] p-3 lg:grid-cols-[160px_minmax(220px,1fr)_36px]"><span className="self-center font-mono text-xs font-bold text-amber-200">{item.source_dataset}</span><input aria-label={`Reason ${item.source_dataset} is not mapped`} value={item.rationale} onChange={(event) => update((next) => { next.unmapped_datasets[index].rationale = event.target.value; })} placeholder="Why this source does not contribute to SDTM" className={inputClass} /><button type="button" aria-label={`Restore ${item.source_dataset} to review`} onClick={() => update((next) => { next.unmapped_datasets.splice(index, 1); })} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-amber-500/10 hover:text-amber-200"><Trash2 size={14} /></button></div>)}{!plan.unmapped_datasets.length && <p className="rounded-lg border border-dashed border-white/10 p-4 text-center text-xs text-zinc-600">No sources are currently marked not mapped.</p>}</div>
+          {reviewJob?.review_patch && <ReviewPatchPanel job={reviewJob} domain="Not mapped" />}
         </article>
       </section>
     </div>
+    {reviewJob?.review_patch && <ReviewPatchPanel job={reviewJob} domain="General" />}
     <ReviewNotes assumptions={plan.assumptions} unresolved={plan.unresolved_mappings} onAssumptions={(items) => update((next) => { next.assumptions = items; })} onUnresolved={(items) => update((next) => { next.unresolved_mappings = items; })} />
     <ApprovalBar issues={issues} error={error} saving={saving} readyText="All normalized datasets have a reviewed mapping disposition." actionText="Approve domains and build variable mapping" onApprove={() => onApprove(plan)} />
   </div>;
 }
 
-export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, error }: {
+export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, error, reviewJob }: {
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>) => void;
   onApprove: (value: SDTMVariableMappingPlanDraft) => void;
   saving: boolean;
   error?: string | null;
+  reviewJob?: Job;
 }) {
   const envelope = normalizeVariableEnvelope(value);
   const plan = envelope.variable_mapping;
@@ -166,10 +173,15 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
     onChange({ ...value, source_spec: envelope.source_spec, domain_mapping: envelope.domain_mapping, variable_mapping: nextPlan });
   };
   const allowedSources = active ? envelope.domain_mapping.domain_mappings.filter((item) => item.target_domain === active.domain).map((item) => item.source_dataset) : [];
+  const feedbackCounts = new Map(
+    reviewJob?.review_patch
+      ? groupOperationsByDomain(reviewJob.review_patch.operations, recordValue(reviewJob.result)).map((group) => [group.domain, group.operations.length])
+      : [],
+  );
 
   return <div className="space-y-5">
     <ReviewGateHeader step="3 of 3" title="Variable and value-level mapping review required" description="Review each SDTM variable row and the VLM cells. Rule augmentation and code generation remain blocked until this matrix is approved." />
-    <div className="flex flex-wrap gap-2">{plan.datasets.map((dataset) => <button type="button" key={dataset.domain} onClick={() => setSelectedDomain(dataset.domain)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${active?.domain === dataset.domain ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 text-zinc-500"}`}>{dataset.domain}</button>)}</div>
+    <div className="flex flex-wrap gap-2">{plan.datasets.map((dataset) => <button type="button" key={dataset.domain} onClick={() => setSelectedDomain(dataset.domain)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${active?.domain === dataset.domain ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 text-zinc-500"}`}>{dataset.domain}{feedbackCounts.has(dataset.domain) && <span className="ml-2 rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[9px] text-amber-200">{feedbackCounts.get(dataset.domain)}</span>}</button>)}</div>
     {active && <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]">
       <div className="grid gap-3 border-b border-white/10 p-4 lg:grid-cols-[180px_minmax(240px,1fr)_minmax(260px,1fr)_auto]">
         <label><EditorLabel>Domain</EditorLabel><input value={active.domain} readOnly className={`${inputClass} font-mono font-bold text-violet-200 opacity-70`} /></label>
@@ -177,6 +189,7 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
         <label><EditorLabel>Structure</EditorLabel><input value={active.structure} onChange={(event) => updateDataset(plan, active.domain, update, "structure", event.target.value)} className={inputClass} /></label>
         <Button type="button" variant="outline" className="mt-5" onClick={() => update((next) => { const dataset = next.datasets.find((item) => item.domain === active.domain); if (dataset) dataset.variables.push(newVariable(allowedSources[0] ?? null)); })}><Plus size={14} />Variable</Button>
       </div>
+      {reviewJob?.review_patch && <div className="px-4"><ReviewPatchPanel job={reviewJob} domain={active.domain} /></div>}
       <div className="overflow-x-auto"><table className="w-full min-w-[1560px] border-collapse text-left text-xs"><thead className="bg-white/[0.03] text-[10px] uppercase tracking-wider text-zinc-500"><tr>{["SDTM variable", "Label / type", "Source dataset", "Source field", "Mapping value", "Origin / CT", "aCRF label", "VLM cells", ""].map((heading) => <th key={heading} className="border-b border-r border-white/10 px-3 py-2.5 font-black last:border-r-0">{heading}</th>)}</tr></thead><tbody>{active.variables.map((variable, variableIndex) => <tr key={`${variable.name}-${variableIndex}`} className="align-top">
         <Cell><input value={variable.name} onChange={(event) => updateVariable(active.domain, variableIndex, update, "name", event.target.value.toUpperCase())} className={`${inputClass} font-mono font-bold text-violet-200`} /></Cell>
         <Cell className="min-w-48"><input value={variable.label} onChange={(event) => updateVariable(active.domain, variableIndex, update, "label", event.target.value)} className={inputClass} /><select value={variable.data_type} onChange={(event) => updateVariable(active.domain, variableIndex, update, "data_type", event.target.value)} className={`${inputClass} mt-1`}><option>Char</option><option>Num</option></select></Cell>
@@ -189,6 +202,7 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
         <Cell><button type="button" aria-label={`Remove ${variable.name}`} onClick={() => update((next) => { next.datasets.find((item) => item.domain === active.domain)?.variables.splice(variableIndex, 1); })} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:text-rose-300"><Trash2 size={14} /></button></Cell>
       </tr>)}</tbody></table></div>
     </section>}
+    {reviewJob?.review_patch && <ReviewPatchPanel job={reviewJob} domain="General" />}
     <ReviewNotes assumptions={plan.assumptions} unresolved={plan.unresolved_mappings} onAssumptions={(items) => update((next) => { next.assumptions = items; })} onUnresolved={(items) => update((next) => { next.unresolved_mappings = items; })} />
     <ApprovalBar issues={issues} error={error} saving={saving} readyText="Every approved domain has a reviewable variable matrix." actionText="Approve mappings and generate rules/code" onApprove={() => onApprove(plan)} />
   </div>;

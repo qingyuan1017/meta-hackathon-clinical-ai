@@ -24,7 +24,28 @@ describe("ReviewPatchPanel", () => {
     render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><ReviewPatchPanel job={job} /></ReviewDraftProvider></QueryClientProvider>);
     expect(screen.getByText(/mapping_expression/)).toBeInTheDocument();
     expect(screen.getByText(/as\.numeric\(AGE\)/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Accept patch" }));
+    expect(screen.getByRole("region", { name: "DM feedback decision" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Accept all domain sections" }));
     await waitFor(() => expect(decide).toHaveBeenCalledWith(job.id, "patch-1", true, "b".repeat(64), job.result));
+  });
+
+  it("separates feedback decisions by SDTM domain", () => {
+    const job = {
+      id: "job-2", status: "review_required", result_revision: "b".repeat(64), result: {},
+      review_patch: {
+        transaction_id: "patch-2", status: "proposed", stage: "variable_mapping", message: "Revise DM and AE.",
+        scope: { paths: [], source_datasets: [], target_domains: ["DM", "AE"], variables: [] },
+        baseline_revision: "a".repeat(64), proposed_revision: "c".repeat(64), conflicts: [],
+        submitted_at: "2026-10-31T12:00:00Z", decided_at: null, reviewer: null,
+        operations: [
+          { path: "/variable_mapping/datasets/domain=DM/variables/name=AGE/mapping_expression", before: "Direct", after: "AGE" },
+          { path: "/variable_mapping/datasets/domain=AE/variables/name=AETERM/mapping_expression", before: "Direct", after: "trim(AETERM)" },
+        ],
+      },
+    } as Job;
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><ReviewPatchPanel job={job} /></ReviewDraftProvider></QueryClientProvider>);
+    expect(screen.getByRole("region", { name: "DM feedback decision" })).toHaveTextContent("AGE");
+    expect(screen.getByRole("region", { name: "AE feedback decision" })).toHaveTextContent("AETERM");
   });
 });
