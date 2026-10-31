@@ -14,6 +14,7 @@ from pydantic import BaseModel, ValidationError
 from ..ai import AIResponseError, MetaAIClient
 from ..config import Settings
 from ..parsers import chunk_text
+from ..sdtm_r import normalize_r_mapping_expression
 from .base import AgentDefinition
 from .tool_catalog import (
     BIOPORTAL_TOOLS,
@@ -965,6 +966,13 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
                 problems.append(f"Rule target {domain}.{variable} does not exist in variable mappings.")
             for domain, variable in variable_targets - set(rule_targets):
                 problems.append(f"Variable {domain}.{variable} is missing an augmented rule.")
+            for rule in value.rule_augmentations:
+                try:
+                    normalize_r_mapping_expression(rule.r_expression)
+                except ValueError as exc:
+                    problems.append(
+                        f"Rule {rule.rule_id} for {rule.target_domain}.{rule.target_variable} has an invalid R expression: {exc}"
+                    )
     elif workflow == "sdtm-rule-augmentation":
         domain_rule_ids = [rule.rule_id.casefold() for rule in value.domain_rule_augmentations]
         if len(domain_rule_ids) != len(set(domain_rule_ids)):
@@ -983,6 +991,13 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
         ]
         if len(rule_targets) != len(set(rule_targets)):
             problems.append("Each SDTM domain-variable pair must have exactly one augmented rule.")
+        for rule in value.rule_augmentations:
+            try:
+                normalize_r_mapping_expression(rule.r_expression)
+            except ValueError as exc:
+                problems.append(
+                    f"Rule {rule.rule_id} for {rule.target_domain}.{rule.target_variable} has an invalid R expression: {exc}"
+                )
         if "3.4" not in value.standard:
             problems.append("The draft must identify SDTMIG 3.4 as its baseline.")
     elif workflow in {"tlf-output-inventory", "tlf-analysis-specification", "tlf"}:

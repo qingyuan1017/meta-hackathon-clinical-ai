@@ -688,13 +688,16 @@ async def transcribe_review_guidance(
 
 @app.post(f"{settings.api_prefix}/jobs/{{job_id}}/retry", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
 async def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
-    if not settings.meta_configured:
-        raise HTTPException(status_code=503, detail="Meta API key and model are not configured.")
     job = db.get(Job, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     if job.status in {"queued", "running"}:
         raise HTTPException(status_code=409, detail="This job is already in progress.")
+    recovered = _recover_sdtm_render_failure(job, db)
+    if recovered is not None:
+        return recovered
+    if not settings.meta_configured:
+        raise HTTPException(status_code=503, detail="Meta API key and model are not configured.")
     output_dir = settings.jobs_dir / job_id / "output"
     shutil.rmtree(output_dir, ignore_errors=True)
     for artifact in list(job.artifacts):
@@ -717,6 +720,83 @@ async def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     db.commit()
     db.refresh(job)
     runner.enqueue(job.id)
+    return _job_read(job)
+
+
+def _recover_sdtm_render_failure(job: Job, db: Session) -> JobRead | None:
+    """Re-render a complete SDTM plan left by a failed deterministic artifact build."""
+
+    if job.workflow != "sdtm" or job.status != "failed":
+        return None
+    job_dir = settings.jobs_dir / job.id
+    current_output = job_dir / "output"
+    plan_path = current_output / "sdtm-mapping.json"
+    if not plan_path.is_file():
+        return None
+    next_output = job_dir / f"output-next-{uuid4()}"
+    try:
+        plan = SDTMUseCase().validate_result(json.loads(plan_path.read_text(encoding="utf-8")))
+        inputs = [(job_dir / "input" / name).resolve() for name in json.loads(job.input_files_json)]
+        options = json.loads(job.options_json)
+        rendered = WorkflowService().render_revision(
+            "sdtm",
+            result=plan.model_dump(mode="json"),
+            inputs=inputs,
+            options=options,
+            output_dir=next_output,
+        )
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        shutil.rmtree(next_output, ignore_errors=True)
+        return None
+
+    backup_output = job_dir / f"output-backup-{uuid4()}"
+    try:
+        current_output.rename(backup_output)
+        next_output.rename(current_output)
+        for artifact in list(job.artifacts):
+            if artifact.relative_path.startswith("output/"):
+                job.artifacts.remove(artifact)
+        db.flush()
+        for old_path in rendered.paths:
+            final_path = current_output / old_path.relative_to(next_output)
+            job.artifacts.append(Artifact(**artifact_record(final_path, job_dir)))
+        options.pop("_review_stage", None)
+        job.options_json = json.dumps(options, ensure_ascii=False)
+        job.result_json = json.dumps(rendered.result, ensure_ascii=False)
+        job.warnings_json = json.dumps(
+            [
+                DISCLAIMER,
+                "Recovered the validated generated SDTM plan and rebuilt artifacts without another model call.",
+                *rendered.warnings,
+            ],
+            ensure_ascii=False,
+        )
+        job.status = "succeeded"
+        job.error = None
+        job.completed_at = datetime.now(timezone.utc)
+        job.updated_at = job.completed_at
+        state = read_state(job_dir)
+        state.lifecycle.program_generation = "completed"
+        state.lifecycle.execution = "not_run"
+        state.lifecycle.submission_readiness = "blocked"
+        if not state.inputs.raw_datasets:
+            limitation = "Generated R and SAS programs were not tested against raw datasets."
+            if limitation not in state.limitations:
+                state.limitations.append(limitation)
+        write_state(job_dir, state)
+        _upsert_artifact(job, refresh_evidence_manifest(job_dir), job_dir)
+        _upsert_artifact(job, refresh_evidence_bundle(job_dir), job_dir)
+        db.commit()
+        db.refresh(job)
+    except Exception:
+        db.rollback()
+        shutil.rmtree(current_output, ignore_errors=True)
+        if backup_output.exists():
+            backup_output.rename(current_output)
+        raise
+    finally:
+        shutil.rmtree(next_output, ignore_errors=True)
+        shutil.rmtree(backup_output, ignore_errors=True)
     return _job_read(job)
 
 

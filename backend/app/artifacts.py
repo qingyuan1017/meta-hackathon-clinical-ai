@@ -4,7 +4,6 @@ from copy import copy
 import hashlib
 import json
 import re
-import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -37,6 +36,7 @@ from .core_conformance import (
     run_core_conformance,
 )
 from .usdm import USDM_VERSION, build_usdm
+from .sdtm_r import normalize_r_mapping_expression
 
 
 MEDIA_TYPES = {
@@ -725,11 +725,7 @@ def _r_string(value: str) -> str:
 
 
 def _safe_r_expression(value: str) -> str:
-    expression = value.strip()
-    prohibited = re.compile(r"(?i)(?:[;{}\n\r]|<-|<<-|::|system|shell|install|download|socket|url\s*\(|source\s*\(|read\.|file\s*\(|Sys\.|library\s*\(|require\s*\()")
-    if not expression or prohibited.search(expression):
-        raise ValueError("R mapping expressions must be single, side-effect-free expressions using the mounted source data only.")
-    return expression
+    return normalize_r_mapping_expression(value)
 
 
 def render_tlf(result: TLFPlan, output_dir: Path, languages: list[str]) -> list[Path]:

@@ -118,6 +118,117 @@ def test_retry_schedules_job_on_application_event_loop(monkeypatch) -> None:
         shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
 
 
+def test_retry_recovers_complete_sdtm_plan_without_model_call(monkeypatch) -> None:
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key = ""
+    settings.meta_model = ""
+    monkeypatch.setattr("app.main.runner.enqueue", lambda _job_id: (_ for _ in ()).throw(AssertionError("must not enqueue")))
+    source_spec = {
+        "study_name": "SYN-RECOVER",
+        "datasets": [
+            {
+                "name": "RAW_DM",
+                "label": "Demographics",
+                "variables": [
+                    {
+                        "name": "AGE",
+                        "label": "Age",
+                        "data_type": "integer",
+                        "provenance": {"file": "01-source.json"},
+                    }
+                ],
+                "provenance": {"file": "01-source.json"},
+            }
+        ],
+    }
+    plan = {
+        "study_name": "SYN-RECOVER",
+        "domain_mappings": [
+            {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "Demographics source"}
+        ],
+        "datasets": [
+            {
+                "domain": "DM",
+                "description": "Demographics",
+                "variables": [
+                    {
+                        "name": "AGE",
+                        "label": "Age",
+                        "data_type": "Num",
+                        "source_dataset": "RAW_DM",
+                        "source_field": "AGE",
+                    }
+                ],
+            }
+        ],
+        "domain_rule_augmentations": [
+            {
+                "rule_id": "DM-SOURCE",
+                "target_domain": "DM",
+                "source_datasets": ["RAW_DM"],
+                "description": "Prepare demographics",
+                "logic": "Read mounted source",
+                "r_input_expression": "raw_dm",
+                "sas_input_statement": "set raw.raw_dm;",
+            }
+        ],
+        "rule_augmentations": [
+            {
+                "rule_id": "DM-AGE",
+                "target_domain": "DM",
+                "target_variable": "AGE",
+                "source_dependencies": ["RAW_DM.AGE"],
+                "description": "Copy age",
+                "logic": "Direct assignment",
+                "r_expression": 'dplyr::if_else(is.na(AGE), NA_real_, AGE) /* review only */',
+                "sas_expression": "AGE",
+            }
+        ],
+    }
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm",
+            title="Recover render failure",
+            status="failed",
+            options_json=json.dumps({"languages": ["r", "sas"], "edc_source_spec": source_spec}),
+            input_files_json='["01-source.json"]',
+            error="Previous deterministic render failed.",
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    job_dir = settings.jobs_dir / job_id
+    (job_dir / "input").mkdir(parents=True, exist_ok=True)
+    (job_dir / "input" / "01-source.json").write_text(json.dumps(source_spec), encoding="utf-8")
+    (job_dir / "output").mkdir(parents=True, exist_ok=True)
+    (job_dir / "output" / "sdtm-mapping.json").write_text(json.dumps(plan), encoding="utf-8")
+    try:
+        with TestClient(app) as client:
+            response = client.post(f"/api/v1/jobs/{job_id}/retry")
+        assert response.status_code == 202, response.text
+        payload = response.json()
+        assert payload["status"] == "succeeded"
+        assert payload["error"] is None
+        assert any("without another model call" in warning for warning in payload["warnings"])
+        assert {item["name"] for item in payload["artifacts"]} >= {
+            "sdtm-mapping.json",
+            "build-sdtm.R",
+            "build-sdtm.sas",
+        }
+        assert "dplyr::if_else(is.na(AGE), NA_real_, AGE)" in (
+            job_dir / "output" / "build-sdtm.R"
+        ).read_text(encoding="utf-8")
+        assert "review only" not in (job_dir / "output" / "build-sdtm.R").read_text(encoding="utf-8")
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
 def test_sdtm_job_accepts_edc_without_blank_crf(monkeypatch) -> None:
     original_key, original_model = settings.meta_api_key, settings.meta_model
     settings.meta_api_key, settings.meta_model = "test", "test-model"
