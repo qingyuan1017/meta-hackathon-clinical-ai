@@ -51,6 +51,10 @@ from .sdtm import (
 )
 from .sdtm_workbench import (
     ArtifactEvidence,
+    ExecutionAttempt,
+    ExecutionAttemptList,
+    ExecutionCheck,
+    ExecutionOutput,
     RawDatasetInventory,
     SDTMInputManifest,
     SDTMLifecycle,
@@ -106,6 +110,10 @@ __all__ = [
     "SDTMDomainMappingReview",
     "SDTMDomainMappingUpdate",
     "SDTMDomainRuleAugmentation",
+    "ExecutionAttempt",
+    "ExecutionAttemptList",
+    "ExecutionCheck",
+    "ExecutionOutput",
     "SDTMPlan",
     "SDTMRuleAugmentation",
     "SDTMRuleAugmentationPlan",

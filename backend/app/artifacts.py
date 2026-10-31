@@ -3,6 +3,8 @@ from __future__ import annotations
 from copy import copy
 import hashlib
 import json
+import re
+import re
 import shutil
 import zipfile
 from pathlib import Path
@@ -46,6 +48,7 @@ MEDIA_TYPES = {
     ".xml": "application/xml",
     ".r": "text/x-r-source",
     ".sas": "text/x-sas",
+    ".xpt": "application/x-sas-transport",
     ".zip": "application/zip",
 }
 
@@ -473,16 +476,34 @@ def _render_r_sdtm(result: SDTMPlan, path: Path) -> Path:
         "# Generated from reviewed rule-augmentation metadata.",
         "# EXECUTION STATUS: NOT RUN. This program has not been tested against raw datasets.",
         "library(dplyr)",
+        "library(readr)",
+        "library(haven)",
+        "input_dir <- Sys.getenv(\"SDTM_INPUT_DIR\")",
+        "output_dir <- Sys.getenv(\"SDTM_OUTPUT_DIR\")",
+        "if (!nzchar(input_dir) || !nzchar(output_dir)) stop(\"Runner input/output directories are required\")",
+        "read_source <- function(logical_name) {",
+        "  candidates <- list.files(input_dir, full.names = TRUE)",
+        "  stems <- toupper(tools::file_path_sans_ext(basename(candidates)))",
+        "  matches <- candidates[stems == toupper(logical_name)]",
+        "  if (length(matches) != 1) stop(paste(\"Expected exactly one input dataset for\", logical_name))",
+        "  extension <- tolower(tools::file_ext(matches[[1]]))",
+        "  if (extension == \"csv\") return(readr::read_csv(matches[[1]], show_col_types = FALSE, progress = FALSE))",
+        "  if (extension == \"xpt\") return(haven::read_xpt(matches[[1]]))",
+        "  stop(paste(\"Unsupported input format for\", logical_name))",
+        "}",
         "",
     ]
     for dataset in result.datasets:
         domain_rule = domain_rules[dataset.domain.upper()]
+        source_name = domain_rule.source_datasets[0]
+        source_symbol = re.sub(r"[^A-Za-z0-9_.]", "_", source_name.lower())
         lines.extend(
             [
                 f"# {dataset.domain}: {dataset.description}",
                 f"# {domain_rule.rule_id}: {_one_line(domain_rule.description)}",
                 f"# Source datasets: {', '.join(domain_rule.source_datasets)}",
-                f"{dataset.domain.lower()} <- {domain_rule.r_input_expression} %>%",
+                f"{source_symbol} <- read_source({_r_string(source_name)})",
+                f"{dataset.domain.lower()} <- {source_symbol} %>%",
                 "  transmute(",
             ]
         )
@@ -492,10 +513,10 @@ def _render_r_sdtm(result: SDTMPlan, path: Path) -> Path:
             lines.extend(
                 [
                     f"    # {rule.rule_id}: {_one_line(rule.description)}",
-                    f"    {variable.name} = {rule.r_expression}{delimiter}",
+                    f"    {variable.name} = {_safe_r_expression(rule.r_expression)}{delimiter}",
                 ]
             )
-        lines.extend(["  )", "", f"# TODO: write_xpt({dataset.domain.lower()}, 'output/{dataset.domain.lower()}.xpt')", ""])
+        lines.extend(["  )", f"haven::write_xpt({dataset.domain.lower()}, file.path(output_dir, \"{dataset.domain.lower()}.xpt\"), version = 5)", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
@@ -540,6 +561,18 @@ def _render_sas_sdtm(result: SDTMPlan, path: Path) -> Path:
 
 def _one_line(value: str) -> str:
     return " ".join(value.split())
+
+
+def _r_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def _safe_r_expression(value: str) -> str:
+    expression = value.strip()
+    prohibited = re.compile(r"(?i)(?:[;{}\n\r]|<-|<<-|::|system|shell|install|download|socket|url\s*\(|source\s*\(|read\.|file\s*\(|Sys\.|library\s*\(|require\s*\()")
+    if not expression or prohibited.search(expression):
+        raise ValueError("R mapping expressions must be single, side-effect-free expressions using the mounted source data only.")
+    return expression
 
 
 def render_tlf(result: TLFPlan, output_dir: Path, languages: list[str]) -> list[Path]:

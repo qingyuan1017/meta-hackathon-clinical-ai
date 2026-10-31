@@ -41,6 +41,9 @@ from .schemas import (
     JobResultUpdate,
     ReviewFeedbackUpdate,
     SDTMDomainMappingUpdate,
+    ExecutionAttempt,
+    ExecutionAttemptList,
+    SDTMPlan,
     SDTMVariableMappingUpdate,
     TLFInventoryPlanUpdate,
     TLFProgrammingPlanUpdate,
@@ -50,6 +53,13 @@ from .schemas import (
 )
 from .security import detect_identifiers, validate_upload_metadata, verify_signature
 from .sdtm_workbench import initialize_state, inventory_raw_dataset, read_state
+from .sdtm_workbench import write_state
+from .sdtm_execution import (
+    RemoteRExecutionProvider,
+    SDTMExecutionService,
+    UnavailableRExecutionProvider,
+    list_attempts,
+)
 from .use_cases import USE_CASES, get_use_case
 from .use_cases.sdtm import SDTMUseCase
 from .use_cases.tlf import TLFUseCase
@@ -619,6 +629,78 @@ async def approve_sdtm_variable_mapping(
     _reject_review_identifiers(update.variable_mapping.model_dump_json(), "SDTM variable mapping")
     options["sdtm_variable_mapping"] = update.variable_mapping.model_dump(mode="json")
     return _resume_sdtm_review(job, options, db)
+
+
+@app.get(
+    f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-executions",
+    response_model=ExecutionAttemptList,
+)
+def read_sdtm_executions(job_id: str, db: Session = Depends(get_db)) -> ExecutionAttemptList:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm":
+        raise HTTPException(status_code=409, detail="Execution history is available only for SDTM jobs.")
+    return ExecutionAttemptList(items=list_attempts(settings.jobs_dir / job_id))
+
+
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-executions",
+    response_model=ExecutionAttempt,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_sdtm_execution(
+    job_id: str,
+    raw_files: list[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+) -> ExecutionAttempt:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm" or job.status != "succeeded" or not job.result_json:
+        raise HTTPException(status_code=409, detail="An approved, completed SDTM plan is required before execution.")
+    job_dir = settings.jobs_dir / job_id
+    if raw_files:
+        state = read_state(job_dir)
+        known = {item.logical_name for item in state.inputs.raw_datasets}
+        input_dir = job_dir / "input"
+        for upload in raw_files:
+            safe_name = validate_upload_metadata(upload)
+            if Path(safe_name).suffix.lower() not in {".csv", ".xpt"}:
+                raise HTTPException(status_code=415, detail="Execution inputs must be CSV or XPT datasets.")
+            destination = input_dir / f"execution-{uuid4().hex[:8]}-{safe_name}"
+            await _save_limited(upload, destination)
+            verify_signature(destination)
+            try:
+                inventory = inventory_raw_dataset(destination, safe_name)
+            except (OSError, UnicodeError, ValueError) as exc:
+                destination.unlink(missing_ok=True)
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            if inventory.logical_name in known:
+                destination.unlink(missing_ok=True)
+                raise HTTPException(status_code=422, detail=f"Duplicate raw dataset logical name: {inventory.logical_name}.")
+            known.add(inventory.logical_name)
+            state.inputs.raw_datasets.append(inventory)
+        state.limitations = [item for item in state.limitations if "No raw datasets" not in item and "not tested against raw" not in item]
+        state.lifecycle.execution = "not_run"
+        write_state(job_dir, state)
+    plan = SDTMPlan.model_validate(json.loads(job.result_json))
+    provider = (
+        RemoteRExecutionProvider(settings.sdtm_runner_url)
+        if settings.sdtm_runner_url.strip()
+        else UnavailableRExecutionProvider()
+    )
+    try:
+        attempt = SDTMExecutionService(provider, settings.sdtm_runner_timeout_seconds).execute(job_dir, plan)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    attempt_dir = job_dir / "sdtm" / "executions" / attempt.attempt_id
+    for path in [attempt_dir / "program.R", attempt_dir / "attempt.json", *(attempt_dir / "output").glob("*.xpt")]:
+        relative = path.relative_to(job_dir).as_posix()
+        if not any(item.relative_path == relative for item in job.artifacts):
+            job.artifacts.append(Artifact(**artifact_record(path, job_dir)))
+    db.commit()
+    return attempt
 
 
 @app.put(

@@ -56,6 +56,44 @@ class ArtifactEvidence(BaseModel):
     attempt_id: str | None = None
 
 
+class ExecutionOutput(BaseModel):
+    name: str
+    sha256: str
+    size_bytes: int
+    row_count: int | None = None
+    columns: list[str] = Field(default_factory=list)
+
+
+class ExecutionCheck(BaseModel):
+    check_id: str
+    status: Literal["passed", "failed", "warning", "not_run"]
+    message: str
+    domain: str | None = None
+
+
+class ExecutionAttempt(BaseModel):
+    attempt_id: str
+    parent_attempt_id: str | None = None
+    status: Literal["queued", "running", "review_required", "passed", "failed", "timed_out", "unavailable"]
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    program_hash: str
+    input_manifest: list[RawDatasetInventory] = Field(default_factory=list)
+    runtime: dict[str, str] = Field(default_factory=dict)
+    exit_code: int | None = None
+    stdout: str = ""
+    stderr: str = ""
+    outputs: list[ExecutionOutput] = Field(default_factory=list)
+    checks: list[ExecutionCheck] = Field(default_factory=list)
+    failure_classification: str | None = None
+    program_artifact: str
+
+
+class ExecutionAttemptList(BaseModel):
+    items: list[ExecutionAttempt] = Field(default_factory=list)
+
+
 class SDTMWorkbenchState(BaseModel):
     lifecycle: SDTMLifecycle = Field(default_factory=SDTMLifecycle)
     inputs: SDTMInputManifest = Field(default_factory=SDTMInputManifest)

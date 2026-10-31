@@ -1,4 +1,4 @@
-import type { AgentProgress, CDISCDataset, Health, Job, JobList, UseCaseContract, Workflow } from "./types";
+import type { AgentProgress, CDISCDataset, ExecutionAttempt, Health, Job, JobList, UseCaseContract, Workflow } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -101,6 +101,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ result }),
     }),
+  sdtmExecutions: (id: string) => request<{ items: ExecutionAttempt[] }>(`/api/v1/jobs/${id}/sdtm-executions`),
+  executeSdtm: (id: string, rawFiles: File[] = []) => {
+    const data = new FormData();
+    rawFiles.forEach((file) => data.append("raw_files", file));
+    return request<ExecutionAttempt>(`/api/v1/jobs/${id}/sdtm-executions`, { method: "POST", body: data });
+  },
   deleteJob: (id: string) => request<void>(`/api/v1/jobs/${id}`, { method: "DELETE" }),
   artifactUrl: (path: string) => `${API_URL}${path}`,
   artifactPreviewUrl: (path: string) => `${API_URL}${path}?inline=true`,

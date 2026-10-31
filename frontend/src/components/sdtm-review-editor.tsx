@@ -1,10 +1,10 @@
 "use client";
 
 import { useMemo, useState, type DragEvent, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, Plus, Save, Table2, Trash2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, Play, Plus, Save, Table2, Trash2, Upload } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Artifact, CDISCDataset } from "@/lib/types";
+import type { Artifact, CDISCDataset, SDTMWorkbenchState } from "@/lib/types";
 import { Button } from "./ui/button";
 
 type SourceType = "raw" | "sdtm";
@@ -83,12 +83,14 @@ export interface SDTMPlanDraft extends Record<string, unknown> {
   unresolved_mappings: string[];
 }
 
-type Stage = "domains" | "variables" | "rules" | "acrf" | "define";
+type Stage = "domains" | "variables" | "rules" | "execution" | "acrf" | "define";
 
 const inputClass = "focus-ring min-h-9 w-full rounded-md border border-white/10 bg-[#101012] px-2.5 py-2 text-xs text-zinc-200 placeholder:text-zinc-600";
 const codeClass = "focus-ring min-h-28 w-full resize-y rounded-lg border border-white/10 bg-[#0a0a0c] p-3 font-mono text-xs leading-5 text-zinc-200 placeholder:text-zinc-700";
 
-export function SDTMReviewEditor({ value, artifacts = [], onChange, onSave, saving, error }: {
+export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onChange, onSave, saving, error }: {
+  jobId?: string;
+  workbench?: SDTMWorkbenchState | null;
   value: Record<string, unknown>;
   artifacts?: Artifact[];
   onChange: (value: SDTMPlanDraft) => void;
@@ -226,12 +228,13 @@ export function SDTMReviewEditor({ value, artifacts = [], onChange, onSave, savi
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5" role="tablist" aria-label="SDTM review steps">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6" role="tablist" aria-label="SDTM review steps">
         <StageButton active={stage === "domains"} icon={<Database size={16} />} number="01" label="Domain mapping" onClick={() => setStage("domains")} />
         <StageButton active={stage === "variables"} icon={<Table2 size={16} />} number="02" label="Variable & VLM" onClick={() => setStage("variables")} />
         <StageButton active={stage === "rules"} icon={<Code2 size={16} />} number="03" label="Rule augmentation" onClick={() => setStage("rules")} />
-        <StageButton active={stage === "acrf"} icon={<FileScan size={16} />} number="04" label="aCRF review" onClick={() => setStage("acrf")} />
-        <StageButton active={stage === "define"} icon={<FileCode2 size={16} />} number="05" label="Define-XML" onClick={() => setStage("define")} />
+        <StageButton active={stage === "execution"} icon={<Play size={16} />} number="04" label="Execution" onClick={() => setStage("execution")} />
+        <StageButton active={stage === "acrf"} icon={<FileScan size={16} />} number="05" label="aCRF review" onClick={() => setStage("acrf")} />
+        <StageButton active={stage === "define"} icon={<FileCode2 size={16} />} number="06" label="Define-XML" onClick={() => setStage("define")} />
       </div>
 
       {stage === "domains" && (
@@ -339,6 +342,8 @@ export function SDTMReviewEditor({ value, artifacts = [], onChange, onSave, savi
         </div>
       )}
 
+      {stage === "execution" && <ExecutionReview jobId={jobId} workbench={workbench} />}
+
       {stage === "acrf" && (
         <DerivedArtifactReview
           title="Annotated CRF review"
@@ -366,6 +371,50 @@ export function SDTMReviewEditor({ value, artifacts = [], onChange, onSave, savi
       </div>
     </div>
   );
+}
+
+function ExecutionReview({ jobId, workbench }: { jobId?: string; workbench?: SDTMWorkbenchState | null }) {
+  const client = useQueryClient();
+  const [rawFiles, setRawFiles] = useState<File[]>([]);
+  const query = useQuery({
+    queryKey: ["sdtm-executions", jobId],
+    queryFn: () => api.sdtmExecutions(jobId!),
+    enabled: Boolean(jobId),
+  });
+  const mutation = useMutation({
+    mutationFn: () => api.executeSdtm(jobId!, rawFiles),
+    onSuccess: () => {
+      setRawFiles([]);
+      client.invalidateQueries({ queryKey: ["sdtm-executions", jobId] });
+      client.invalidateQueries({ queryKey: ["job", jobId] });
+    },
+  });
+  const datasets = workbench?.inputs.raw_datasets ?? [];
+  return <div className="space-y-4">
+    <section className="rounded-xl border border-white/10 bg-[#141416] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div><p className="text-sm font-extrabold text-zinc-100">Isolated R execution</p><p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">R runs only in the dedicated network-isolated runner. SAS remains export-only. Output checks confirm readability and expected structure; they are not standards validation.</p></div>
+        <span className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-zinc-300">{workbench?.lifecycle.execution?.replaceAll("_", " ") ?? "not run"}</span>
+      </div>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        {datasets.map((dataset) => <div key={dataset.logical_name} className="rounded-lg border border-white/10 bg-white/[0.025] p-3"><p className="font-mono text-xs font-bold text-violet-200">{dataset.logical_name}.{dataset.format}</p><p className="mt-1 text-[11px] text-zinc-500">{dataset.row_count ?? "Unknown"} rows · {dataset.columns.length} columns · SHA-256 {dataset.sha256.slice(0, 12)}…</p></div>)}
+        {!datasets.length && <p className="text-xs text-amber-200">No raw datasets were supplied. Programs are generated but cannot be executed.</p>}
+      </div>
+      <label className="mt-4 block rounded-lg border border-dashed border-white/15 p-3 text-xs text-zinc-400"><span className="flex items-center gap-2 font-bold text-zinc-300"><Upload size={14} />Add raw data after mapping approval</span><input className="mt-2 block w-full" type="file" accept=".csv,.xpt" multiple onChange={(event) => setRawFiles(Array.from(event.target.files ?? []))} /></label>
+      <Button type="button" variant="clinical" className="mt-3" disabled={!jobId || mutation.isPending || (!datasets.length && !rawFiles.length)} onClick={() => mutation.mutate()}><Play size={15} />{mutation.isPending ? "Running in isolation…" : "Execute reviewed R"}</Button>
+      {mutation.error && <p className="mt-3 text-xs text-rose-300">{mutation.error.message}</p>}
+    </section>
+    <section className="space-y-3">
+      <p className="text-xs font-black uppercase tracking-wider text-zinc-400">Immutable attempt history</p>
+      {query.data?.items.map((attempt) => <article key={attempt.attempt_id} className="rounded-xl border border-white/10 bg-[#141416] p-4">
+        <div className="flex flex-wrap justify-between gap-2"><div><p className="font-mono text-xs font-bold text-violet-200">{attempt.attempt_id}</p><p className="mt-1 text-[11px] text-zinc-500">Program SHA-256 {attempt.program_hash} · exit {attempt.exit_code ?? "not available"}</p></div><span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${attempt.status === "passed" ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"}`}>{attempt.status.replaceAll("_", " ")}</span></div>
+        {attempt.failure_classification && <p className="mt-3 text-xs text-amber-200">Failure classification: {attempt.failure_classification.replaceAll("_", " ")}</p>}
+        <div className="mt-3 grid gap-2 md:grid-cols-2">{attempt.checks.map((check, index) => <div key={`${check.check_id}-${index}`} className="rounded-lg border border-white/[0.08] p-2 text-xs"><span className={check.status === "passed" ? "text-emerald-300" : check.status === "warning" ? "text-amber-300" : "text-rose-300"}>{check.status.toUpperCase()}</span><span className="ml-2 text-zinc-400">{check.message}</span></div>)}</div>
+        {(attempt.stdout || attempt.stderr) && <details className="mt-3"><summary className="cursor-pointer text-xs font-bold text-zinc-400">Sanitized runner logs</summary><pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-black/30 p-3 text-[11px] text-zinc-400">{[attempt.stdout, attempt.stderr].filter(Boolean).join("\n")}</pre></details>}
+      </article>)}
+      {!query.isPending && !query.data?.items.length && <EmptyReview text="No R execution attempts have been recorded." />}
+    </section>
+  </div>;
 }
 
 function StageButton({ active, icon, number, label, onClick }: { active: boolean; icon: ReactNode; number: string; label: string; onClick: () => void }) {
