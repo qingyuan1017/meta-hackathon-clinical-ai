@@ -51,6 +51,23 @@ describe("SDTM mapping review gates", () => {
     }));
   });
 
+  it("requires confirmation before returning to domain mapping", () => {
+    const onReturn = vi.fn();
+    render(<SDTMVariableMappingReview
+      value={{ source_spec: source, domain_mapping: domain, variable_mapping: variable }}
+      onChange={vi.fn()}
+      onApprove={vi.fn()}
+      onReturnToDomainMapping={onReturn}
+      saving={false}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Change domain mapping" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("only added or materially changed domains will be regenerated");
+    expect(onReturn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Return to domain mapping" }));
+    expect(onReturn).toHaveBeenCalledOnce();
+  });
+
   it("shows only the active domain's owned mapping comments", () => {
     const owned = {
       ...variable,

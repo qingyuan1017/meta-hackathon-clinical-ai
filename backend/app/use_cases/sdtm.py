@@ -155,23 +155,52 @@ class SDTMUseCase(ClinicalUseCase):
         domain_mapping = self._approved_domain_mapping(context.options, source_spec)
         if context.options.get("sdtm_variable_mapping") is None:
             scoped_domains: list[str] | None = None
+            reconciliation = context.options.get("_sdtm_variable_mapping_reconcile")
             if isinstance(patch_request, dict) and patch_request.get("stage") == "variable_mapping":
                 scope = ReviewScope.model_validate(patch_request.get("scope", {}))
                 scoped_domains = list(dict.fromkeys([
                     *scope.target_domains,
                     *[item.domain for item in scope.variables],
                 ]))
-            variable_mapping, variable_warnings = await self._generate_variable_mapping_batches(
-                context,
-                source_spec=source_spec,
-                domain_mapping=domain_mapping,
-                context_inputs=context_inputs,
-                crf=crf,
-                agent_options=agent_options,
-                stage_count=stage_count,
-                target_domains=scoped_domains,
+            baseline_mapping: SDTMVariableMappingPlan | None = None
+            preserve_domains: list[str] = []
+            if scoped_domains is None and isinstance(reconciliation, dict):
+                baseline_mapping = SDTMVariableMappingPlan.model_validate(reconciliation.get("baseline"))
+                preserve_domains = [str(item).upper() for item in reconciliation.get("preserve_domains", [])]
+                scoped_domains = [str(item).upper() for item in reconciliation.get("regenerate_domains", [])]
+                expected = list(dict.fromkeys(item.target_domain.upper() for item in domain_mapping.domain_mappings))
+                if len(preserve_domains) != len(set(preserve_domains)) or len(scoped_domains) != len(set(scoped_domains)):
+                    raise ValueError("Variable-mapping reconciliation contains duplicate target domains.")
+                if set(preserve_domains).intersection(scoped_domains) or set([*preserve_domains, *scoped_domains]) != set(expected):
+                    raise ValueError("Variable-mapping reconciliation does not cover the approved target domains exactly once.")
+            generated_mapping: SDTMVariableMappingPlan | None = None
+            variable_warnings: list[str] = []
+            if scoped_domains is None or scoped_domains:
+                generated_mapping, variable_warnings = await self._generate_variable_mapping_batches(
+                    context,
+                    source_spec=source_spec,
+                    domain_mapping=domain_mapping,
+                    context_inputs=context_inputs,
+                    crf=crf,
+                    agent_options=agent_options,
+                    stage_count=stage_count,
+                    target_domains=scoped_domains,
+                )
+            variable_mapping = (
+                self.reconcile_variable_mapping(
+                    domain_mapping,
+                    baseline=baseline_mapping,
+                    generated=generated_mapping,
+                    preserve_domains=preserve_domains,
+                )
+                if baseline_mapping is not None
+                else generated_mapping
             )
+            if variable_mapping is None:
+                raise ValueError("Variable mapping generation did not produce a review draft.")
             if scoped_domains is None:
+                self.validate_variable_mapping(source_spec, domain_mapping, variable_mapping)
+            elif baseline_mapping is not None:
                 self.validate_variable_mapping(source_spec, domain_mapping, variable_mapping)
             return GeneratedContent(
                 value=SDTMVariableMappingReview(
@@ -202,7 +231,7 @@ class SDTMUseCase(ClinicalUseCase):
         approved_target_domains = list(
             dict.fromkeys(item.target_domain.upper() for item in domain_mapping.domain_mappings)
         )
-        target_domains = target_domains or approved_target_domains
+        target_domains = approved_target_domains if target_domains is None else target_domains
         unknown_targets = sorted(set(target_domains) - set(approved_target_domains))
         if unknown_targets:
             raise ValueError(f"Scoped variable revision references unapproved domains: {', '.join(unknown_targets)}.")
@@ -310,6 +339,86 @@ class SDTMUseCase(ClinicalUseCase):
                 unresolved_mappings=list(dict.fromkeys(unresolved)),
             ),
             list(dict.fromkeys(warnings)),
+        )
+
+    @staticmethod
+    def build_variable_mapping_reconciliation(
+        previous: SDTMDomainMappingPlan,
+        current: SDTMDomainMappingPlan,
+        baseline: SDTMVariableMappingPlan,
+    ) -> dict[str, Any]:
+        """Describe which domain batches remain valid after a domain-plan revision."""
+
+        def signatures(plan: SDTMDomainMappingPlan) -> dict[str, tuple[tuple[str, str, str], ...]]:
+            grouped: dict[str, list[tuple[str, str, str]]] = {}
+            for item in plan.domain_mappings:
+                grouped.setdefault(item.target_domain.upper(), []).append((
+                    item.source_dataset.casefold(),
+                    item.source_type,
+                    item.relationship,
+                ))
+            return {domain: tuple(sorted(values)) for domain, values in grouped.items()}
+
+        target_domains = list(dict.fromkeys(item.target_domain.upper() for item in current.domain_mappings))
+        baseline_domains = {item.domain.upper() for item in baseline.datasets}
+        previous_signatures = signatures(previous)
+        current_signatures = signatures(current)
+        compatible_header = previous.study_name == current.study_name and previous.standard == current.standard
+        preserve_domains = [
+            domain
+            for domain in target_domains
+            if compatible_header
+            and domain in baseline_domains
+            and previous_signatures.get(domain) == current_signatures.get(domain)
+        ]
+        return {
+            "baseline": baseline.model_dump(mode="json"),
+            "preserve_domains": preserve_domains,
+            "regenerate_domains": [domain for domain in target_domains if domain not in preserve_domains],
+        }
+
+    @staticmethod
+    def reconcile_variable_mapping(
+        domain_mapping: SDTMDomainMappingPlan,
+        *,
+        baseline: SDTMVariableMappingPlan,
+        generated: SDTMVariableMappingPlan | None,
+        preserve_domains: list[str],
+    ) -> SDTMVariableMappingPlan:
+        """Merge unchanged reviewed domain batches with regenerated affected batches."""
+
+        target_domains = list(dict.fromkeys(item.target_domain.upper() for item in domain_mapping.domain_mappings))
+        preserve = {item.upper() for item in preserve_domains}
+        baseline_by_domain = {item.domain.upper(): item for item in baseline.datasets}
+        generated_by_domain = {item.domain.upper(): item for item in generated.datasets} if generated else {}
+        datasets = []
+        for domain in target_domains:
+            dataset = baseline_by_domain.get(domain) if domain in preserve else generated_by_domain.get(domain)
+            if dataset is None:
+                raise ValueError(f"Variable-mapping reconciliation has no dataset for {domain}.")
+            datasets.append(dataset)
+
+        baseline_owned_assumptions = {
+            note for dataset in baseline.datasets for note in dataset.review_assumptions
+        }
+        baseline_owned_unresolved = {
+            note for dataset in baseline.datasets for note in dataset.review_unresolved_mappings
+        }
+        stage_assumptions = [note for note in baseline.assumptions if note not in baseline_owned_assumptions]
+        stage_unresolved = [note for note in baseline.unresolved_mappings if note not in baseline_owned_unresolved]
+        return SDTMVariableMappingPlan(
+            study_name=domain_mapping.study_name,
+            standard=generated.standard if generated else baseline.standard,
+            define_standard=generated.define_standard if generated else baseline.define_standard,
+            datasets=datasets,
+            assumptions=list(dict.fromkeys([
+                *stage_assumptions,
+                *[note for dataset in datasets for note in dataset.review_assumptions],
+            ])),
+            unresolved_mappings=list(dict.fromkeys([
+                *stage_unresolved,
+                *[note for dataset in datasets for note in dataset.review_unresolved_mappings],
+            ])),
         )
 
     @staticmethod

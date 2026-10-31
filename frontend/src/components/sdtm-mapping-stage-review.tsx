@@ -158,7 +158,7 @@ export function SDTMDomainMappingReview({ value, onChange, onApprove, saving, er
   </div>;
 }
 
-export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, error, reviewJob, feedbackEvents }: {
+export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, error, reviewJob, feedbackEvents, onReturnToDomainMapping, returningToDomainMapping = false, returnDomainError }: {
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>) => void;
   onApprove: (value: SDTMVariableMappingPlanDraft) => void;
@@ -166,10 +166,14 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
   error?: string | null;
   reviewJob?: Job;
   feedbackEvents?: RevisionFeedbackEvent[];
+  onReturnToDomainMapping?: () => void;
+  returningToDomainMapping?: boolean;
+  returnDomainError?: string | null;
 }) {
   const envelope = normalizeVariableEnvelope(value);
   const plan = envelope.variable_mapping;
   const [selectedDomain, setSelectedDomain] = useState(plan.datasets[0]?.domain ?? "");
+  const [confirmDomainReturn, setConfirmDomainReturn] = useState(false);
   const active = plan.datasets.find((dataset) => dataset.domain === selectedDomain) ?? plan.datasets[0];
   const issues = variableIssues(envelope);
   const update = (mutate: (next: SDTMVariableMappingPlanDraft) => void) => {
@@ -191,6 +195,9 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
 
   return <div className="space-y-5">
     <ReviewGateHeader step="3 of 3" title="Variable and value-level mapping review required" description="Review each SDTM variable row and the VLM cells. Rule augmentation and code generation remain blocked until this matrix is approved." />
+    {onReturnToDomainMapping && <div className="rounded-xl border border-white/10 bg-white/[0.025] p-4">
+      {!confirmDomainReturn ? <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="text-sm font-bold text-zinc-200">Need to change a source-to-domain assignment?</p><p className="mt-1 text-xs leading-5 text-zinc-500">Return to the domain gate before approving variable mappings.</p></div><Button type="button" variant="outline" onClick={() => setConfirmDomainReturn(true)}>Change domain mapping</Button></div> : <div role="alert" className="space-y-3"><div><p className="text-sm font-bold text-amber-200">Return to domain mapping review?</p><p className="mt-1 text-xs leading-5 text-amber-100/75">The source inventory and unchanged domain variable mappings will be retained. After you approve the revised domain plan, only added or materially changed domains will be regenerated; removed domains will be dropped. This action does not approve or advance the workflow.</p></div><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={() => setConfirmDomainReturn(false)} disabled={returningToDomainMapping}>Cancel</Button><Button type="button" variant="clinical" onClick={onReturnToDomainMapping} disabled={returningToDomainMapping}>{returningToDomainMapping ? "Returning…" : "Return to domain mapping"}</Button></div>{returnDomainError && <p className="text-xs text-rose-300">{returnDomainError}</p>}</div>}
+    </div>}
     <div className="flex flex-wrap gap-2">{plan.datasets.map((dataset) => <button type="button" key={dataset.domain} onClick={() => setSelectedDomain(dataset.domain)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${active?.domain === dataset.domain ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 text-zinc-500"}`}>{dataset.domain}{feedbackCounts.has(dataset.domain) && <span className="ml-2 rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[9px] text-amber-200">{feedbackCounts.get(dataset.domain)}</span>}</button>)}</div>
     {active && <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]">
       <div className="grid gap-3 border-b border-white/10 p-4 lg:grid-cols-[180px_minmax(240px,1fr)_minmax(260px,1fr)_auto]">

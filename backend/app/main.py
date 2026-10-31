@@ -44,6 +44,8 @@ from .schemas import (
     ReviewScopeProposal,
     ReviewScopeProposalRequest,
     SDTMDomainMappingUpdate,
+    SDTMDomainMappingPlan,
+    SDTMDomainMappingReview,
     ExecutionAttempt,
     ExecutionAttemptList,
     RepairApproval,
@@ -54,6 +56,8 @@ from .schemas import (
     CSDRGDocument,
     SDTMPlan,
     SDTMVariableMappingUpdate,
+    SDTMVariableMappingPlan,
+    SDTMVariableMappingReview,
     TLFInventoryPlanUpdate,
     TLFProgrammingPlanUpdate,
     TLFShellPlanUpdate,
@@ -774,8 +778,75 @@ async def approve_sdtm_domain_mapping(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _reject_review_identifiers(update.domain_mapping.model_dump_json(), "SDTM domain mapping")
+    previous_mapping_raw = options.pop("_sdtm_domain_mapping_baseline", None)
+    baseline_variables_raw = options.pop("_sdtm_variable_mapping_baseline", None)
+    if previous_mapping_raw is not None or baseline_variables_raw is not None:
+        if not isinstance(previous_mapping_raw, dict) or not isinstance(baseline_variables_raw, dict):
+            raise HTTPException(status_code=409, detail="The prior mapping baseline is incomplete; return to variable mapping and try again.")
+        try:
+            previous_mapping = SDTMDomainMappingPlan.model_validate(previous_mapping_raw)
+            baseline_variables = SDTMVariableMappingPlan.model_validate(baseline_variables_raw)
+            SDTMUseCase.validate_domain_mapping(source_spec, previous_mapping)
+            SDTMUseCase.validate_variable_mapping(source_spec, previous_mapping, baseline_variables)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=f"The prior mapping baseline is invalid: {exc}") from exc
+        options["_sdtm_variable_mapping_reconcile"] = SDTMUseCase.build_variable_mapping_reconciliation(
+            previous_mapping,
+            update.domain_mapping,
+            baseline_variables,
+        )
     options["sdtm_domain_mapping"] = update.domain_mapping.model_dump(mode="json")
     return _resume_sdtm_review(job, options, db)
+
+
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-domain-mapping/reopen",
+    response_model=JobRead,
+)
+async def reopen_sdtm_domain_mapping(
+    job_id: str,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    """Return a variable-mapping review to the domain gate without a model call."""
+
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    _ensure_no_pending_review_patch(options)
+    if job.workflow != "sdtm" or job.status != "review_required" or options.get("_review_stage") != "variable_mapping":
+        raise HTTPException(status_code=409, detail="This job is not waiting for SDTM variable mapping review.")
+    if not job.result_json:
+        raise HTTPException(status_code=409, detail="The variable-mapping review draft is unavailable.")
+    source_spec = SDTMUseCase._approved_source_spec(options)
+    domain_mapping = SDTMUseCase._approved_domain_mapping(options, source_spec)
+    try:
+        current_review = SDTMVariableMappingReview.model_validate(json.loads(job.result_json))
+        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, current_review.variable_mapping)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=f"The variable-mapping review draft cannot be preserved: {exc}") from exc
+
+    options["_sdtm_domain_mapping_baseline"] = domain_mapping.model_dump(mode="json")
+    options["_sdtm_variable_mapping_baseline"] = current_review.variable_mapping.model_dump(mode="json")
+    options.pop("_sdtm_variable_mapping_reconcile", None)
+    options.pop("sdtm_variable_mapping", None)
+    options["_review_stage"] = "domain_mapping"
+    options.pop("review_feedback", None)
+    options.pop("_review_revision_result", None)
+    options.pop("_review_patch_request", None)
+    options.pop("_pending_review_patch", None)
+    job.options_json = json.dumps(options, ensure_ascii=False)
+    job.result_json = SDTMDomainMappingReview(
+        source_spec=source_spec,
+        domain_mapping=domain_mapping,
+    ).model_dump_json()
+    job.warnings_json = json.dumps([DISCLAIMER], ensure_ascii=False)
+    job.error = None
+    job.completed_at = None
+    job.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(job)
+    return _job_read(job)
 
 
 @app.put(
@@ -804,6 +875,7 @@ async def approve_sdtm_variable_mapping(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     _reject_review_identifiers(update.variable_mapping.model_dump_json(), "SDTM variable mapping")
+    options.pop("_sdtm_variable_mapping_reconcile", None)
     options["sdtm_variable_mapping"] = update.variable_mapping.model_dump(mode="json")
     return _resume_sdtm_review(job, options, db)
 

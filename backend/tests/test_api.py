@@ -527,6 +527,120 @@ def test_reviewed_domain_and_variable_mappings_resume_each_sdtm_gate(monkeypatch
             session.commit()
 
 
+def test_variable_mapping_review_can_return_to_domain_gate_and_reconcile_changes(monkeypatch) -> None:
+    queued = []
+    monkeypatch.setattr("app.main.runner.enqueue", queued.append)
+    source_spec = {
+        "study_name": "SYN-101",
+        "datasets": [
+            {
+                "name": source,
+                "label": label,
+                "variables": [{
+                    "name": field,
+                    "label": field,
+                    "data_type": "text",
+                    "provenance": {"file": "edc.json"},
+                }],
+                "provenance": {"file": "edc.json"},
+            }
+            for source, label, field in (
+                ("RAW_DM", "Demographics", "AGE"),
+                ("RAW_AE", "Adverse events", "AETERM"),
+            )
+        ],
+    }
+    domain_mapping = {
+        "study_name": "SYN-101",
+        "domain_mappings": [
+            {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "Demographics"},
+            {"source_dataset": "RAW_AE", "target_domain": "AE", "rationale": "Adverse events"},
+        ],
+    }
+    variable_mapping = {
+        "study_name": "SYN-101",
+        "datasets": [
+            {
+                "domain": "DM",
+                "description": "Demographics",
+                "review_assumptions": ["Keep reviewed DM mapping"],
+                "variables": [{
+                    "name": "AGE", "label": "Age", "data_type": "Num",
+                    "source_dataset": "RAW_DM", "source_field": "AGE",
+                }],
+            },
+            {
+                "domain": "AE",
+                "description": "Adverse Events",
+                "review_unresolved_mappings": ["Review AE mapping"],
+                "variables": [{
+                    "name": "AETERM", "label": "Reported Term", "data_type": "Char",
+                    "source_dataset": "RAW_AE", "source_field": "AETERM",
+                }],
+            },
+        ],
+        "assumptions": ["Keep reviewed DM mapping"],
+        "unresolved_mappings": ["Review AE mapping"],
+    }
+    result = {
+        "source_spec": source_spec,
+        "domain_mapping": domain_mapping,
+        "variable_mapping": variable_mapping,
+    }
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm",
+            title="Reopen domain review",
+            status="review_required",
+            options_json=json.dumps({
+                "edc_source_spec": source_spec,
+                "sdtm_domain_mapping": domain_mapping,
+                "_review_stage": "variable_mapping",
+            }),
+            input_files_json='["01-edc.json"]',
+            result_json=json.dumps(result),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    try:
+        with TestClient(app) as client:
+            reopened = client.post(f"/api/v1/jobs/{job_id}/sdtm-domain-mapping/reopen")
+            assert queued == []
+            revised_domain_mapping = {
+                **domain_mapping,
+                "domain_mappings": [
+                    domain_mapping["domain_mappings"][0],
+                    {"source_dataset": "RAW_AE", "target_domain": "DS", "rationale": "Disposition events"},
+                ],
+            }
+            approved = client.put(
+                f"/api/v1/jobs/{job_id}/sdtm-domain-mapping",
+                json={"domain_mapping": revised_domain_mapping},
+            )
+
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["status"] == "review_required"
+        assert reopened.json()["review_stage"] == "domain_mapping"
+        assert "variable_mapping" not in reopened.json()["result"]
+        assert queued == [job_id]
+        assert approved.status_code == 202, approved.text
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            assert stored is not None
+            options = json.loads(stored.options_json)
+            reconciliation = options["_sdtm_variable_mapping_reconcile"]
+            assert reconciliation["preserve_domains"] == ["DM"]
+            assert reconciliation["regenerate_domains"] == ["DS"]
+            assert [item["domain"] for item in reconciliation["baseline"]["datasets"]] == ["DM", "AE"]
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+
+
 def test_reviewed_tlf_inventory_resumes_shell_generation(monkeypatch) -> None:
     queued = []
     monkeypatch.setattr("app.main.runner.enqueue", queued.append)

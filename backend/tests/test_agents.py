@@ -153,6 +153,112 @@ def test_sdtm_variable_mapping_accepts_assigned_values_without_raw_sources() -> 
         SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid)
 
 
+def test_sdtm_domain_revision_preserves_only_unchanged_variable_batches() -> None:
+    previous = SDTMDomainMappingPlan.model_validate({
+        "study_name": "SYN-101",
+        "domain_mappings": [
+            {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "Demographics"},
+            {"source_dataset": "RAW_AE", "target_domain": "AE", "rationale": "Adverse events"},
+        ],
+    })
+    current = SDTMDomainMappingPlan.model_validate({
+        "study_name": "SYN-101",
+        "domain_mappings": [
+            {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "Updated wording only"},
+            {"source_dataset": "RAW_AE", "target_domain": "DS", "rationale": "Disposition events"},
+        ],
+    })
+    baseline = SDTMVariableMappingPlan.model_validate({
+        "study_name": "SYN-101",
+        "datasets": [
+            {
+                "domain": "DM", "description": "Demographics",
+                "review_assumptions": ["DM reviewed"],
+                "variables": [{"name": "AGE", "label": "Age", "data_type": "Num", "source_dataset": "RAW_DM", "source_field": "AGE"}],
+            },
+            {
+                "domain": "AE", "description": "Adverse Events",
+                "review_unresolved_mappings": ["AE obsolete"],
+                "variables": [{"name": "AETERM", "label": "Reported Term", "source_dataset": "RAW_AE", "source_field": "AETERM"}],
+            },
+        ],
+        "assumptions": ["DM reviewed"],
+        "unresolved_mappings": ["AE obsolete"],
+    })
+    generated = SDTMVariableMappingPlan.model_validate({
+        "study_name": "SYN-101",
+        "datasets": [{
+            "domain": "DS", "description": "Disposition",
+            "review_unresolved_mappings": ["DS review"],
+            "variables": [{"name": "DSTERM", "label": "Reported Term", "source_dataset": "RAW_AE", "source_field": "AETERM"}],
+        }],
+        "unresolved_mappings": ["DS review"],
+    })
+
+    reconciliation = SDTMUseCase.build_variable_mapping_reconciliation(previous, current, baseline)
+    merged = SDTMUseCase.reconcile_variable_mapping(
+        current,
+        baseline=baseline,
+        generated=generated,
+        preserve_domains=reconciliation["preserve_domains"],
+    )
+
+    assert reconciliation["preserve_domains"] == ["DM"]
+    assert reconciliation["regenerate_domains"] == ["DS"]
+    assert [item.domain for item in merged.datasets] == ["DM", "DS"]
+    assert merged.datasets[0].variables[0].name == "AGE"
+    assert merged.assumptions == ["DM reviewed"]
+    assert merged.unresolved_mappings == ["DS review"]
+
+
+async def test_sdtm_unchanged_reopened_domain_plan_reuses_variable_mapping_without_model_call(tmp_path) -> None:
+    source_spec = {
+        "study_name": "SYN-101",
+        "datasets": [{
+            "name": "RAW_DM",
+            "label": "Demographics",
+            "variables": [{"name": "AGE", "label": "Age", "data_type": "integer", "provenance": {"file": "edc.json"}}],
+            "provenance": {"file": "edc.json"},
+        }],
+    }
+    domain_mapping = SDTMDomainMappingPlan.model_validate({
+        "study_name": "SYN-101",
+        "domain_mappings": [{"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "Demographics"}],
+    })
+    baseline = SDTMVariableMappingPlan.model_validate({
+        "study_name": "SYN-101",
+        "datasets": [{
+            "domain": "DM", "description": "Demographics", "review_assumptions": ["Reviewed DM"],
+            "variables": [{"name": "AGE", "label": "Age", "data_type": "Num", "source_dataset": "RAW_DM", "source_field": "AGE"}],
+        }],
+        "assumptions": ["Reviewed DM"],
+    })
+    reconciliation = SDTMUseCase.build_variable_mapping_reconciliation(domain_mapping, domain_mapping, baseline)
+    completions = ScriptedCompletions([])
+    settings = agent_settings(agent_max_turns=4)
+    ai = MetaAIClient(settings)
+    ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    edc = tmp_path / "edc.json"
+    edc.write_text(json.dumps({"study": "SYN-101", "datasets": []}), encoding="utf-8")
+
+    prepared = await SDTMUseCase().prepare_review(UseCaseContext(
+        inputs=[edc],
+        options={
+            "edc_source_spec": source_spec,
+            "sdtm_domain_mapping": domain_mapping.model_dump(mode="json"),
+            "_sdtm_variable_mapping_reconcile": reconciliation,
+        },
+        ai=ai,
+        settings=settings,
+        agent_progress_path=tmp_path / "agent" / "progress.json",
+    ))
+
+    assert prepared is not None
+    assert prepared.review_stage == "variable_mapping"
+    assert prepared.value.variable_mapping.datasets[0].variables[0].name == "AGE"
+    assert completions.requests == []
+
+
 class FakeMessage:
     def __init__(self, call):
         self.content = None

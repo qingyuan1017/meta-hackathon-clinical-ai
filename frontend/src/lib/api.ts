@@ -83,6 +83,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ domain_mapping: domainMapping }),
     }),
+  reopenSdtmDomainMapping: (id: string) =>
+    request<Job>(`/api/v1/jobs/${id}/sdtm-domain-mapping/reopen`, { method: "POST" }),
   approveSdtmVariableMapping: (id: string, variableMapping: Record<string, unknown>) =>
     request<Job>(`/api/v1/jobs/${id}/sdtm-variable-mapping`, {
       method: "PUT",
