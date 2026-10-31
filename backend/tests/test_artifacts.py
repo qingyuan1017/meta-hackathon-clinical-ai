@@ -9,7 +9,7 @@ from reportlab.pdfgen import canvas
 
 from app.artifacts import add_manifest_and_bundle, diagnose_define, render_clinical_document, render_edc, render_protocol, render_sdtm, render_tlf
 from app.core_conformance import CoreConformanceError, CoreConformanceResult
-from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMDomainMapping, SDTMDomainRuleAugmentation, SDTMPlan, SDTMRuleAugmentation, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFFigureSpec, TLFPlan, TLFProgramSpec, TLFRow, TLFSourceVariable, TLFSpec
+from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMDomainMapping, SDTMDomainRuleAugmentation, SDTMPlan, SDTMRuleAugmentation, SDTMUnmappedDataset, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFFigureSpec, TLFPlan, TLFProgramSpec, TLFRow, TLFSourceVariable, TLFSpec
 from app.usdm import USDM_VERSION, validate_usdm
 
 
@@ -112,6 +112,7 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
     sdtm = SDTMPlan(
         study_name="SYN-101",
         domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Demographics source")],
+        unmapped_datasets=[SDTMUnmappedDataset(source_dataset="AUDIT_LOG", rationale="Operational metadata")],
         datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", source_dataset="RAW_DM", source_field="AGE", crf_source_label="Age", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGEU = 'YEARS'", label="Age in years", data_type="Num", mapping_expression="Direct")])])],
         domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Use demographics source", logic="Read the raw demographics dataset", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
         rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", source_dependencies=["RAW_DM.AGE"], description="Copy collected age", logic="Direct assignment", r_expression='.data[["AGE"]]', sas_expression="AGE")],
@@ -122,7 +123,8 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
     assert tree.getroot().tag.endswith("ODM")
     assert (tmp_path / "annotated-crf.pdf").stat().st_size > 0
     workbook = load_workbook(tmp_path / "sdtm-mapping.xlsx")
-    assert {"Domain Mappings", "Variable Mappings", "Value Level Metadata", "Domain Rule Augmentation", "Variable Rule Augmentation"} <= set(workbook.sheetnames)
+    assert {"Domain Mappings", "Unmapped Sources", "Variable Mappings", "Value Level Metadata", "Domain Rule Augmentation", "Variable Rule Augmentation"} <= set(workbook.sheetnames)
+    assert workbook["Unmapped Sources"]["A2"].value == "AUDIT_LOG"
     assert "dm <- raw_dm %>%" in (tmp_path / "build-sdtm.R").read_text(encoding="utf-8")
     assert '.data[["AGE"]]' in (tmp_path / "build-sdtm.R").read_text(encoding="utf-8")
     assert "AGE = AGE;" in (tmp_path / "build-sdtm.sas").read_text(encoding="utf-8")

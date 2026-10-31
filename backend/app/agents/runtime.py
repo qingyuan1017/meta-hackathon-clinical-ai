@@ -849,6 +849,16 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
         ]
         if len(mappings) != len(set(mappings)):
             problems.append("Source dataset to target domain mappings must be unique.")
+        unmapped = [item.source_dataset.casefold() for item in value.unmapped_datasets]
+        if len(unmapped) != len(set(unmapped)):
+            problems.append("Not-mapped source dataset dispositions must be unique.")
+        mapped_sources = {source for source, _target in mappings}
+        overlap = sorted(mapped_sources & set(unmapped))
+        if overlap:
+            problems.append(
+                "Source datasets cannot be both mapped and marked not mapped: "
+                f"{', '.join(overlap)}."
+            )
         if "3.4" not in value.standard:
             problems.append("The draft must identify SDTMIG 3.4 as its baseline.")
     elif workflow in {"sdtm-variable-mapping", "sdtm"}:

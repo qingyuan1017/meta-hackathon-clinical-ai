@@ -350,6 +350,8 @@ The corresponding REST interfaces are:
 - `GET /api/v1/jobs/{id}/agent` for a sanitized agent-turn and source-coverage trace
 - `PUT /api/v1/jobs/{id}/result` for human revision and deterministic artifact rebuilding
 
+At the SDTM domain gate, every normalized source dataset must receive an explicit reviewed disposition. Applicable sources may map to one or more target domains; sources outside SDTM tabulation scope are recorded in `unmapped_datasets` with a rationale. The completeness check prevents a source from disappearing because of truncation, but it does not require every source dataset to map to SDTM. A source cannot be both mapped and marked not mapped.
+
 Repository-local Codex skills under `.codex/skills/` describe how an agent coordinates these Workbench MCP tools with the read-only CDISC Library MCP tools where standards metadata is needed. Each skill includes `agents/openai.yaml` metadata that declares its local MCP dependencies.
 
 After the Compose services are running, reload the repository in Codex and invoke a workflow directly:

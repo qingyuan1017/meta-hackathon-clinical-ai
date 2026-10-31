@@ -131,8 +131,10 @@ class SDTMUseCase(ClinicalUseCase):
                 progress_path=context.agent_progress_path,
             ).run(
                 objective=(
-                    "Stage 1 of 3: determine every raw/SDTM source dataset to target SDTM dataset/domain mapping. "
-                    "Do not perform variable mapping or code generation. Return a draft for human review."
+                    "Stage 1 of 3: consider every raw/SDTM source dataset. Map applicable sources to target "
+                    "SDTM datasets/domains, and place sources that should not contribute to SDTM in "
+                    "unmapped_datasets with a specific rationale. Do not force a mapping merely to cover the "
+                    "inventory. Do not perform variable mapping or code generation. Return a draft for human review."
                 ),
                 source=self._domain_mapping_source(source_spec, context_inputs),
                 options=agent_options,
@@ -382,6 +384,7 @@ class SDTMUseCase(ClinicalUseCase):
             define_standard=variable_mapping.define_standard,
             datasets=variable_mapping.datasets,
             domain_mappings=domain_mapping.domain_mappings,
+            unmapped_datasets=domain_mapping.unmapped_datasets,
             domain_rule_augmentations=rule_plan.domain_rule_augmentations,
             rule_augmentations=rule_plan.rule_augmentations,
             assumptions=list(
@@ -585,18 +588,32 @@ class SDTMUseCase(ClinicalUseCase):
         problems = verify_result("sdtm-domain-mapping", mapping)
         sources = {dataset.name.upper(): dataset for dataset in source_spec.datasets}
         mapped_sources = {item.source_dataset.upper() for item in mapping.domain_mappings}
-        missing = sorted(set(sources) - mapped_sources)
-        unknown = sorted(mapped_sources - set(sources))
+        unmapped_sources = {item.source_dataset.upper() for item in mapping.unmapped_datasets}
+        considered_sources = mapped_sources | unmapped_sources
+        missing = sorted(set(sources) - considered_sources)
+        unknown = sorted(considered_sources - set(sources))
+        conflicting = sorted(mapped_sources & unmapped_sources)
         if missing:
-            problems.append(f"Every source dataset must be mapped; missing: {', '.join(missing)}.")
+            problems.append(
+                "Every source dataset must be explicitly mapped or marked not mapped; "
+                f"missing dispositions: {', '.join(missing)}."
+            )
         if unknown:
-            problems.append(f"Domain mapping references unknown source datasets: {', '.join(unknown)}.")
+            problems.append(f"Dataset dispositions reference unknown source datasets: {', '.join(unknown)}.")
+        if conflicting:
+            problems.append(
+                "A source dataset cannot be both mapped and marked not mapped: "
+                f"{', '.join(conflicting)}."
+            )
         for item in mapping.domain_mappings:
             source_dataset = sources.get(item.source_dataset.upper())
             if source_dataset and item.source_type != source_dataset.source_type:
                 problems.append(
                     f"{item.source_dataset} source type must remain {source_dataset.source_type}, not {item.source_type}."
                 )
+        for item in mapping.unmapped_datasets:
+            if not item.rationale.strip():
+                problems.append(f"{item.source_dataset} needs a rationale for not being mapped to SDTM.")
         if problems:
             raise ValueError(" ".join(problems))
 

@@ -1156,6 +1156,8 @@ export interface components {
             standard: string;
             /** Domain Mappings */
             domain_mappings: components["schemas"]["SDTMDomainMapping"][];
+            /** Unmapped Datasets */
+            unmapped_datasets?: components["schemas"]["SDTMUnmappedDataset"][];
             /** Assumptions */
             assumptions?: string[];
             /** Unresolved Mappings */
@@ -1206,6 +1208,19 @@ export interface components {
              * @enum {string}
              */
             submission_readiness: "not_assessed" | "blocked" | "review_required" | "ready";
+        };
+        /** SDTMUnmappedDataset */
+        SDTMUnmappedDataset: {
+            /**
+             * Source Dataset
+             * @description Source dataset intentionally not mapped to SDTM
+             */
+            source_dataset: string;
+            /**
+             * Rationale
+             * @description Human-reviewable reason the source is outside the SDTM mapping scope
+             */
+            rationale: string;
         };
         /** SDTMValueLevelMetadata */
         SDTMValueLevelMetadata: {

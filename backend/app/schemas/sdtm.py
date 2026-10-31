@@ -15,10 +15,16 @@ class SDTMDomainMapping(BaseModel):
     rationale: str
 
 
+class SDTMUnmappedDataset(BaseModel):
+    source_dataset: str = Field(description="Source dataset intentionally not mapped to SDTM")
+    rationale: str = Field(description="Human-reviewable reason the source is outside the SDTM mapping scope")
+
+
 class SDTMDomainMappingPlan(BaseModel):
     study_name: str
     standard: str = "SDTMIG 3.4"
     domain_mappings: list[SDTMDomainMapping] = Field(min_length=1)
+    unmapped_datasets: list[SDTMUnmappedDataset] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     unresolved_mappings: list[str] = Field(default_factory=list)
 
@@ -114,5 +120,6 @@ class SDTMRuleAugmentationPlan(BaseModel):
 
 class SDTMPlan(SDTMVariableMappingPlan):
     domain_mappings: list[SDTMDomainMapping] = Field(min_length=1)
+    unmapped_datasets: list[SDTMUnmappedDataset] = Field(default_factory=list)
     domain_rule_augmentations: list[SDTMDomainRuleAugmentation] = Field(min_length=1)
     rule_augmentations: list[SDTMRuleAugmentation] = Field(min_length=1)

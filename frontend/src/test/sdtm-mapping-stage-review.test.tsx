@@ -10,6 +10,7 @@ const domain = {
   study_name: "SYN-101",
   standard: "SDTMIG 3.4",
   domain_mappings: [{ source_dataset: "RAW_DM", source_type: "raw", target_domain: "DM", relationship: "direct", rationale: "Demographics source" }],
+  unmapped_datasets: [],
   assumptions: [],
   unresolved_mappings: [],
 };
@@ -43,5 +44,28 @@ describe("SDTM mapping review gates", () => {
     expect(screen.getAllByDisplayValue("AGE")).toHaveLength(2);
     fireEvent.click(screen.getByText("Approve mappings and generate rules/code"));
     expect(approve).toHaveBeenCalledWith(variable);
+  });
+
+  it("allows a source to be reviewed as intentionally not mapped", () => {
+    const approve = vi.fn();
+    const onChange = vi.fn();
+    const sourceWithOperationalData = {
+      ...source,
+      datasets: [...source.datasets, { name: "AUDIT_LOG", label: "Operational audit log", source_type: "raw" }],
+    };
+    const { rerender } = render(<SDTMDomainMappingReview value={{ source_spec: sourceWithOperationalData, domain_mapping: domain }} onChange={onChange} onApprove={approve} saving={false} />);
+
+    expect(screen.getByRole("button", { name: "Approve domains and build variable mapping" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Mark AUDIT_LOG not mapped" }));
+    const changed = onChange.mock.calls[0][0];
+    rerender(<SDTMDomainMappingReview value={changed} onChange={onChange} onApprove={approve} saving={false} />);
+    fireEvent.change(screen.getByRole("textbox", { name: "Reason AUDIT_LOG is not mapped" }), { target: { value: "Operational metadata is outside SDTM tabulation scope." } });
+    const reviewed = onChange.mock.calls[1][0];
+    rerender(<SDTMDomainMappingReview value={reviewed} onChange={onChange} onApprove={approve} saving={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Approve domains and build variable mapping" }));
+
+    expect(approve).toHaveBeenCalledWith(expect.objectContaining({
+      unmapped_datasets: [{ source_dataset: "AUDIT_LOG", rationale: "Operational metadata is outside SDTM tabulation scope." }],
+    }));
   });
 });

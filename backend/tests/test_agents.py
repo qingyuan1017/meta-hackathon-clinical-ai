@@ -36,6 +36,61 @@ def test_sdtm_submission_requires_edc_but_not_crf() -> None:
         SDTMUseCase().validate_submission(["blank-crf.pdf"], {})
 
 
+def test_sdtm_domain_mapping_accepts_reviewed_not_mapped_sources() -> None:
+    source_spec = EDCSourceSpecification.model_validate(
+        {
+            "study_name": "SYN-DISPOSITION",
+            "datasets": [
+                {
+                    "name": name,
+                    "label": label,
+                    "variables": [
+                        {"name": "ID", "label": "Identifier", "provenance": {"file": "edc.json"}}
+                    ],
+                    "provenance": {"file": "edc.json"},
+                }
+                for name, label in (("RAW_DM", "Demographics"), ("AUDIT_LOG", "Operational audit log"))
+            ],
+        }
+    )
+    mapped_only = {
+        "study_name": "SYN-DISPOSITION",
+        "domain_mappings": [
+            {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "Collected demographics"}
+        ],
+    }
+
+    with pytest.raises(ValueError, match="missing dispositions: AUDIT_LOG"):
+        SDTMUseCase.validate_domain_mapping(
+            source_spec,
+            SDTMDomainMappingPlan.model_validate(mapped_only),
+        )
+
+    reviewed = SDTMDomainMappingPlan.model_validate(
+        {
+            **mapped_only,
+            "unmapped_datasets": [
+                {
+                    "source_dataset": "AUDIT_LOG",
+                    "rationale": "Operational metadata is not submitted as an SDTM tabulation domain.",
+                }
+            ],
+        }
+    )
+    SDTMUseCase.validate_domain_mapping(source_spec, reviewed)
+
+    conflicting_payload = reviewed.model_dump()
+    conflicting_payload["unmapped_datasets"] = [
+        {
+            "source_dataset": "RAW_DM",
+            "rationale": "Incorrect conflicting disposition",
+        }
+    ]
+    conflicting = SDTMDomainMappingPlan.model_validate(conflicting_payload)
+    with pytest.raises(ValueError, match="both mapped and marked not mapped"):
+        SDTMUseCase.validate_domain_mapping(source_spec, conflicting)
+
+
 class FakeMessage:
     def __init__(self, call):
         self.content = None

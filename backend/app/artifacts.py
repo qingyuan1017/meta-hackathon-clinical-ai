@@ -281,6 +281,11 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
             ]
         )
 
+    unmapped = workbook.create_sheet("Unmapped Sources")
+    unmapped.append(["Source Dataset", "Rationale"])
+    for disposition in result.unmapped_datasets:
+        unmapped.append([disposition.source_dataset, disposition.rationale])
+
     variables = workbook.create_sheet("Variable Mappings")
     variables.append(
         [
