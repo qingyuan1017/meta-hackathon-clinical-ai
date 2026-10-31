@@ -129,5 +129,14 @@ class ClinicalUseCase(ABC):
 
     @staticmethod
     def bounded_source(source: str, settings: Settings) -> str:
-        chunks = chunk_text(source)[: settings.max_source_chunks]
+        chunks = chunk_text(source, settings.chunk_characters)
+        complete_read_limit = min(
+            settings.max_source_chunks,
+            max(settings.agent_max_turns - 2, 1),
+        )
+        if len(chunks) > complete_read_limit:
+            raise ValueError(
+                f"Complete source requires {len(chunks)} chunks, exceeding the safe complete-read limit "
+                f"of {complete_read_limit}; no partial source was returned."
+            )
         return "\n\n[CONTINUED]\n\n".join(chunks)

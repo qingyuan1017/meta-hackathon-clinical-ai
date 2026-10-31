@@ -70,12 +70,67 @@ class ClinicalAgentRunner:
         base_turn = max([stage_turn_floor, *[int(value) for value in prior_turns if isinstance(value, int)]])
 
         all_chunks = chunk_text(source, self.settings.chunk_characters)
-        chunks = all_chunks[: self.settings.max_source_chunks]
-        warnings: list[str] = []
-        if len(all_chunks) > len(chunks):
-            warnings.append(
-                f"Source was limited to the first {len(chunks)} of {len(all_chunks)} extracted chunks."
+        complete_read_limit = min(
+            self.settings.max_source_chunks,
+            max(self.settings.agent_max_turns - 2, 1),
+        )
+        if len(all_chunks) > complete_read_limit:
+            now = self._now()
+            message = (
+                f"Complete source requires {len(all_chunks)} chunks, exceeding the safe complete-read limit "
+                f"of {complete_read_limit}. No partial source was sent to the model. Reduce or split the "
+                "source with a workflow-specific complete-data strategy."
             )
+            event = {
+                "turn": base_turn + 1,
+                "type": "source_capacity_exceeded",
+                "actor": "system",
+                "name": "complete_source_gate",
+                "stage": stage,
+                "ok": False,
+                "error": message,
+                "summary": "Stopped before model execution because the complete source could not be read safely.",
+                "intent": "Prevent a draft from being generated from a truncated source prefix.",
+                "input_summary": f"The complete source contains {len(all_chunks)} chunks.",
+                "output_summary": "No source chunks were sent to the model and no draft was generated.",
+                "input_details": {
+                    "Complete source chunks": len(all_chunks),
+                    "Complete-read limit": complete_read_limit,
+                },
+                "output_details": {
+                    "Decision": "Fail closed",
+                    "Partial model execution": False,
+                },
+                "evidence": ["Deterministic complete-source capacity check"],
+                "occurred_at": now,
+            }
+            self._save_trace(
+                {
+                    "agent_id": self.definition.id,
+                    "workflow": self.definition.workflow,
+                    "model": self.settings.meta_model,
+                    "status": "blocked",
+                    "turn": base_turn + 1,
+                    "max_turns": max(
+                        self.settings.agent_max_turns * stage_count,
+                        base_turn + self.settings.agent_max_turns,
+                    ),
+                    "stage": stage,
+                    "stage_index": stage_index,
+                    "stage_count": stage_count,
+                    "completed_stages": list(completed_stages or []),
+                    "total_source_chunks": len(all_chunks),
+                    "read_source_chunks": [],
+                    "started_at": now,
+                    "updated_at": now,
+                    "error": message,
+                    "messages": [],
+                    "events": [*preserved_events, event],
+                }
+            )
+            raise AIResponseError(message)
+        chunks = all_chunks
+        warnings: list[str] = []
         state: dict[str, Any] = {
             "contract_inspected": False,
             "read_chunks": set(),

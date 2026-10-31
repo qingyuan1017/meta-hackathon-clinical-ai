@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     pubmed_max_tool_rounds: int = 3
     max_file_mb: int = 25
     max_pdf_pages: int = 200
+    max_xlsx_rows_per_sheet: int = 2_000
     ai_timeout_seconds: int = 180
     max_source_chunks: int = 8
     chunk_characters: int = 12_000

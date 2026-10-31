@@ -9,9 +9,20 @@ from app.agents.sdtm import SOURCE_NORMALIZATION_AGENT, STAGE_AGENTS
 from reportlab.pdfgen import canvas
 
 from app.agents.runtime import verify_result
-from app.ai import MetaAIClient
+from app.ai import AIResponseError, MetaAIClient
 from app.config import Settings
-from app.schemas import EDCDesign, EDCForm, EDCVisit, StudySummary, TLFInventoryPlan
+from app.schemas import (
+    EDCDesign,
+    EDCForm,
+    EDCSourceSpecification,
+    EDCVisit,
+    SDTMDomainMappingPlan,
+    SDTMRuleAugmentationPlan,
+    SDTMVariableMappingPlan,
+    StudySummary,
+    TLFInventoryPlan,
+)
+from app.parsers import chunk_text
 from app.use_cases.base import UseCaseContext
 from app.use_cases.protocol_extraction import ProtocolExtractionUseCase
 from app.use_cases.sdtm import SDTMUseCase
@@ -201,6 +212,41 @@ async def test_agent_refuses_submission_until_every_source_chunk_is_read(tmp_pat
     assert early_submit["name"] == "submit_result"
     assert early_submit["ok"] is False
     assert "Read every source chunk" in early_submit["error"]
+
+
+async def test_agent_fails_closed_before_model_call_when_complete_source_exceeds_capacity(
+    tmp_path,
+) -> None:
+    completions = ScriptedCompletions([])
+    settings = agent_settings(
+        max_source_chunks=2,
+        chunk_characters=20,
+        agent_max_turns=8,
+    )
+    ai = MetaAIClient(settings)
+    ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    progress_path = tmp_path / "progress.json"
+
+    with pytest.raises(AIResponseError, match="No partial source was sent to the model"):
+        await ClinicalAgentRunner(
+            definition=get_agent("protocol-extraction"),
+            result_model=StudySummary,
+            ai=ai,
+            settings=settings,
+            progress_path=progress_path,
+        ).run(
+            objective="Extract",
+            source="A" * 100,
+            options={},
+        )
+
+    assert completions.requests == []
+    trace = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert trace["status"] == "blocked"
+    assert trace["total_source_chunks"] == 5
+    assert trace["read_source_chunks"] == []
+    assert trace["events"][-1]["name"] == "complete_source_gate"
+    assert trace["events"][-1]["output_details"]["Partial model execution"] is False
 
 
 async def test_agent_revision_preserves_trace_and_receives_human_guidance(tmp_path) -> None:
@@ -427,13 +473,6 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
             }
         ],
     }
-    lead_result = {
-        "study_name": "SYN-101",
-        "domain_mappings": domain_result["domain_mappings"],
-        "datasets": variable_result["datasets"],
-        "domain_rule_augmentations": final_result["domain_rule_augmentations"],
-        "rule_augmentations": final_result["rule_augmentations"],
-    }
     actions = [
         ("inspect_workflow_contract", {}),
         ("read_source_chunk", {"index": 1}),
@@ -444,9 +483,6 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
         ("inspect_workflow_contract", {}),
         ("read_source_chunk", {"index": 1}),
         ("submit_result", {"result": final_result}),
-        ("inspect_workflow_contract", {}),
-        ("read_source_chunk", {"index": 1}),
-        ("submit_result", {"result": lead_result}),
     ]
     completions = ScriptedCompletions(actions)
     settings = agent_settings(agent_max_turns=4)
@@ -530,7 +566,7 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
     assert generated.value.rule_augmentations[0].rule_id == "DM-AGE"
     assert any("Blank CRF was not supplied" in warning for warning in generated.warnings)
     assert any("BLANK CRF NOT SUPPLIED" in json.dumps(request) for request in completions.requests)
-    assert "# SDTM mapping lead" in completions.requests[-3]["messages"][0]["content"]
+    assert "# SDTM stage 3" in completions.requests[-3]["messages"][0]["content"]
     progress = json.loads(progress_path.read_text(encoding="utf-8"))
     assert progress["stage"] == "Rule augmentation"
     assert progress["stage_index"] == 3
@@ -544,6 +580,198 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
         "Variable & value-level mapping",
         "Rule augmentation",
     }
+
+
+def test_sdtm_domain_inventory_is_complete_and_compact_for_large_source() -> None:
+    source_spec = EDCSourceSpecification.model_validate(
+        {
+            "study_name": "SYN-LARGE",
+            "datasets": [
+                {
+                    "name": f"RAW_{dataset_index:02d}",
+                    "label": f"Dataset {dataset_index:02d}",
+                    "variables": [
+                        {
+                            "name": f"VAR_{variable_index:03d}",
+                            "label": f"Variable {variable_index:03d}",
+                            "provenance": {"file": "large.json"},
+                        }
+                        for variable_index in range(30)
+                    ],
+                    "provenance": {"file": "large.json"},
+                }
+                for dataset_index in range(68)
+            ],
+        }
+    )
+
+    source = SDTMUseCase._domain_mapping_source(source_spec, [])
+
+    assert len(chunk_text(source, 12_000)) <= 8
+    for dataset in source_spec.datasets:
+        assert f'"name":"{dataset.name}"' in source
+    assert "provenance" not in source
+
+
+async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    source_spec = EDCSourceSpecification.model_validate(
+        {
+            "study_name": "SYN-BATCH",
+            "datasets": [
+                {
+                    "name": "RAW_DM",
+                    "label": "Demographics",
+                    "variables": [
+                        {"name": "AGE", "label": "Age", "provenance": {"file": "edc.json"}}
+                    ],
+                    "provenance": {"file": "edc.json"},
+                },
+                {
+                    "name": "RAW_AE",
+                    "label": "Adverse events",
+                    "variables": [
+                        {
+                            "name": "AETERM",
+                            "label": "Reported term",
+                            "provenance": {"file": "edc.json"},
+                        }
+                    ],
+                    "provenance": {"file": "edc.json"},
+                },
+            ],
+        }
+    )
+    domain_mapping = SDTMDomainMappingPlan.model_validate(
+        {
+            "study_name": "SYN-BATCH",
+            "domain_mappings": [
+                {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "DM source"},
+                {"source_dataset": "RAW_AE", "target_domain": "AE", "rationale": "AE source"},
+            ],
+        }
+    )
+    calls: list[dict] = []
+
+    class FakeVariableRunner:
+        def __init__(self, **_):
+            pass
+
+        async def run(self, *, objective, source, prior_events=None, **_):
+            target = "DM" if "target DM" in objective else "AE"
+            source_dataset = "RAW_DM" if target == "DM" else "RAW_AE"
+            source_field = "AGE" if target == "DM" else "AETERM"
+            calls.append({"target": target, "source": source})
+            return AgentOutcome(
+                value=SDTMVariableMappingPlan.model_validate(
+                    {
+                        "study_name": "SYN-BATCH",
+                        "datasets": [
+                            {
+                                "domain": target,
+                                "description": target,
+                                "variables": [
+                                    {
+                                        "name": source_field,
+                                        "label": source_field,
+                                        "source_dataset": source_dataset,
+                                        "source_field": source_field,
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ),
+                warnings=[],
+                events=[*(prior_events or []), {"turn": len(calls), "stage": "variable"}],
+            )
+
+    monkeypatch.setattr("app.use_cases.sdtm.ClinicalAgentRunner", FakeVariableRunner)
+    use_case = SDTMUseCase()
+    variable_mapping, _ = await use_case._generate_variable_mapping_batches(
+        UseCaseContext(
+            inputs=[],
+            options={},
+            ai=SimpleNamespace(),
+            settings=agent_settings(),
+            agent_progress_path=tmp_path / "progress.json",
+        ),
+        source_spec=source_spec,
+        domain_mapping=domain_mapping,
+        context_inputs=[],
+        crf=None,
+        agent_options={},
+        stage_count=3,
+    )
+
+    assert [dataset.domain for dataset in variable_mapping.datasets] == ["DM", "AE"]
+    assert [call["target"] for call in calls] == ["DM", "AE"]
+    assert '"name":"RAW_AE"' not in calls[0]["source"]
+    assert '"name":"RAW_DM"' not in calls[1]["source"]
+
+    rule_calls: list[dict] = []
+
+    class FakeRuleRunner:
+        def __init__(self, **_):
+            pass
+
+        async def run(self, *, objective, source, prior_events=None, **_):
+            target = "DM" if "target DM" in objective else "AE"
+            source_dataset = "RAW_DM" if target == "DM" else "RAW_AE"
+            variable = "AGE" if target == "DM" else "AETERM"
+            rule_calls.append({"target": target, "source": source})
+            return AgentOutcome(
+                value=SDTMRuleAugmentationPlan.model_validate(
+                    {
+                        "study_name": "SYN-BATCH",
+                        "domain_rule_augmentations": [
+                            {
+                                "rule_id": f"{target}-SOURCE",
+                                "target_domain": target,
+                                "source_datasets": [source_dataset],
+                                "description": "Prepare source",
+                                "logic": "Direct",
+                                "r_input_expression": source_dataset.lower(),
+                                "sas_input_statement": f"set raw.{source_dataset.lower()};",
+                            }
+                        ],
+                        "rule_augmentations": [
+                            {
+                                "rule_id": f"{target}-{variable}",
+                                "target_domain": target,
+                                "target_variable": variable,
+                                "source_dependencies": [f"{source_dataset}.{variable}"],
+                                "description": "Direct",
+                                "logic": "Direct",
+                                "r_expression": f'.data[["{variable}"]] ',
+                                "sas_expression": variable,
+                            }
+                        ],
+                    }
+                ),
+                warnings=[],
+                events=[*(prior_events or []), {"turn": len(rule_calls), "stage": "rule"}],
+            )
+
+    monkeypatch.setattr("app.use_cases.sdtm.ClinicalAgentRunner", FakeRuleRunner)
+    rule_plan, _ = await use_case._generate_rule_batches(
+        UseCaseContext(
+            inputs=[],
+            options={},
+            ai=SimpleNamespace(),
+            settings=agent_settings(),
+            agent_progress_path=tmp_path / "progress.json",
+        ),
+        domain_mapping=domain_mapping,
+        variable_mapping=variable_mapping,
+    )
+
+    assert [rule.target_domain for rule in rule_plan.domain_rule_augmentations] == ["DM", "AE"]
+    assert [call["target"] for call in rule_calls] == ["DM", "AE"]
+    assert '"domain":"AE"' not in rule_calls[0]["source"]
+    assert '"domain":"DM"' not in rule_calls[1]["source"]
 
 
 async def test_tlf_use_case_pauses_after_inventory_shell_and_programming(tmp_path) -> None:

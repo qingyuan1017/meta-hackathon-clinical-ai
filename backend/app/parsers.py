@@ -58,17 +58,27 @@ def parse_edc_source(path: Path) -> str:
         workbook = load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Unable to read workbook {path.name}.") from exc
+    row_limit = get_settings().max_xlsx_rows_per_sheet
     sheets = []
-    for sheet in workbook.worksheets:
-        rows = []
-        for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-            values = [cell for cell in row]
-            if any(value not in (None, "") for value in values):
+    try:
+        for sheet in workbook.worksheets:
+            rows = []
+            for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+                values = [cell for cell in row]
+                if not any(value not in (None, "") for value in values):
+                    continue
+                if len(rows) >= row_limit:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Sheet {sheet.title!r} in {path.name} exceeds the complete-read limit of "
+                            f"{row_limit} non-empty rows; no partial workbook was used."
+                        ),
+                    )
                 rows.append({"row": row_number, "values": values})
-            if len(rows) >= 2_000:
-                break
-        sheets.append({"name": sheet.title, "rows": rows})
-    workbook.close()
+            sheets.append({"name": sheet.title, "rows": rows})
+    finally:
+        workbook.close()
     return json.dumps(
         {"file": path.name, "format": "xlsx", "sheets": sheets},
         indent=2,
@@ -99,17 +109,27 @@ def parse_xlsx(path: Path) -> str:
         workbook = load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Unable to read workbook {path.name}.") from exc
+    row_limit = get_settings().max_xlsx_rows_per_sheet
     result: dict[str, list[list[object]]] = {}
-    for sheet in workbook.worksheets:
-        rows: list[list[object]] = []
-        for row in sheet.iter_rows(values_only=True):
-            values = [value for value in row]
-            if any(value is not None for value in values):
+    try:
+        for sheet in workbook.worksheets:
+            rows: list[list[object]] = []
+            for row in sheet.iter_rows(values_only=True):
+                values = [value for value in row]
+                if not any(value is not None for value in values):
+                    continue
+                if len(rows) >= row_limit:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            f"Sheet {sheet.title!r} in {path.name} exceeds the complete-read limit of "
+                            f"{row_limit} non-empty rows; no partial workbook was used."
+                        ),
+                    )
                 rows.append(values)
-            if len(rows) >= 2_000:
-                break
-        result[sheet.title] = rows
-    workbook.close()
+            result[sheet.title] = rows
+    finally:
+        workbook.close()
     return json.dumps(result, indent=2, default=str)
 
 
