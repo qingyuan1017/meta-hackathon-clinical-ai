@@ -44,6 +44,7 @@ class ClinicalAgentRunner:
         settings: Settings,
         progress_path: Path | None = None,
         result_validator: Callable[[BaseModel], None] | None = None,
+        complete_source_chunk_limit: int | None = None,
     ) -> None:
         self.definition = definition
         self.result_model = result_model
@@ -51,6 +52,7 @@ class ClinicalAgentRunner:
         self.settings = settings
         self.progress_path = progress_path
         self.result_validator = result_validator
+        self.complete_source_chunk_limit = complete_source_chunk_limit
 
     async def run(
         self,
@@ -73,8 +75,13 @@ class ClinicalAgentRunner:
         base_turn = max([stage_turn_floor, *[int(value) for value in prior_turns if isinstance(value, int)]])
 
         all_chunks = chunk_text(source, self.settings.chunk_characters)
+        configured_chunk_limit = (
+            self.complete_source_chunk_limit
+            if self.complete_source_chunk_limit is not None
+            else self.settings.max_source_chunks
+        )
         complete_read_limit = min(
-            self.settings.max_source_chunks,
+            configured_chunk_limit,
             max(self.settings.agent_max_turns - 2, 1),
         )
         if len(all_chunks) > complete_read_limit:

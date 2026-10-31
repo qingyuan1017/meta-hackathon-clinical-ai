@@ -640,6 +640,42 @@ async def test_agent_fails_closed_before_model_call_when_complete_source_exceeds
     assert trace["events"][-1]["output_details"]["Partial model execution"] is False
 
 
+async def test_agent_can_use_workflow_specific_complete_source_capacity(tmp_path) -> None:
+    actions = [
+        ("inspect_workflow_contract", {}),
+        *[("read_source_chunk", {"index": index}) for index in range(1, 10)],
+        ("submit_result", {"result": {"study_title": "Complete nine-chunk study"}}),
+    ]
+    completions = ScriptedCompletions(actions)
+    settings = agent_settings(
+        max_source_chunks=8,
+        chunk_characters=10,
+        agent_max_turns=12,
+    )
+    ai = MetaAIClient(settings)
+    ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    progress_path = tmp_path / "progress.json"
+
+    outcome = await ClinicalAgentRunner(
+        definition=get_agent("protocol-extraction"),
+        result_model=StudySummary,
+        ai=ai,
+        settings=settings,
+        progress_path=progress_path,
+        complete_source_chunk_limit=12,
+    ).run(
+        objective="Extract every chunk",
+        source="A" * 90,
+        options={},
+    )
+
+    assert outcome.value.study_title == "Complete nine-chunk study"
+    trace = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert trace["status"] == "completed"
+    assert trace["total_source_chunks"] == 9
+    assert trace["read_source_chunks"] == list(range(1, 10))
+
+
 async def test_agent_revision_preserves_trace_and_receives_human_guidance(tmp_path) -> None:
     completions = ScriptedCompletions([
         ("inspect_workflow_contract", {}),
@@ -1037,15 +1073,21 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     variable_peak = 0
 
     class FakeVariableRunner:
-        def __init__(self, *, progress_path, **_):
+        def __init__(self, *, progress_path, complete_source_chunk_limit, **_):
             self.progress_path = progress_path
+            self.complete_source_chunk_limit = complete_source_chunk_limit
 
         async def run(self, *, objective, source, prior_events=None, **_):
             nonlocal variable_active, variable_peak
             target = "DM" if "target DM" in objective else "AE"
             source_dataset = "RAW_DM" if target == "DM" else "RAW_AE"
             source_field = "AGE" if target == "DM" else "AETERM"
-            calls.append({"target": target, "source": source, "progress_path": self.progress_path})
+            calls.append({
+                "target": target,
+                "source": source,
+                "progress_path": self.progress_path,
+                "complete_source_chunk_limit": self.complete_source_chunk_limit,
+            })
             variable_active += 1
             variable_peak = max(variable_peak, variable_active)
             try:
@@ -1102,6 +1144,7 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     assert variable_peak == 2
     assert {call["target"] for call in calls} == {"DM", "AE"}
     assert len({call["progress_path"] for call in calls}) == 2
+    assert {call["complete_source_chunk_limit"] for call in calls} == {12}
     calls_by_target = {call["target"]: call for call in calls}
     assert '"name":"RAW_AE"' not in calls_by_target["DM"]["source"]
     assert '"name":"RAW_DM"' not in calls_by_target["AE"]["source"]
@@ -1111,14 +1154,20 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     rule_peak = 0
 
     class FakeRuleRunner:
-        def __init__(self, *, progress_path, **_):
+        def __init__(self, *, progress_path, complete_source_chunk_limit, **_):
             self.progress_path = progress_path
+            self.complete_source_chunk_limit = complete_source_chunk_limit
 
         async def run(self, *, objective, source, prior_events=None, **_):
             nonlocal rule_active, rule_peak
             target = "DM" if "target DM" in objective else "AE"
             variable = "AGE" if target == "DM" else "AETERM"
-            rule_calls.append({"target": target, "source": source, "progress_path": self.progress_path})
+            rule_calls.append({
+                "target": target,
+                "source": source,
+                "progress_path": self.progress_path,
+                "complete_source_chunk_limit": self.complete_source_chunk_limit,
+            })
             rule_active += 1
             rule_peak = max(rule_peak, rule_active)
             try:
@@ -1163,6 +1212,7 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     assert rule_peak == 2
     assert {call["target"] for call in rule_calls} == {"DM", "AE"}
     assert len({call["progress_path"] for call in rule_calls}) == 2
+    assert {call["complete_source_chunk_limit"] for call in rule_calls} == {12}
     rule_calls_by_target = {call["target"]: call for call in rule_calls}
     assert '"domain":"AE"' not in rule_calls_by_target["DM"]["source"]
     assert '"domain":"DM"' not in rule_calls_by_target["AE"]["source"]

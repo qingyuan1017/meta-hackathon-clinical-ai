@@ -286,6 +286,7 @@ class SDTMUseCase(ClinicalUseCase):
                 ai=context.ai,
                 settings=context.settings,
                 progress_path=domain_progress_path,
+                complete_source_chunk_limit=context.settings.sdtm_domain_max_source_chunks,
                 result_validator=lambda value: self.validate_variable_mapping(
                     batch_spec,
                     batch_domain_mapping,
@@ -826,6 +827,7 @@ class SDTMUseCase(ClinicalUseCase):
                 ai=context.ai,
                 settings=context.settings,
                 progress_path=domain_progress_path,
+                complete_source_chunk_limit=context.settings.sdtm_domain_max_source_chunks,
                 result_validator=lambda value: self._validate_rule_batch(
                     target_domain,
                     dataset,
