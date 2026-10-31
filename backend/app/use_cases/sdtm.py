@@ -10,6 +10,7 @@ from ..agents import ClinicalAgentRunner, get_agent
 from ..agents.runtime import verify_result
 from ..agents.sdtm import SOURCE_NORMALIZATION_AGENT, STAGE_AGENTS
 from ..artifacts import render_sdtm
+from ..csdrg import render_csdrg
 from ..parsers import parse_edc_source, parse_source
 from ..schemas import (
     EDCSourceSpecification,
@@ -240,10 +241,12 @@ class SDTMUseCase(ClinicalUseCase):
             json.dumps(source_spec.model_dump(mode="json"), indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
-        return [
+        paths = [
             source_spec_path,
             *render_sdtm(cast(SDTMPlan, result), crf, output_dir, normalize_languages(options.get("languages"))),
         ]
+        paths.extend(render_csdrg(output_dir.parent, cast(SDTMPlan, result), output_dir))
+        return paths
 
     @staticmethod
     def _workflow_inputs(inputs: list[Path]) -> tuple[Path | None, Path]:

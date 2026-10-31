@@ -1,4 +1,4 @@
-import type { AgentProgress, CDISCDataset, ExecutionAttempt, Health, Job, JobList, UseCaseContract, Workflow } from "./types";
+import type { AgentProgress, CDISCDataset, ExecutionAttempt, Health, Job, JobList, UseCaseContract, ValidationFinding, ValidationRecord, Workflow } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -113,6 +113,15 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ proposal_id: proposalId, approved, reviewer }),
     }),
+  validations: (id: string) => request<ValidationRecord[]>(`/api/v1/jobs/${id}/validations`),
+  importValidation: (id: string, report?: File | null) => {
+    const data = new FormData();
+    if (report) data.set("report", report);
+    return request<ValidationRecord>(`/api/v1/jobs/${id}/validations/import`, { method: "POST", body: data });
+  },
+  runValidation: (id: string, provider: "internal" | "pinnacle21-cli") => request<ValidationRecord>(`/api/v1/jobs/${id}/validations/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) }),
+  updateValidationFinding: (id: string, findingId: string, update: Record<string, unknown>) => request<ValidationFinding>(`/api/v1/jobs/${id}/validation-findings/${findingId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) }),
+  updateCsdrg: (id: string, document: Record<string, unknown>) => request<Record<string, unknown>>(`/api/v1/jobs/${id}/csdrg`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(document) }),
   deleteJob: (id: string) => request<void>(`/api/v1/jobs/${id}`, { method: "DELETE" }),
   artifactUrl: (path: string) => `${API_URL}${path}`,
   artifactPreviewUrl: (path: string) => `${API_URL}${path}?inline=true`,

@@ -38,3 +38,13 @@ export interface ExecutionAttempt {
   failure_classification: string | null;
   repair_proposal: { proposal_id: string; status: string; rationale: string; diff: string; change: { domain: string; target_variable: string; from_source_field: string; to_source_field: string }; reviewer: string | null; decided_at: string | null } | null;
 }
+
+export interface ValidationFinding {
+  finding_id: string; provider: string; provider_version: string; rule_id: string; severity: string; dataset: string | null; variable: string | null; message: string;
+  finding_status: "open" | "accepted" | "corrected" | "not_applicable" | "explained"; disposition: string | null; explanation: string | null; reviewer: string | null; approved_at: string | null;
+}
+
+export interface ValidationRecord {
+  validation_id: string; provider: string; provider_version: string; status: string; created_at: string; message: string | null; findings: ValidationFinding[];
+  diagnostics: { rows_read: number; findings_imported: number; unknown_columns: string[]; warnings: string[] } | null;
+}

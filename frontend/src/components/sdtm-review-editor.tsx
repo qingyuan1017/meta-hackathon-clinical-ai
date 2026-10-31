@@ -1,10 +1,10 @@
 "use client";
 
-import { useMemo, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, Play, Plus, Save, Table2, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, ListChecks, Play, Plus, Save, ScrollText, Table2, Trash2, Upload } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Artifact, CDISCDataset, SDTMWorkbenchState } from "@/lib/types";
+import type { Artifact, CDISCDataset, SDTMWorkbenchState, ValidationFinding } from "@/lib/types";
 import { Button } from "./ui/button";
 
 type SourceType = "raw" | "sdtm";
@@ -83,7 +83,7 @@ export interface SDTMPlanDraft extends Record<string, unknown> {
   unresolved_mappings: string[];
 }
 
-type Stage = "domains" | "variables" | "rules" | "execution" | "acrf" | "define";
+type Stage = "domains" | "variables" | "rules" | "execution" | "acrf" | "define" | "validation" | "csdrg";
 
 const inputClass = "focus-ring min-h-9 w-full rounded-md border border-white/10 bg-[#101012] px-2.5 py-2 text-xs text-zinc-200 placeholder:text-zinc-600";
 const codeClass = "focus-ring min-h-28 w-full resize-y rounded-lg border border-white/10 bg-[#0a0a0c] p-3 font-mono text-xs leading-5 text-zinc-200 placeholder:text-zinc-700";
@@ -126,6 +126,8 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
   const defineArtifact = artifacts.find((artifact) => artifact.name === "define.xml");
   const defineHtmlArtifact = artifacts.find((artifact) => artifact.name === "define.html");
   const defineDiagnostics = artifacts.find((artifact) => artifact.name === "define-diagnostics.json");
+  const csdrgJson = artifacts.find((artifact) => artifact.name === "csdrg.json");
+  const csdrgPdf = artifacts.find((artifact) => artifact.name === "csdrg.pdf");
   const issues = reviewIssues(plan);
 
   const update = (mutate: (next: SDTMPlanDraft) => void) => {
@@ -231,13 +233,15 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6" role="tablist" aria-label="SDTM review steps">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4" role="tablist" aria-label="SDTM review steps">
         <StageButton active={stage === "domains"} icon={<Database size={16} />} number="01" label="Domain mapping" onClick={() => setStage("domains")} />
         <StageButton active={stage === "variables"} icon={<Table2 size={16} />} number="02" label="Variable & VLM" onClick={() => setStage("variables")} />
         <StageButton active={stage === "rules"} icon={<Code2 size={16} />} number="03" label="Rule augmentation" onClick={() => setStage("rules")} />
         <StageButton active={stage === "execution"} icon={<Play size={16} />} number="04" label="Execution" onClick={() => setStage("execution")} />
         <StageButton active={stage === "acrf"} icon={<FileScan size={16} />} number="05" label="aCRF review" onClick={() => setStage("acrf")} />
         <StageButton active={stage === "define"} icon={<FileCode2 size={16} />} number="06" label="Define-XML" onClick={() => setStage("define")} />
+        <StageButton active={stage === "validation"} icon={<ListChecks size={16} />} number="07" label="Validation" onClick={() => setStage("validation")} />
+        <StageButton active={stage === "csdrg"} icon={<ScrollText size={16} />} number="08" label="cSDRG" onClick={() => setStage("csdrg")} />
       </div>
 
       {stage === "domains" && (
@@ -368,6 +372,9 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
         </DerivedArtifactReview>
       )}
 
+      {stage === "validation" && <ValidationReview jobId={jobId} workbench={workbench} />}
+      {stage === "csdrg" && <CSDRGReview jobId={jobId} source={csdrgJson} pdf={csdrgPdf} />}
+
       <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
         <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="text-xs font-bold text-emerald-300">All mapping references are ready for schema validation.</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div>
         <Button type="button" variant="clinical" onClick={() => onSave(plan)} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Validating and rebuilding…" : "Save reviewed mappings"}</Button>
@@ -426,6 +433,48 @@ function ExecutionReview({ jobId, workbench }: { jobId?: string; workbench?: SDT
       {!query.isPending && !query.data?.items.length && <EmptyReview text="No R execution attempts have been recorded." />}
     </section>
   </div>;
+}
+
+function ValidationReview({ jobId, workbench }: { jobId?: string; workbench?: SDTMWorkbenchState | null }) {
+  const client = useQueryClient();
+  const [report, setReport] = useState<File | null>(null);
+  const query = useQuery({ queryKey: ["sdtm-validations", jobId], queryFn: () => api.validations(jobId!), enabled: Boolean(jobId) });
+  const importMutation = useMutation({
+    mutationFn: () => api.importValidation(jobId!, report),
+    onSuccess: () => { setReport(null); client.invalidateQueries({ queryKey: ["sdtm-validations", jobId] }); client.invalidateQueries({ queryKey: ["job", jobId] }); },
+  });
+  const runMutation = useMutation({
+    mutationFn: (provider: "internal" | "pinnacle21-cli") => api.runValidation(jobId!, provider),
+    onSuccess: () => { client.invalidateQueries({ queryKey: ["sdtm-validations", jobId] }); client.invalidateQueries({ queryKey: ["job", jobId] }); },
+  });
+  return <div className="space-y-4">
+    <section className="rounded-xl border border-white/10 bg-[#141416] p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-sm font-extrabold text-zinc-100">Provider-neutral validation review</p><p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">Imported Pinnacle 21 reports retain their original file and provider/version provenance. Workbench checks are labeled internal. Missing CLI or Java prerequisites return unavailable, never passed.</p></div><span className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-black uppercase text-zinc-300">{workbench?.lifecycle.validation?.replaceAll("_", " ") ?? "not run"}</span></div>
+      <label className="mt-4 block rounded-lg border border-dashed border-white/15 p-3 text-xs text-zinc-400"><span className="font-bold text-zinc-300">Pinnacle 21 report CSV/XLSX</span><input className="mt-2 block w-full" type="file" accept=".csv,.xlsx" onChange={(event) => setReport(event.target.files?.[0] ?? null)} /></label>
+      <div className="mt-3 flex flex-wrap gap-2"><Button type="button" variant="clinical" size="sm" disabled={!jobId || importMutation.isPending || (!report && !workbench?.inputs.validation_report)} onClick={() => importMutation.mutate()}>Import report</Button><Button type="button" variant="outline" size="sm" disabled={!jobId || runMutation.isPending} onClick={() => runMutation.mutate("internal")}>Run internal checks</Button><Button type="button" variant="outline" size="sm" disabled={!jobId || runMutation.isPending} onClick={() => runMutation.mutate("pinnacle21-cli")}>Run configured P21 CLI</Button></div>
+      {(importMutation.error || runMutation.error) && <p className="mt-3 text-xs text-rose-300">{importMutation.error?.message ?? runMutation.error?.message}</p>}
+    </section>
+    {query.data?.map((record) => <section key={record.validation_id} className="rounded-xl border border-white/10 bg-[#141416] p-4"><div className="flex flex-wrap justify-between gap-2"><div><p className="text-sm font-bold text-violet-200">{record.provider}</p><p className="mt-1 text-xs text-zinc-500">Version {record.provider_version} · {record.findings.length} finding(s)</p></div><span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${record.status === "passed" ? "bg-emerald-500/10 text-emerald-300" : record.status === "unavailable" || record.status === "failed" ? "bg-rose-500/10 text-rose-300" : "bg-amber-500/10 text-amber-300"}`}>{record.status.replaceAll("_", " ")}</span></div>{record.message && <p className="mt-3 text-xs leading-5 text-zinc-400">{record.message}</p>}{record.diagnostics?.warnings.map((warning) => <p key={warning} className="mt-2 text-xs text-amber-200">{warning}</p>)}<div className="mt-4 space-y-3">{record.findings.map((finding) => <FindingReview key={finding.finding_id} jobId={jobId} finding={finding} onSaved={() => { client.invalidateQueries({ queryKey: ["sdtm-validations", jobId] }); client.invalidateQueries({ queryKey: ["job", jobId] }); }} />)}</div></section>)}
+    {!query.isPending && !query.data?.length && <EmptyReview text="Validation has not been run or imported. This is not a pass." />}
+  </div>;
+}
+
+function FindingReview({ jobId, finding, onSaved }: { jobId?: string; finding: ValidationFinding; onSaved: () => void }) {
+  const [status, setStatus] = useState(finding.finding_status);
+  const [explanation, setExplanation] = useState(finding.explanation ?? "");
+  const [approved, setApproved] = useState(Boolean(finding.approved_at));
+  const mutation = useMutation({ mutationFn: () => api.updateValidationFinding(jobId!, finding.finding_id, { finding_status: status, explanation: explanation || null, disposition: explanation || null, approved, reviewer: approved ? "Workbench reviewer" : null }), onSuccess: onSaved });
+  return <article className="rounded-lg border border-white/[0.08] bg-black/15 p-3"><div className="flex flex-wrap justify-between gap-2"><p className="font-mono text-xs font-bold text-zinc-200">{finding.rule_id} · {finding.dataset ?? "General"}{finding.variable ? `.${finding.variable}` : ""}</p><span className="text-[10px] font-black uppercase text-amber-300">{finding.severity}</span></div><p className="mt-2 text-xs leading-5 text-zinc-400">{finding.message}</p><div className="mt-3 grid gap-2 md:grid-cols-[180px_minmax(0,1fr)]"><select value={status} onChange={(event) => setStatus(event.target.value as ValidationFinding["finding_status"])} className={inputClass}><option value="open">Open</option><option value="accepted">Accepted</option><option value="corrected">Corrected</option><option value="not_applicable">Not applicable</option><option value="explained">Explained</option></select><textarea value={explanation} onChange={(event) => setExplanation(event.target.value)} placeholder="Reviewer disposition/explanation" className={`${inputClass} min-h-20`} /></div><div className="mt-2 flex flex-wrap items-center gap-3"><label className="flex items-center gap-2 text-xs text-zinc-300"><input type="checkbox" checked={approved} onChange={(event) => setApproved(event.target.checked)} />Approve explanation for cSDRG</label><Button type="button" variant="outline" size="sm" disabled={!jobId || mutation.isPending} onClick={() => mutation.mutate()}>Save disposition</Button>{mutation.error && <span className="text-xs text-rose-300">{mutation.error.message}</span>}</div></article>;
+}
+
+function CSDRGReview({ jobId, source, pdf }: { jobId?: string; source?: Artifact; pdf?: Artifact }) {
+  const client = useQueryClient();
+  const query = useQuery({ queryKey: ["csdrg-source", source?.id], queryFn: () => api.artifactText(source!.download_url), enabled: Boolean(source) });
+  const [draft, setDraft] = useState("");
+  useEffect(() => { if (query.data) setDraft(query.data); }, [query.data]);
+  const mutation = useMutation({ mutationFn: () => { const parsed: unknown = JSON.parse(draft); if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("cSDRG source must be a JSON object."); return api.updateCsdrg(jobId!, parsed as Record<string, unknown>); }, onSuccess: () => { client.invalidateQueries({ queryKey: ["job", jobId] }); client.invalidateQueries({ queryKey: ["csdrg-source"] }); } });
+  if (!source) return <EmptyReview text="cSDRG artifacts will appear after the SDTM plan is generated." />;
+  return <div className="space-y-4"><section className="rounded-xl border border-white/10 bg-[#141416] p-4"><div className="flex flex-wrap justify-between gap-3"><div><p className="text-sm font-extrabold text-zinc-100">Editable cSDRG source</p><p className="mt-1 text-xs leading-5 text-zinc-500">Narrative sections may be edited. Execution, validation, unresolved issues, limitations, and reviewer-approved explanations remain evidence-controlled by the backend.</p></div>{pdf && <Button asChild type="button" variant="outline" size="sm"><a href={api.artifactUrl(pdf.download_url)}><Download size={14} />Download csdrg.pdf</a></Button>}</div><textarea aria-label="Editable cSDRG JSON" value={draft} onChange={(event) => setDraft(event.target.value)} className={`${codeClass} mt-4 min-h-[32rem]`} spellCheck={false} /><Button type="button" variant="clinical" className="mt-3" disabled={!jobId || mutation.isPending} onClick={() => mutation.mutate()}><Save size={15} />Save cSDRG review</Button>{mutation.error && <p className="mt-2 text-xs text-rose-300">{mutation.error.message}</p>}</section>{pdf && <iframe title="cSDRG PDF review" src={api.artifactPreviewUrl(pdf.download_url)} className="h-[48rem] w-full rounded-xl border border-white/10 bg-white" />}</div>;
 }
 
 function StageButton({ active, icon, number, label, onClick }: { active: boolean; icon: ReactNode; number: string; label: string; onClick: () => void }) {

@@ -44,6 +44,11 @@ from .schemas import (
     ExecutionAttempt,
     ExecutionAttemptList,
     RepairApproval,
+    ValidationFinding,
+    ValidationFindingUpdate,
+    ValidationRecord,
+    ValidationRunRequest,
+    CSDRGDocument,
     SDTMPlan,
     SDTMVariableMappingUpdate,
     TLFInventoryPlanUpdate,
@@ -65,6 +70,16 @@ from .sdtm_execution import (
     save_attempt,
     apply_typed_repair,
 )
+from .sdtm_validation import (
+    InternalChecksProvider,
+    Pinnacle21CLIProvider,
+    find_finding,
+    import_pinnacle21_report,
+    list_validations,
+    save_validation,
+    update_readiness,
+)
+from .csdrg import build_csdrg, render_csdrg, render_csdrg_document
 from .use_cases import USE_CASES, get_use_case
 from .use_cases.sdtm import SDTMUseCase
 from .use_cases.tlf import TLFUseCase
@@ -704,6 +719,7 @@ async def create_sdtm_execution(
         relative = path.relative_to(job_dir).as_posix()
         if not any(item.relative_path == relative for item in job.artifacts):
             job.artifacts.append(Artifact(**artifact_record(path, job_dir)))
+    _refresh_csdrg_artifacts(job, db)
     db.commit()
     return attempt
 
@@ -785,8 +801,123 @@ def review_and_run_sdtm_repair(
     repaired_dir = job_dir / "sdtm" / "executions" / repaired.attempt_id
     for path in [repaired_dir / "program.R", repaired_dir / "attempt.json", *(repaired_dir / "output").glob("*.xpt")]:
         job.artifacts.append(Artifact(**artifact_record(path, job_dir)))
+    _refresh_csdrg_artifacts(job, db)
     db.commit()
     return repaired
+
+
+@app.get(f"{settings.api_prefix}/jobs/{{job_id}}/validations", response_model=list[ValidationRecord])
+def read_validations(job_id: str, db: Session = Depends(get_db)) -> list[ValidationRecord]:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm":
+        raise HTTPException(status_code=409, detail="Validation review is available only for SDTM jobs.")
+    return list_validations(settings.jobs_dir / job_id)
+
+
+@app.post(f"{settings.api_prefix}/jobs/{{job_id}}/validations/import", response_model=ValidationRecord, status_code=status.HTTP_201_CREATED)
+async def import_validation_report(job_id: str, report: UploadFile | None = File(default=None), db: Session = Depends(get_db)) -> ValidationRecord:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm" or not job.result_json:
+        raise HTTPException(status_code=409, detail="A completed SDTM plan is required before validation import.")
+    job_dir = settings.jobs_dir / job_id
+    source: Path | None = None
+    if report is not None:
+        safe_name = validate_upload_metadata(report)
+        if Path(safe_name).suffix.lower() not in {".csv", ".xlsx"}:
+            raise HTTPException(status_code=415, detail="Validation report must be CSV or XLSX.")
+        source = job_dir / "input" / f"validation-import-{uuid4().hex[:8]}-{safe_name}"
+        await _save_limited(report, source)
+        verify_signature(source)
+    else:
+        state = read_state(job_dir)
+        if state.inputs.validation_report:
+            source = job_dir / "input" / state.inputs.validation_report
+    if source is None or not source.is_file():
+        raise HTTPException(status_code=422, detail="Upload a supported Pinnacle 21 CSV/XLSX report.")
+    try:
+        record = import_pinnacle21_report(job_dir, source)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _register_validation_artifacts(job, record, db)
+    _refresh_csdrg_artifacts(job, db)
+    db.commit()
+    return record
+
+
+@app.post(f"{settings.api_prefix}/jobs/{{job_id}}/validations/run", response_model=ValidationRecord, status_code=status.HTTP_201_CREATED)
+def run_validation(job_id: str, request: ValidationRunRequest, db: Session = Depends(get_db)) -> ValidationRecord:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm" or not job.result_json:
+        raise HTTPException(status_code=409, detail="A completed SDTM plan is required before validation.")
+    job_dir = settings.jobs_dir / job_id
+    provider = InternalChecksProvider() if request.provider == "internal" else Pinnacle21CLIProvider(settings.pinnacle21_cli_path, settings.pinnacle21_java_path, settings.pinnacle21_timeout_seconds)
+    record = provider.run(job_dir)
+    save_validation(job_dir, record)
+    state = read_state(job_dir)
+    state.lifecycle.validation = record.status
+    if record.status in {"failed", "unavailable"}:
+        state.lifecycle.submission_readiness = "blocked"
+    write_state(job_dir, state)
+    update_readiness(job_dir)
+    _register_validation_artifacts(job, record, db)
+    _refresh_csdrg_artifacts(job, db)
+    db.commit()
+    return record
+
+
+@app.put(f"{settings.api_prefix}/jobs/{{job_id}}/validation-findings/{{finding_id}}", response_model=ValidationFinding)
+def update_validation_finding(job_id: str, finding_id: str, update: ValidationFindingUpdate, db: Session = Depends(get_db)) -> ValidationFinding:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm":
+        raise HTTPException(status_code=409, detail="Findings are available only for SDTM jobs.")
+    job_dir = settings.jobs_dir / job_id
+    try:
+        record, finding = find_finding(job_dir, finding_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finding.finding_status = update.finding_status
+    finding.disposition = update.disposition
+    finding.explanation = update.explanation
+    finding.reviewer = update.reviewer if update.approved else None
+    finding.approved_at = datetime.now(timezone.utc) if update.approved else None
+    save_validation(job_dir, record)
+    update_readiness(job_dir)
+    _register_validation_artifacts(job, record, db)
+    _refresh_csdrg_artifacts(job, db)
+    db.commit()
+    return finding
+
+
+@app.put(f"{settings.api_prefix}/jobs/{{job_id}}/csdrg", response_model=CSDRGDocument)
+def update_csdrg(job_id: str, document: CSDRGDocument, db: Session = Depends(get_db)) -> CSDRGDocument:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm" or not job.result_json:
+        raise HTTPException(status_code=409, detail="A completed SDTM plan is required before cSDRG review.")
+    job_dir = settings.jobs_dir / job_id
+    plan = SDTMPlan.model_validate(json.loads(job.result_json))
+    if document.study_name != plan.study_name:
+        raise HTTPException(status_code=422, detail="The cSDRG study name must match the approved SDTM plan.")
+    authoritative = build_csdrg(job_dir, plan)
+    protected = {"3. Source data and conversion approach", "5. Conformance and validation summary", "6. Reviewer-approved explanations", "7. Unresolved issues", "9. Software, execution, and traceability", "10. Limitations"}
+    expected = {section.heading: section for section in authoritative.sections}
+    received = {section.heading: section for section in document.sections}
+    if any(heading not in received or received[heading].body != expected[heading].body or received[heading].todos != expected[heading].todos for heading in protected):
+        raise HTTPException(status_code=422, detail="Execution, validation, approved-explanation, unresolved-issue, and limitation sections are evidence-controlled and cannot be overwritten.")
+    document.generated_at = datetime.now(timezone.utc)
+    for path in render_csdrg_document(document, job_dir / "output"):
+        _upsert_artifact(job, path, job_dir)
+    db.commit()
+    return document
 
 
 @app.put(
@@ -1084,6 +1215,40 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
         artifacts=artifacts,
         sdtm_workbench=read_state(settings.jobs_dir / job.id) if job.workflow == "sdtm" else None,
     )
+
+
+def _upsert_artifact(job: Job, path: Path, job_dir: Path) -> None:
+    record = artifact_record(path, job_dir)
+    existing = next((item for item in job.artifacts if item.relative_path == record["relative_path"]), None)
+    if existing is None:
+        job.artifacts.append(Artifact(**record))
+        return
+    existing.name = record["name"]
+    existing.media_type = record["media_type"]
+    existing.size_bytes = record["size_bytes"]
+    existing.sha256 = record["sha256"]
+
+
+def _register_validation_artifacts(job: Job, record: ValidationRecord, db: Session) -> None:
+    job_dir = settings.jobs_dir / job.id
+    record_path = job_dir / "sdtm" / "validation" / f"{record.validation_id}.json"
+    if record_path.is_file():
+        _upsert_artifact(job, record_path, job_dir)
+    if record.source_artifact:
+        source = job_dir / record.source_artifact
+        if source.is_file():
+            _upsert_artifact(job, source, job_dir)
+    db.flush()
+
+
+def _refresh_csdrg_artifacts(job: Job, db: Session) -> None:
+    if job.workflow != "sdtm" or not job.result_json:
+        return
+    job_dir = settings.jobs_dir / job.id
+    plan = SDTMPlan.model_validate(json.loads(job.result_json))
+    for path in render_csdrg(job_dir, plan):
+        _upsert_artifact(job, path, job_dir)
+    db.flush()
 
 
 def _reject_review_identifiers(serialized: str, label: str) -> None:
