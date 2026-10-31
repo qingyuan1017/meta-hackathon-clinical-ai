@@ -799,6 +799,8 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
                                 ],
                             }
                         ],
+                        "assumptions": [f"{target} batch assumption"],
+                        "unresolved_mappings": [f"{target} batch decision"],
                     }
                 ),
                 warnings=[],
@@ -824,6 +826,8 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     )
 
     assert [dataset.domain for dataset in variable_mapping.datasets] == ["DM", "AE"]
+    assert variable_mapping.datasets[0].review_assumptions == ["DM batch assumption"]
+    assert variable_mapping.datasets[1].review_unresolved_mappings == ["AE batch decision"]
     assert [call["target"] for call in calls] == ["DM", "AE"]
     assert '"name":"RAW_AE"' not in calls[0]["source"]
     assert '"name":"RAW_DM"' not in calls[1]["source"]

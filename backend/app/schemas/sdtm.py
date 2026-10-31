@@ -70,6 +70,14 @@ class SDTMDataset(BaseModel):
     dataset_class: str = "Special Purpose"
     purpose: str = "Tabulation"
     variables: list[SDTMVariable] = Field(min_length=1)
+    review_assumptions: list[str] = Field(
+        default_factory=list,
+        description="Human-reviewable assumptions owned by this target-domain mapping batch",
+    )
+    review_unresolved_mappings: list[str] = Field(
+        default_factory=list,
+        description="Human-reviewable unresolved decisions owned by this target-domain mapping batch",
+    )
 
 
 class SDTMVariableMappingPlan(BaseModel):

@@ -46,7 +46,30 @@ describe("SDTM mapping review gates", () => {
     expect(screen.getByText("VLM cells")).toBeInTheDocument();
     expect(screen.getAllByDisplayValue("AGE")).toHaveLength(2);
     fireEvent.click(screen.getByText("Approve mappings and generate rules/code"));
-    expect(approve).toHaveBeenCalledWith(variable);
+    expect(approve).toHaveBeenCalledWith(expect.objectContaining({
+      datasets: [expect.objectContaining({ domain: "DM", variables: variable.datasets[0].variables })],
+    }));
+  });
+
+  it("shows only the active domain's owned mapping comments", () => {
+    const owned = {
+      ...variable,
+      assumptions: ["DM assumption", "AE assumption"],
+      unresolved_mappings: ["DM decision", "AE decision"],
+      datasets: [
+        { ...variable.datasets[0], review_assumptions: ["DM assumption"], review_unresolved_mappings: ["DM decision"] },
+        { domain: "AE", description: "Adverse Events", structure: "One record per event", key_variables: ["USUBJID", "AESEQ"], review_assumptions: ["AE assumption"], review_unresolved_mappings: ["AE decision"], variables: [{ name: "AETERM", label: "Reported Term", data_type: "Char", source_dataset: "RAW_DM", source_field: "AGE", origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] },
+      ],
+    };
+    render(<SDTMVariableMappingReview value={{ source_spec: source, domain_mapping: domain, variable_mapping: owned }} onChange={vi.fn()} onApprove={vi.fn()} saving={false} />);
+
+    expect(screen.getByText("DM mapping comments")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("DM assumption")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("AE assumption")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "AE" }));
+    expect(screen.getByText("AE mapping comments")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("AE assumption")).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("DM assumption")).not.toBeInTheDocument();
   });
 
   it("accepts an assigned variable without a raw source", () => {
@@ -57,7 +80,9 @@ describe("SDTM mapping review gates", () => {
 
     expect(screen.getByDisplayValue("No raw source — assigned/derived")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Approve mappings and generate rules/code"));
-    expect(approve).toHaveBeenCalledWith(expect.objectContaining({ datasets: assigned.datasets }));
+    expect(approve).toHaveBeenCalledWith(expect.objectContaining({
+      datasets: [expect.objectContaining({ domain: "DM", variables: assigned.datasets[0].variables })],
+    }));
   });
 
   it("allows a source to be reviewed as intentionally not mapped", () => {

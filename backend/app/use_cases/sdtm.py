@@ -290,7 +290,11 @@ class SDTMUseCase(ClinicalUseCase):
                 raise ValueError("Variable-mapping batches returned inconsistent Define-XML standards.")
             standard = batch_plan.standard
             define_standard = batch_plan.define_standard
-            datasets.extend(batch_plan.datasets)
+            batch_dataset = batch_plan.datasets[0].model_copy(update={
+                "review_assumptions": list(batch_plan.assumptions),
+                "review_unresolved_mappings": list(batch_plan.unresolved_mappings),
+            })
+            datasets.append(batch_dataset)
             assumptions.extend(batch_plan.assumptions)
             unresolved.extend(batch_plan.unresolved_mappings)
             warnings.extend(outcome.warnings)

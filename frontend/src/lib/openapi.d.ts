@@ -1262,6 +1262,16 @@ export interface components {
             purpose: string;
             /** Variables */
             variables: components["schemas"]["SDTMVariable"][];
+            /**
+             * Review Assumptions
+             * @description Human-reviewable assumptions owned by this target-domain mapping batch
+             */
+            review_assumptions?: string[];
+            /**
+             * Review Unresolved Mappings
+             * @description Human-reviewable unresolved decisions owned by this target-domain mapping batch
+             */
+            review_unresolved_mappings?: string[];
         };
         /** SDTMDomainMapping */
         SDTMDomainMapping: {
