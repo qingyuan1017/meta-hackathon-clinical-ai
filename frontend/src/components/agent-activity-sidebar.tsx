@@ -32,7 +32,7 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
   useEffect(() => setDrawerOpen(shouldStartOpen), [job.id, shouldStartOpen]);
 
   const content = query.data
-    ? <AgentTurnTimeline progress={query.data} compact />
+    ? <AgentTurnTimeline progress={query.data} result={job.result} warnings={job.warnings} compact />
     : <div className="grid min-h-48 place-items-center rounded-lg border border-dashed border-white/15 px-4 text-center text-xs leading-5 text-zinc-500">
         {query.isError ? `Agent trace unavailable: ${query.error.message}` : "Loading agent activity…"}
       </div>;

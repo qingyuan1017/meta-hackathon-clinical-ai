@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { Activity, CheckCircle2, ChevronDown, Clock3, FileSearch, MessageSquareText, ShieldCheck, XCircle } from "lucide-react";
 import type { AgentProgress } from "@/lib/types";
+import { getFeedbackDecisionSequence } from "@/lib/revision-decision";
 
 type AgentEvent = AgentProgress["events"][number] & { actor?: "agent" | "user" | "system" };
 
-export function AgentTurnTimeline({ progress, compact = false }: { progress: AgentProgress; compact?: boolean }) {
+export function AgentTurnTimeline({ progress, result, warnings = [], compact = false }: { progress: AgentProgress; result?: unknown; warnings?: string[]; compact?: boolean }) {
   const sourceCoverage = progress.total_source_chunks
     ? Math.round((progress.read_source_chunks.length / progress.total_source_chunks) * 100)
     : 0;
@@ -14,6 +15,8 @@ export function AgentTurnTimeline({ progress, compact = false }: { progress: Age
   const completed = agentEvents.filter((event) => event.ok !== false && !event.type.endsWith("rejected")).length;
   const retries = agentEvents.length - completed;
   const externalLookups = agentEvents.filter((event) => event.name && !INTERNAL_TOOLS.has(event.name)).length;
+  const feedbackSequence = getFeedbackDecisionSequence(result, warnings, progress.events);
+  const decisionsByEvent = new Map(feedbackSequence.entries.map((entry) => [entry.eventIndex, entry.decisions]));
 
   return (
     <div className={compact ? "space-y-3" : "space-y-5"}>
@@ -81,16 +84,8 @@ export function AgentTurnTimeline({ progress, compact = false }: { progress: Age
 
       {progress.events.length ? (
         <ol aria-label="Agent turn details" className="relative space-y-4 before:absolute before:bottom-6 before:left-[1.15rem] before:top-6 before:w-px before:bg-white/10">
-          {progress.events.map((event, index) => (
-            <AgentTurnCard
-              key={`${event.turn}-${event.name ?? event.type}-${index}`}
-              event={event}
-              nextEvent={progress.events[index + 1]}
-              progressStatus={progress.status}
-              compact={compact}
-              defaultOpen={index === progress.events.length - 1}
-            />
-          ))}
+          {progress.events.map((event, index) => <AgentTurnCard key={`${event.turn}-${event.name ?? event.type}-${index}`} event={event} nextEvent={progress.events[index + 1]} progressStatus={progress.status} compact={compact} defaultOpen={index === progress.events.length - 1} decisions={decisionsByEvent.get(index)} />)}
+          {feedbackSequence.unmatched.length > 0 && <li className="relative pl-12"><DecisionCard decisions={feedbackSequence.unmatched} title="Other current constraints" /></li>}
         </ol>
       ) : (
         <div className="grid min-h-48 place-items-center rounded-xl border border-dashed border-white/15 bg-white/[0.02] px-6 text-center text-sm text-zinc-500">
@@ -107,7 +102,7 @@ export function AgentTurnTimeline({ progress, compact = false }: { progress: Age
   );
 }
 
-function AgentTurnCard({ event, nextEvent, progressStatus, compact, defaultOpen }: { event: AgentEvent; nextEvent?: AgentEvent; progressStatus: string; compact: boolean; defaultOpen: boolean }) {
+function AgentTurnCard({ event, nextEvent, progressStatus, compact, defaultOpen, decisions }: { event: AgentEvent; nextEvent?: AgentEvent; progressStatus: string; compact: boolean; defaultOpen: boolean; decisions?: string[] }) {
   const [open, setOpen] = useState(defaultOpen);
   const isUser = event.actor === "user" || event.type === "user_feedback";
   const failed = event.ok === false || event.type.endsWith("rejected");
@@ -194,8 +189,13 @@ function AgentTurnCard({ event, nextEvent, progressStatus, compact, defaultOpen 
           <span className="text-zinc-400">{nextEvent ? nextEvent.intent ?? `The agent continued with ${humanize(nextEvent.name ?? nextEvent.type)}.` : terminalNextStep(failed, progressStatus)}</span>
         </div>
       </details>
+      {isUser && <DecisionCard decisions={decisions ?? []} />}
     </li>
   );
+}
+
+function DecisionCard({ decisions, title = "Recorded decision" }: { decisions: string[]; title?: string }) {
+  return <div className="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/[0.07] px-3 py-2.5"><p className="text-[10px] font-black uppercase tracking-[0.1em] text-amber-300">{title}</p>{decisions.length ? <ul className="mt-1 space-y-1">{decisions.map((item) => <li key={item} className="text-xs leading-5 text-amber-100">{item}</li>)}</ul> : <p className="mt-1 text-xs leading-5 text-zinc-500">No unresolved constraint was recorded for this feedback in the current draft.</p>}</div>;
 }
 
 function CompactOverview({ progress, sourceCoverage, completed, retries, externalLookups }: { progress: AgentProgress; sourceCoverage: number; completed: number; retries: number; externalLookups: number }) {
