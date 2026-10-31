@@ -87,12 +87,17 @@ def _partition_with_deduplication(
 
 
 def _strong_domain_match(note: str, domain: str, sources: list[str]) -> bool:
-    upper = note.upper()
     escaped = re.escape(domain)
-    if re.search(rf"\b{escaped}[A-Z0-9_]{{2,}}\b", upper):
+    # Domain identifiers in generated review notes are emitted as uppercase tokens.
+    # Preserve case here so short domains such as CO and BE do not match ordinary
+    # words after uppercasing (for example, "coded" or "be").
+    if re.search(rf"(?<![A-Z0-9_]){escaped}(?![A-Z0-9_])", note):
         return True
-    if any(source in upper for source in sources):
-        return True
+    upper = note.upper()
+    for source in sources:
+        escaped_source = re.escape(source.upper())
+        if re.search(rf"(?<![A-Z0-9_]){escaped_source}(?![A-Z0-9_])", upper):
+            return True
     return any(
         re.search(pattern, upper)
         for pattern in (

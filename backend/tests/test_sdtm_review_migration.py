@@ -28,3 +28,47 @@ def test_attaches_flattened_comments_using_preserved_batch_counts() -> None:
     assert datasets[1]["review_assumptions"] == ["AE mapping"]
     assert datasets[2]["review_assumptions"] == ["target LB mapping"]
     assert datasets[1]["review_unresolved_mappings"] == ["AE decision"]
+
+
+def test_short_domain_does_not_match_inside_an_ordinary_word() -> None:
+    result = {
+        "domain_mapping": {
+            "domain_mappings": [
+                {"source_dataset": "CM", "target_domain": "CM"},
+                {"source_dataset": "CO", "target_domain": "CO"},
+                {"source_dataset": "DA", "target_domain": "DA"},
+            ]
+        },
+        "variable_mapping": {
+            "datasets": [{"domain": "CM"}, {"domain": "CO"}, {"domain": "DA"}],
+            # One duplicate was removed from the CO batch. "coded" must not be
+            # mistaken for the start of the CO batch while finding that boundary.
+            "assumptions": [
+                "CM baseline",
+                "Coded values require review",
+                "CM date handling",
+                "Approved mapping to CO",
+                "CO variable review",
+                "Approved mapping to DA",
+            ],
+            "unresolved_mappings": [],
+        },
+    }
+
+    migrated = attach_legacy_batch_review_notes(
+        result,
+        assumption_counts=[3, 3, 1],
+        unresolved_counts=[0, 0, 0],
+    )
+
+    datasets = migrated["variable_mapping"]["datasets"]
+    assert datasets[0]["review_assumptions"] == [
+        "CM baseline",
+        "Coded values require review",
+        "CM date handling",
+    ]
+    assert datasets[1]["review_assumptions"] == [
+        "Approved mapping to CO",
+        "CO variable review",
+    ]
+    assert datasets[2]["review_assumptions"] == ["Approved mapping to DA"]
