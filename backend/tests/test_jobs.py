@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 from app.db import SessionLocal
-from app.jobs import JobRunner
+from app.jobs import JobRunner, sanitize_error
 from app.models import Job
 from app.workflows import WorkflowResult
 from app.review_patches import new_patch_request
@@ -141,3 +141,12 @@ def test_sdtm_agent_options_preserve_scoped_revision_baseline() -> None:
     assert "edc_source_spec" not in sanitized
     assert "_review_patch_request" not in sanitized
     assert "_review_stage" not in sanitized
+
+
+def test_sanitize_error_unwraps_nested_exception_groups() -> None:
+    error = ExceptionGroup(
+        "unhandled errors in a TaskGroup",
+        [ExceptionGroup("connection cleanup", [ValueError("JSON schema exceeds the maximum nesting depth of 10 levels")])],
+    )
+
+    assert sanitize_error(error) == "JSON schema exceeds the maximum nesting depth of 10 levels"

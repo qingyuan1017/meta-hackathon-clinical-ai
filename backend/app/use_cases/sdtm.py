@@ -283,6 +283,11 @@ class SDTMUseCase(ClinicalUseCase):
                 ai=context.ai,
                 settings=context.settings,
                 progress_path=context.agent_progress_path,
+                result_validator=lambda value: self.validate_variable_mapping(
+                    batch_spec,
+                    batch_domain_mapping,
+                    cast(SDTMVariableMappingPlan, value),
+                ),
             ).run(
                 objective=(
                     f"Stage 2 of 3, complete-data batch for target {target_domain}: preserve the supplied "

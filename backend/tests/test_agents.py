@@ -485,8 +485,95 @@ async def test_agent_reads_contract_and_source_then_submits_valid_result(tmp_pat
     submit_tool = next(
         item for item in completions.requests[0]["tools"] if item["function"]["name"] == "submit_result"
     )
-    assert "$defs" in submit_tool["function"]["parameters"]
-    assert "$defs" not in submit_tool["function"]["parameters"]["properties"]["result"]
+    submission_parameters = submit_tool["function"]["parameters"]
+    assert "$defs" not in submission_parameters
+    assert submission_parameters["properties"]["result"] == {
+        "type": "object",
+        "description": (
+            "Complete structured result matching the exact schema returned by "
+            "inspect_workflow_contract. Backend validation remains authoritative."
+        ),
+        "additionalProperties": True,
+    }
+
+
+async def test_agent_accepts_json_encoded_object_from_shallow_submit_tool(tmp_path) -> None:
+    actions = [
+        ("inspect_workflow_contract", {}),
+        ("read_source_chunk", {"index": 1}),
+        ("submit_result", {"result": json.dumps({"study_title": "Synthetic Study"})}),
+    ]
+    completions = ScriptedCompletions(actions)
+    settings = agent_settings()
+    ai = MetaAIClient(settings)
+    ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    outcome = await ClinicalAgentRunner(
+        definition=get_agent("protocol-extraction"),
+        result_model=StudySummary,
+        ai=ai,
+        settings=settings,
+        progress_path=tmp_path / "progress.json",
+    ).run(objective="Extract the protocol", source="Synthetic protocol text", options={})
+
+    assert outcome.value.study_title == "Synthetic Study"
+
+
+async def test_agent_returns_workflow_validator_problems_for_correction(tmp_path) -> None:
+    actions = [
+        ("inspect_workflow_contract", {}),
+        ("read_source_chunk", {"index": 1}),
+        ("submit_result", {"result": {"study_title": "Incomplete"}}),
+        ("submit_result", {"result": {"study_title": "Corrected"}}),
+    ]
+    completions = ScriptedCompletions(actions)
+    settings = agent_settings()
+    ai = MetaAIClient(settings)
+    ai.client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+    def validate_result(value) -> None:
+        if value.study_title == "Incomplete":
+            raise ValueError("A reviewed R and SAS condition is required.")
+
+    progress_path = tmp_path / "progress.json"
+    outcome = await ClinicalAgentRunner(
+        definition=get_agent("protocol-extraction"),
+        result_model=StudySummary,
+        ai=ai,
+        settings=settings,
+        progress_path=progress_path,
+        result_validator=validate_result,
+    ).run(objective="Extract the protocol", source="Synthetic protocol text", options={})
+
+    assert outcome.value.study_title == "Corrected"
+    trace = json.loads(progress_path.read_text(encoding="utf-8"))
+    rejected = trace["events"][2]
+    assert rejected["ok"] is False
+    assert rejected["error"] == "Result verification failed."
+    tool_messages = [message for message in trace["messages"] if message["role"] == "tool"]
+    assert "A reviewed R and SAS condition is required." in tool_messages[-2]["content"]
+
+
+def test_sdtm_submit_tool_uses_shallow_provider_schema() -> None:
+    settings = agent_settings()
+    runner = ClinicalAgentRunner(
+        definition=STAGE_AGENTS[1][1],
+        result_model=SDTMVariableMappingPlan,
+        ai=MetaAIClient(settings),
+        settings=settings,
+    )
+
+    submit_tool = next(
+        item
+        for item in runner._internal_tool_definitions(3)
+        if item["function"]["name"] == "submit_result"
+    )
+    parameters = submit_tool["function"]["parameters"]
+
+    assert parameters["properties"]["result"]["type"] == "object"
+    assert parameters["properties"]["result"]["additionalProperties"] is True
+    assert "datasets" not in parameters["properties"]["result"].get("properties", {})
+    assert "$defs" not in json.dumps(parameters)
 
 
 async def test_agent_refuses_submission_until_every_source_chunk_is_read(tmp_path) -> None:

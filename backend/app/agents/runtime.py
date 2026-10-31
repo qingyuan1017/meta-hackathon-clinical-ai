@@ -6,7 +6,7 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from mcp import Client as MCPClient
 from pydantic import BaseModel, ValidationError
@@ -43,12 +43,14 @@ class ClinicalAgentRunner:
         ai: MetaAIClient,
         settings: Settings,
         progress_path: Path | None = None,
+        result_validator: Callable[[BaseModel], None] | None = None,
     ) -> None:
         self.definition = definition
         self.result_model = result_model
         self.ai = ai
         self.settings = settings
         self.progress_path = progress_path
+        self.result_validator = result_validator
 
     async def run(
         self,
@@ -375,16 +377,27 @@ class ClinicalAgentRunner:
         )
 
     def _internal_tool_definitions(self, chunk_count: int) -> list[dict[str, Any]]:
-        result_schema = self.result_model.model_json_schema()
-        definitions = result_schema.pop("$defs", None)
+        # Keep the provider-facing tool schema deliberately shallow. Some supported
+        # model gateways reject JSON schemas nested more than ten levels deep, while
+        # clinical result contracts (notably SDTM record plans) legitimately exceed
+        # that limit. The agent receives the exact contract from
+        # inspect_workflow_contract and the submitted object is still validated in
+        # full by Pydantic in _run_internal_tool.
         submission_parameters: dict[str, Any] = {
             "type": "object",
-            "properties": {"result": result_schema},
+            "properties": {
+                "result": {
+                    "type": "object",
+                    "description": (
+                        "Complete structured result matching the exact schema returned by "
+                        "inspect_workflow_contract. Backend validation remains authoritative."
+                    ),
+                    "additionalProperties": True,
+                }
+            },
             "required": ["result"],
             "additionalProperties": False,
         }
-        if definitions:
-            submission_parameters["$defs"] = definitions
         return [
             {
                 "type": "function",
@@ -465,8 +478,19 @@ class ClinicalAgentRunner:
             if unread:
                 return {"ok": False, "error": "Read every source chunk before submission.", "unread": unread}
             raw = arguments.get("result")
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except json.JSONDecodeError:
+                    return {
+                        "ok": False,
+                        "error": "result must be a JSON object or a JSON-encoded object",
+                    }
             if not isinstance(raw, dict):
-                return {"ok": False, "error": "result must be a JSON object"}
+                return {
+                    "ok": False,
+                    "error": "result must be a JSON object or a JSON-encoded object",
+                }
             try:
                 validated = self.result_model.model_validate(raw)
             except ValidationError as exc:
@@ -476,6 +500,11 @@ class ClinicalAgentRunner:
                     "problems": exc.errors(include_url=False),
                 }
             problems = verify_result(self.definition.workflow, validated)
+            if self.result_validator is not None:
+                try:
+                    self.result_validator(validated)
+                except (TypeError, ValueError) as exc:
+                    problems.append(str(exc))
             if problems:
                 return {"ok": False, "error": "Result verification failed.", "problems": problems}
             state["submitted"] = validated

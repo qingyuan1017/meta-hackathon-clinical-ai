@@ -185,8 +185,19 @@ class JobRunner:
                 write_state(job_dir, state)
 
 
-def sanitize_error(exc: Exception) -> str:
-    message = " ".join(str(exc).split())[:1_000]
+def _leaf_exception_messages(exc: BaseException) -> list[str]:
+    if isinstance(exc, BaseExceptionGroup):
+        messages: list[str] = []
+        for child in exc.exceptions:
+            messages.extend(_leaf_exception_messages(child))
+        return messages
+    message = " ".join(str(exc).split())
+    return [message] if message else []
+
+
+def sanitize_error(exc: BaseException) -> str:
+    messages = list(dict.fromkeys(_leaf_exception_messages(exc)))
+    message = " | ".join(messages)[:1_000]
     lowered = message.lower()
     if "api key" in lowered or "authorization" in lowered or "unauthorized" in lowered:
         return "The Meta API rejected the configured credentials. Check the server configuration."
