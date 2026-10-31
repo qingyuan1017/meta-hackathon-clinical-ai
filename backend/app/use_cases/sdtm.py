@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -11,7 +12,8 @@ from ..agents.runtime import verify_result
 from ..agents.sdtm import SOURCE_NORMALIZATION_AGENT, STAGE_AGENTS
 from ..artifacts import render_sdtm
 from ..csdrg import render_csdrg
-from ..parsers import parse_edc_source, parse_source
+from ..edc_normalization import EDCJSONNormalization, normalize_edc_json
+from ..parsers import chunk_text, parse_edc_source, parse_source
 from ..schemas import (
     EDCSourceSpecification,
     SDTMDomainMappingPlan,
@@ -58,6 +60,38 @@ class SDTMUseCase(ClinicalUseCase):
     async def prepare_review(self, context: UseCaseContext) -> GeneratedContent | None:
         crf, edc = self._workflow_inputs(context.inputs)
         if context.options.get("edc_source_spec") is None:
+            if edc.suffix.lower() == ".json":
+                normalized = normalize_edc_json(edc)
+                if normalized is not None:
+                    problems = verify_result("sdtm-source-normalization", normalized.specification)
+                    if problems:
+                        raise ValueError(" ".join(problems))
+                    self._write_normalization_trace(context, edc, normalized)
+                    review_warning = []
+                    if context.options.get("review_feedback"):
+                        review_warning.append(
+                            "The complete JSON inventory was regenerated deterministically after review feedback; "
+                            "confirm the revised source draft at the human approval gate."
+                        )
+                    return GeneratedContent(
+                        value=normalized.specification,
+                        warnings=[
+                            *normalized.warnings,
+                            *review_warning,
+                            *self.result_warnings(normalized.specification),
+                        ],
+                        review_stage="edc_source",
+                    )
+
+                extracted = parse_edc_source(edc)
+                chunk_count = len(chunk_text(extracted, context.settings.chunk_characters))
+                if chunk_count > context.settings.max_source_chunks:
+                    raise ValueError(
+                        "The complete EDC JSON uses an unrecognized metadata structure and requires "
+                        f"{chunk_count} source chunks, exceeding the configured complete-read limit of "
+                        f"{context.settings.max_source_chunks}. The source was not truncated. Provide a supported "
+                        "dataset/variable structure or normalize it at the source-review gate."
+                    )
             outcome = await ClinicalAgentRunner(
                 definition=SOURCE_NORMALIZATION_AGENT,
                 result_model=EDCSourceSpecification,
@@ -151,6 +185,85 @@ class SDTMUseCase(ClinicalUseCase):
 
         self._approved_variable_mapping(context.options, source_spec, domain_mapping)
         return None
+
+    @staticmethod
+    def _write_normalization_trace(
+        context: UseCaseContext,
+        source: Path,
+        normalized: EDCJSONNormalization,
+    ) -> None:
+        path = context.agent_progress_path
+        if path is None:
+            return
+        prior: dict[str, Any] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    prior = loaded
+            except (OSError, json.JSONDecodeError):
+                prior = {}
+        events = [event for event in prior.get("events", []) if isinstance(event, dict)]
+        turns = [event.get("turn", 0) for event in events]
+        turn = max(
+            [
+                int(prior.get("turn", 0)),
+                *[int(value) for value in turns if isinstance(value, int)],
+            ]
+        ) + 1
+        now = datetime.now(timezone.utc).isoformat()
+        dataset_count = len(normalized.specification.datasets)
+        variable_count = sum(len(dataset.variables) for dataset in normalized.specification.datasets)
+        events.append(
+            {
+                "turn": turn,
+                "type": "deterministic",
+                "name": "normalize_json_source",
+                "stage": "EDC source normalization",
+                "ok": True,
+                "summary": "Parsed the complete JSON source into an editable EDC metadata draft.",
+                "intent": "Inventory every discoverable source dataset and variable without model truncation.",
+                "input_summary": f"Parsed the complete {source.name} JSON document.",
+                "output_summary": f"Discovered {dataset_count} dataset(s) and {variable_count} variable(s).",
+                "input_details": {
+                    "File": source.name,
+                    "Adapter": normalized.adapter,
+                    "Complete document read": True,
+                },
+                "output_details": {
+                    "Datasets": dataset_count,
+                    "Variables": variable_count,
+                    "Human approval required": True,
+                },
+                "evidence": [
+                    f"{source.name} · {dataset_count} dataset path(s) discovered deterministically"
+                ],
+                "occurred_at": now,
+            }
+        )
+        trace = {
+            "agent_id": SOURCE_NORMALIZATION_AGENT.id,
+            "workflow": SOURCE_NORMALIZATION_AGENT.workflow,
+            "model": "deterministic-json-normalizer",
+            "status": "completed",
+            "turn": turn,
+            "max_turns": max(int(prior.get("max_turns", 0)), turn),
+            "stage": "EDC source normalization",
+            "stage_index": 1,
+            "stage_count": 1,
+            "completed_stages": ["EDC source normalization"],
+            "total_source_chunks": 0,
+            "read_source_chunks": [],
+            "started_at": prior.get("started_at", now),
+            "updated_at": now,
+            "completed_at": now,
+            "messages": [],
+            "events": events,
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(trace, indent=2, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
 
     async def generate(self, context: UseCaseContext) -> GeneratedContent:
         crf, edc = self._workflow_inputs(context.inputs)

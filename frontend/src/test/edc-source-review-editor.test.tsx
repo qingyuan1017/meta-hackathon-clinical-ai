@@ -22,10 +22,10 @@ const sourceSpecification = {
           codelist: null,
           form_id: "DM",
           question: "Subject Identifier",
-          provenance: { file: "edc.xlsx", sheet: "Fields", row: 2 },
+          provenance: { file: "edc.json", sheet: null, row: null, json_path: "$.domains[0].variables[0]" },
         },
       ],
-      provenance: { file: "edc.xlsx", sheet: "Datasets", row: 2 },
+      provenance: { file: "edc.json", sheet: null, row: null, json_path: "$.domains[0]" },
     },
   ],
   codelists: [],
@@ -41,6 +41,8 @@ describe("EDCSourceReviewEditor", () => {
     expect(screen.getByText("EDC source review required")).toBeInTheDocument();
     expect(screen.getAllByDisplayValue("RAW_DM")).toHaveLength(1);
     expect(screen.getAllByDisplayValue("SUBJID")).toHaveLength(1);
+    expect(screen.getByDisplayValue("$.domains[0]")).toHaveAttribute("readonly");
+    expect(screen.getByDisplayValue("$.domains[0].variables[0]")).toHaveAttribute("readonly");
     fireEvent.click(screen.getByText("Approve source and begin SDTM mapping"));
     expect(approve).toHaveBeenCalledOnce();
   });

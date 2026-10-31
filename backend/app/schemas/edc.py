@@ -59,6 +59,10 @@ class EDCSourceProvenance(EDCSourceModel):
     file: str = Field(min_length=1)
     sheet: str | None = None
     row: int | None = Field(default=None, ge=1)
+    json_path: str | None = Field(
+        default=None,
+        description="Exact JSON path for deterministically discovered source metadata",
+    )
 
 
 class EDCSourceVariable(EDCSourceModel):

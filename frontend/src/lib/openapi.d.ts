@@ -806,6 +806,11 @@ export interface components {
             sheet?: string | null;
             /** Row */
             row?: number | null;
+            /**
+             * Json Path
+             * @description Exact JSON path for deterministically discovered source metadata
+             */
+            json_path?: string | null;
         };
         /** EDCSourceSpecification */
         EDCSourceSpecification: {
