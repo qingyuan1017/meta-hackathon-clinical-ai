@@ -24,6 +24,7 @@ from .schemas import (
     ClinicalDocument,
     DISCLAIMER,
     EDCDesign,
+    SDTMDataset,
     SDTMPlan,
     StudySummary,
     TLFPlan,
@@ -259,9 +260,15 @@ def render_sdtm(result: SDTMPlan, crf_path: Path | None, output_dir: Path, langu
     diagnostics_path.write_text(json.dumps(diagnose_define(define_path), indent=2), encoding="utf-8")
     paths.append(diagnostics_path)
     if "r" in languages:
-        paths.append(_render_r_sdtm(result, output_dir / "build-sdtm.R"))
+        paths.extend(
+            _render_r_sdtm(result, dataset, output_dir / sdtm_program_filename(dataset.domain, "r"))
+            for dataset in result.datasets
+        )
     if "sas" in languages:
-        paths.append(_render_sas_sdtm(result, output_dir / "build-sdtm.sas"))
+        paths.extend(
+            _render_sas_sdtm(result, dataset, output_dir / sdtm_program_filename(dataset.domain, "sas"))
+            for dataset in result.datasets
+        )
     return paths
 
 
@@ -620,7 +627,21 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
     return path, coverage_path
 
 
-def _render_r_sdtm(result: SDTMPlan, path: Path) -> Path:
+def sdtm_program_filename(domain: str, language: str) -> str:
+    """Return the stable artifact filename for one reviewed SDTM domain program."""
+
+    normalized_domain = re.sub(r"[^A-Za-z0-9]+", "-", domain.strip()).strip("-").lower()
+    if not normalized_domain:
+        raise ValueError("An SDTM domain program requires a non-empty domain identifier.")
+    extensions = {"r": "R", "sas": "sas"}
+    try:
+        extension = extensions[language.lower()]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported SDTM program language: {language}.") from exc
+    return f"build-{normalized_domain}.{extension}"
+
+
+def _render_r_sdtm(result: SDTMPlan, dataset: SDTMDataset, path: Path) -> Path:
     domain_rules = {
         rule.target_domain.upper(): rule for rule in result.domain_rule_augmentations
     }
@@ -650,35 +671,34 @@ def _render_r_sdtm(result: SDTMPlan, path: Path) -> Path:
         "}",
         "",
     ]
-    for dataset in result.datasets:
-        domain_rule = domain_rules[dataset.domain.upper()]
-        source_name = domain_rule.source_datasets[0]
-        source_symbol = re.sub(r"[^A-Za-z0-9_.]", "_", source_name.lower())
+    domain_rule = domain_rules[dataset.domain.upper()]
+    source_name = domain_rule.source_datasets[0]
+    source_symbol = re.sub(r"[^A-Za-z0-9_.]", "_", source_name.lower())
+    lines.extend(
+        [
+            f"# {dataset.domain}: {dataset.description}",
+            f"# {domain_rule.rule_id}: {_one_line(domain_rule.description)}",
+            f"# Source datasets: {', '.join(domain_rule.source_datasets)}",
+            f"{source_symbol} <- read_source({_r_string(source_name)})",
+            f"{dataset.domain.lower()} <- {source_symbol} %>%",
+            "  transmute(",
+        ]
+    )
+    for index, variable in enumerate(dataset.variables):
+        rule = rules[(dataset.domain.upper(), variable.name.upper())]
+        delimiter = "," if index < len(dataset.variables) - 1 else ""
         lines.extend(
             [
-                f"# {dataset.domain}: {dataset.description}",
-                f"# {domain_rule.rule_id}: {_one_line(domain_rule.description)}",
-                f"# Source datasets: {', '.join(domain_rule.source_datasets)}",
-                f"{source_symbol} <- read_source({_r_string(source_name)})",
-                f"{dataset.domain.lower()} <- {source_symbol} %>%",
-                "  transmute(",
+                f"    # {rule.rule_id}: {_one_line(rule.description)}",
+                f"    {variable.name} = {_safe_r_expression(rule.r_expression)}{delimiter}",
             ]
         )
-        for index, variable in enumerate(dataset.variables):
-            rule = rules[(dataset.domain.upper(), variable.name.upper())]
-            delimiter = "," if index < len(dataset.variables) - 1 else ""
-            lines.extend(
-                [
-                    f"    # {rule.rule_id}: {_one_line(rule.description)}",
-                    f"    {variable.name} = {_safe_r_expression(rule.r_expression)}{delimiter}",
-                ]
-            )
-        lines.extend(["  )", f"haven::write_xpt({dataset.domain.lower()}, file.path(output_dir, \"{dataset.domain.lower()}.xpt\"), version = 5)", ""])
+    lines.extend(["  )", f"haven::write_xpt({dataset.domain.lower()}, file.path(output_dir, \"{dataset.domain.lower()}.xpt\"), version = 5)", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 
 
-def _render_sas_sdtm(result: SDTMPlan, path: Path) -> Path:
+def _render_sas_sdtm(result: SDTMPlan, dataset: SDTMDataset, path: Path) -> Path:
     domain_rules = {
         rule.target_domain.upper(): rule for rule in result.domain_rule_augmentations
     }
@@ -692,26 +712,25 @@ def _render_sas_sdtm(result: SDTMPlan, path: Path) -> Path:
         "/* EXECUTION STATUS: NOT RUN. This export-only SAS scaffold has not been tested against raw datasets. */",
         "",
     ]
-    for dataset in result.datasets:
-        domain_rule = domain_rules[dataset.domain.upper()]
+    domain_rule = domain_rules[dataset.domain.upper()]
+    lines.extend(
+        [
+            f"/* {dataset.domain}: {dataset.description} */",
+            f"/* {domain_rule.rule_id}: {_one_line(domain_rule.description)} */",
+            f"/* Source datasets: {', '.join(domain_rule.source_datasets)} */",
+            f"data sdtm.{dataset.domain.lower()};",
+        ]
+    )
+    lines.extend(f"  {line}" for line in domain_rule.sas_input_statement.splitlines())
+    for variable in dataset.variables:
+        rule = rules[(dataset.domain.upper(), variable.name.upper())]
         lines.extend(
             [
-                f"/* {dataset.domain}: {dataset.description} */",
-                f"/* {domain_rule.rule_id}: {_one_line(domain_rule.description)} */",
-                f"/* Source datasets: {', '.join(domain_rule.source_datasets)} */",
-                f"data sdtm.{dataset.domain.lower()};",
+                f"  /* {rule.rule_id}: {_one_line(rule.description)} */",
+                f"  {variable.name} = {rule.sas_expression};",
             ]
         )
-        lines.extend(f"  {line}" for line in domain_rule.sas_input_statement.splitlines())
-        for variable in dataset.variables:
-            rule = rules[(dataset.domain.upper(), variable.name.upper())]
-            lines.extend(
-                [
-                    f"  /* {rule.rule_id}: {_one_line(rule.description)} */",
-                    f"  {variable.name} = {rule.sas_expression};",
-                ]
-            )
-        lines.extend(["run;", ""])
+    lines.extend(["run;", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
 

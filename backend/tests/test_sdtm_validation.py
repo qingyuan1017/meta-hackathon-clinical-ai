@@ -95,7 +95,7 @@ def test_evidence_manifest_and_bundle_include_audit_records_without_raw_rows(tmp
     job_dir = _job_dir(tmp_path)
     output = job_dir / "output"
     output.mkdir()
-    (output / "build-sdtm.R").write_text("# generated; not run\n", encoding="utf-8")
+    (output / "build-dm.R").write_text("# generated; not run\n", encoding="utf-8")
     report = tmp_path / "p21.csv"
     report.write_text("Rule ID,Severity,Message\nSD0001,Warning,Example\n", encoding="utf-8")
     import_pinnacle21_report(job_dir, report)
@@ -109,6 +109,6 @@ def test_evidence_manifest_and_bundle_include_audit_records_without_raw_rows(tmp
     with zipfile.ZipFile(bundle) as archive:
         names = set(archive.namelist())
     assert "sdtm/evidence-manifest.json" in names
-    assert "output/build-sdtm.R" in names
+    assert "output/build-dm.R" in names
     assert not any(name.startswith("input/") for name in names)
 

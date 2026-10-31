@@ -13,7 +13,7 @@ from uuid import uuid4
 
 import httpx
 
-from .artifacts import sha256_file
+from .artifacts import sdtm_program_filename, sha256_file
 from .schemas import SDTMPlan
 from .schemas.sdtm_workbench import (
     ExecutionAttempt,
@@ -107,10 +107,23 @@ class SDTMExecutionService:
         state = read_state(job_dir)
         if not state.inputs.raw_datasets:
             raise ValueError("Raw CSV/XPT datasets are required before R execution can start.")
-        program = job_dir / "output" / "build-sdtm.R"
-        if not program.is_file():
-            raise ValueError("The reviewed R program artifact is unavailable.")
-        program_text = program.read_text(encoding="utf-8")
+        domain_programs = [
+            (dataset.domain, job_dir / "output" / sdtm_program_filename(dataset.domain, "r"))
+            for dataset in plan.datasets
+        ]
+        missing_domains = [domain for domain, path in domain_programs if not path.is_file()]
+        if missing_domains:
+            raise ValueError(
+                f"Reviewed R program artifacts are unavailable for: {', '.join(missing_domains)}."
+            )
+        program_text = "\n\n".join(
+            [
+                f"# BEGIN REVIEWED DOMAIN PROGRAM: {domain}\n"
+                f"{path.read_text(encoding='utf-8').rstrip()}\n"
+                f"# END REVIEWED DOMAIN PROGRAM: {domain}"
+                for domain, path in domain_programs
+            ]
+        ) + "\n"
         if PROHIBITED_R.search(program_text):
             raise ValueError("The generated R program contains prohibited shell, network, installation, or external-read behavior.")
 

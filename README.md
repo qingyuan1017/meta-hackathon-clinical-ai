@@ -9,7 +9,7 @@ A local, single-user hackathon application that uses Meta's OpenAI-compatible AP
 - Protocol extraction to structured JSON, Markdown, and CDISC USDM 4.0 JSON accepted only after the complete CORE conformance gate passes
 - Ten clinical document templates with DOCX and PDF output
 - EDC build specifications and edit checks in JSON and XLSX
-- SDTM mapping, deterministic R/SAS programs, optional isolated R execution/XPT output, annotated CRF, Define-XML review, validation triage, and draft cSDRG
+- SDTM mapping, deterministic per-domain R/SAS programs, optional isolated R execution/XPT output, annotated CRF, Define-XML review, validation triage, and draft cSDRG
 - TLF shells with DOCX and R/SAS program scaffolds
 
 ## Use-case architecture
@@ -414,4 +414,4 @@ The standalone `samples/generate_blank_crf.py` helper can also create `samples/b
 
 ## Standards posture
 
-SDTM outputs are labeled for SDTMIG 3.4 and Define-XML 2.1, but this repository does not distribute CDISC standards content and does not claim conformance. XML is checked for well-formedness and internal references only. Generated programs contain review markers. Reviewed R can run only through the isolated runner with raw data; SAS remains export-only and is never executed by the application.
+SDTM outputs are labeled for SDTMIG 3.4 and Define-XML 2.1, but this repository does not distribute CDISC standards content and does not claim conformance. XML is checked for well-formedness and internal references only. Each target domain is rendered to its own `build-<domain>.R` and `build-<domain>.sas` artifact with review markers. When raw data is available, the isolated runner creates an immutable execution copy from the reviewed per-domain R files; SAS remains export-only and is never executed by the application.

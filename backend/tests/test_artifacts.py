@@ -147,15 +147,17 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
     workbook = load_workbook(tmp_path / "sdtm-mapping.xlsx")
     assert {"Domain Mappings", "Unmapped Sources", "Variable Mappings", "Value Level Metadata", "Domain Rule Augmentation", "Variable Rule Augmentation"} <= set(workbook.sheetnames)
     assert workbook["Unmapped Sources"]["A2"].value == "AUDIT_LOG"
-    assert "dm <- raw_dm %>%" in (tmp_path / "build-sdtm.R").read_text(encoding="utf-8")
-    assert '.data[["AGE"]]' in (tmp_path / "build-sdtm.R").read_text(encoding="utf-8")
-    assert "AGE = AGE;" in (tmp_path / "build-sdtm.sas").read_text(encoding="utf-8")
+    assert "dm <- raw_dm %>%" in (tmp_path / "build-dm.R").read_text(encoding="utf-8")
+    assert '.data[["AGE"]]' in (tmp_path / "build-dm.R").read_text(encoding="utf-8")
+    assert "AGE = AGE;" in (tmp_path / "build-dm.sas").read_text(encoding="utf-8")
 
     code_only_dir = tmp_path / "code-only"
     code_only_dir.mkdir()
     code_only_paths = render_sdtm(sdtm, None, code_only_dir, ["r", "sas"])
     assert "annotated-crf.pdf" not in {path.name for path in code_only_paths}
-    assert {"define.xml", "build-sdtm.R", "build-sdtm.sas"} <= {path.name for path in code_only_paths}
+    assert {"define.xml", "build-dm.R", "build-dm.sas"} <= {path.name for path in code_only_paths}
+    assert "build-sdtm.R" not in {path.name for path in code_only_paths}
+    assert "build-sdtm.sas" not in {path.name for path in code_only_paths}
 
     tlf = TLFPlan(
         study_name="SYN-101",
@@ -216,6 +218,49 @@ def test_acrf_coverage_and_define_review_diagnostics(tmp_path) -> None:
     broken = tmp_path / "define-broken.xml"
     tree.write(str(broken), encoding="UTF-8", xml_declaration=True)
     assert diagnose_define(broken)["missing_references"] == ["IT.MISSING"]
+
+
+def test_sdtm_program_artifacts_are_isolated_by_domain(tmp_path) -> None:
+    plan = SDTMPlan(
+        study_name="SYN-DOMAIN-FILES",
+        domain_mappings=[
+            SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic"),
+            SDTMDomainMapping(source_dataset="RAW_AE", target_domain="AE", rationale="Synthetic"),
+        ],
+        datasets=[
+            SDTMDataset(
+                domain="DM",
+                description="Demographics",
+                variables=[SDTMVariable(name="USUBJID", label="Unique subject", source_dataset="RAW_DM", source_field="USUBJID")],
+            ),
+            SDTMDataset(
+                domain="AE",
+                description="Adverse events",
+                variables=[SDTMVariable(name="AETERM", label="Reported term", source_dataset="RAW_AE", source_field="AETERM")],
+            ),
+        ],
+        domain_rule_augmentations=[
+            SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Read DM", logic="Direct", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;"),
+            SDTMDomainRuleAugmentation(rule_id="AE-SOURCE", target_domain="AE", source_datasets=["RAW_AE"], description="Read AE", logic="Direct", r_input_expression="raw_ae", sas_input_statement="set raw.raw_ae;"),
+        ],
+        rule_augmentations=[
+            SDTMRuleAugmentation(rule_id="DM-USUBJID", target_domain="DM", target_variable="USUBJID", description="Direct", logic="Direct", r_expression='.data[["USUBJID"]]', sas_expression="USUBJID"),
+            SDTMRuleAugmentation(rule_id="AE-AETERM", target_domain="AE", target_variable="AETERM", description="Direct", logic="Direct", r_expression='.data[["AETERM"]]', sas_expression="AETERM"),
+        ],
+    )
+
+    paths = render_sdtm(plan, None, tmp_path, ["r", "sas"])
+    names = {path.name for path in paths}
+    assert {"build-dm.R", "build-dm.sas", "build-ae.R", "build-ae.sas"} <= names
+    assert {"build-sdtm.R", "build-sdtm.sas"}.isdisjoint(names)
+    dm_r = (tmp_path / "build-dm.R").read_text(encoding="utf-8")
+    ae_r = (tmp_path / "build-ae.R").read_text(encoding="utf-8")
+    dm_sas = (tmp_path / "build-dm.sas").read_text(encoding="utf-8")
+    ae_sas = (tmp_path / "build-ae.sas").read_text(encoding="utf-8")
+    assert "# DM: Demographics" in dm_r and "# AE:" not in dm_r
+    assert "# AE: Adverse events" in ae_r and "# DM:" not in ae_r
+    assert "data sdtm.dm;" in dm_sas and "data sdtm.ae;" not in dm_sas
+    assert "data sdtm.ae;" in ae_sas and "data sdtm.dm;" not in ae_sas
 
 
 def test_non_searchable_crf_reports_ocr_limitation(tmp_path) -> None:

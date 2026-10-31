@@ -212,13 +212,13 @@ def test_retry_recovers_complete_sdtm_plan_without_model_call(monkeypatch) -> No
         assert any("without another model call" in warning for warning in payload["warnings"])
         assert {item["name"] for item in payload["artifacts"]} >= {
             "sdtm-mapping.json",
-            "build-sdtm.R",
-            "build-sdtm.sas",
+            "build-dm.R",
+            "build-dm.sas",
         }
         assert "dplyr::if_else(is.na(AGE), NA_real_, AGE)" in (
-            job_dir / "output" / "build-sdtm.R"
+            job_dir / "output" / "build-dm.R"
         ).read_text(encoding="utf-8")
-        assert "review only" not in (job_dir / "output" / "build-sdtm.R").read_text(encoding="utf-8")
+        assert "review only" not in (job_dir / "output" / "build-dm.R").read_text(encoding="utf-8")
     finally:
         settings.meta_api_key, settings.meta_model = original_key, original_model
         with SessionLocal() as session:

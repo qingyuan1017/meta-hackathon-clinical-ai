@@ -48,7 +48,7 @@ def _job_dir(tmp_path: Path, program: str = "x <- 1\n") -> Path:
     raw.write_text("USUBJID,AGE\nSYN-001,42\n", encoding="utf-8")
     inventory = inventory_raw_dataset(raw, "raw_dm.csv")
     initialize_state(job_dir, metadata_files=["edc.json"], blank_crf=None, raw_datasets=[inventory], validation_report=None)
-    (output_dir / "build-sdtm.R").write_text(program, encoding="utf-8")
+    (output_dir / "build-dm.R").write_text(program, encoding="utf-8")
     return job_dir
 
 
