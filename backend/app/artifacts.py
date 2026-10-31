@@ -470,7 +470,8 @@ def _render_r_sdtm(result: SDTMPlan, path: Path) -> Path:
     }
     lines = [
         f"# {DISCLAIMER}",
-        "# Generated from reviewed rule-augmentation metadata; it is intentionally not executed.",
+        "# Generated from reviewed rule-augmentation metadata.",
+        "# EXECUTION STATUS: NOT RUN. This program has not been tested against raw datasets.",
         "library(dplyr)",
         "",
     ]
@@ -509,7 +510,8 @@ def _render_sas_sdtm(result: SDTMPlan, path: Path) -> Path:
     }
     lines = [
         f"/* {DISCLAIMER} */",
-        "/* Generated from reviewed rule-augmentation metadata; it is intentionally not executed. */",
+        "/* Generated from reviewed rule-augmentation metadata. */",
+        "/* EXECUTION STATUS: NOT RUN. This export-only SAS scaffold has not been tested against raw datasets. */",
         "",
     ]
     for dataset in result.datasets:

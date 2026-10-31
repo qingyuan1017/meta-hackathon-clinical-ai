@@ -25,6 +25,9 @@ type FormValues = z.infer<typeof formSchema>;
 export function WorkflowForm({ workflow, enabled, onCreated, discipline = "biostats" }: { workflow: Workflow; enabled: boolean; onCreated: (job: Job) => void; discipline?: string }) {
   const definition = workflowById[workflow];
   const [files, setFiles] = useState<File[]>([]);
+  const [rawFiles, setRawFiles] = useState<File[]>([]);
+  const [crfFile, setCrfFile] = useState<File | null>(null);
+  const [validationReport, setValidationReport] = useState<File | null>(null);
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     defaultValues: { studyBrief: "", documentType: discipline === "data-management" ? "data-management-plan" : "protocol-synopsis", generateR: true, generateSas: true, acknowledged: false },
@@ -36,7 +39,7 @@ export function WorkflowForm({ workflow, enabled, onCreated, discipline = "biost
       study_brief: submitted.studyBrief,
       document_type: submitted.documentType,
       languages: [submitted.generateR && "r", submitted.generateSas && "sas"].filter(Boolean),
-    }, files),
+    }, files, workflow === "sdtm" ? { rawFiles, crfFile, validationReport } : undefined),
     onSuccess: onCreated,
   });
 
@@ -63,6 +66,14 @@ export function WorkflowForm({ workflow, enabled, onCreated, discipline = "biost
             <input className="mt-4 block w-full text-xs text-zinc-400" type="file" accept={definition.accepts} multiple={workflow !== "protocol-extraction"} onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
             {files.length > 0 && <span className="mt-3 block text-xs font-bold text-clinical-700">{files.length} file{files.length === 1 ? "" : "s"} selected</span>}
           </label>
+          {workflow === "sdtm" && <div className="space-y-3 rounded-xl border border-violet-500/20 bg-violet-500/[0.05] p-4">
+            <p className="text-sm font-extrabold text-violet-200">Optional SDTM evidence inputs</p>
+            <p className="text-xs leading-5 text-zinc-400">Without raw data, reviewed R and SAS programs are generated but are not run. Raw CSV/XPT data enables isolated R execution and output checks. Validation remains a separate phase. Without a blank CRF, aCRF is intentionally not applicable.</p>
+            <label className="block text-xs font-bold text-zinc-300">Synthetic raw datasets (CSV or XPT)<input className="mt-2 block w-full text-xs font-normal text-zinc-400" type="file" accept=".csv,.xpt" multiple onChange={(event) => setRawFiles(Array.from(event.target.files ?? []))} /></label>
+            <label className="block text-xs font-bold text-zinc-300">Searchable blank CRF (PDF)<input className="mt-2 block w-full text-xs font-normal text-zinc-400" type="file" accept=".pdf" onChange={(event) => setCrfFile(event.target.files?.[0] ?? null)} /></label>
+            <label className="block text-xs font-bold text-zinc-300">Pinnacle 21 report (CSV or XLSX)<input className="mt-2 block w-full text-xs font-normal text-zinc-400" type="file" accept=".csv,.xlsx" onChange={(event) => setValidationReport(event.target.files?.[0] ?? null)} /></label>
+            <p className="text-[11px] leading-5 text-zinc-500">Imported findings retain provider/version provenance. Execution checks are not standards validation, and no skipped or unavailable validator is reported as passed.</p>
+          </div>}
           {needsLanguages && (
             <fieldset><legend className="mb-2 text-sm font-extrabold text-zinc-200">Program languages</legend><div className="flex gap-4"><label className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm font-bold uppercase text-zinc-300"><input type="checkbox" {...form.register("generateR")} />R</label><label className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm font-bold uppercase text-zinc-300"><input type="checkbox" {...form.register("generateSas")} />SAS</label></div>{form.formState.errors.generateR && <p className="mt-2 text-xs font-semibold text-rose-300">{form.formState.errors.generateR.message}</p>}</fieldset>
           )}

@@ -49,6 +49,14 @@ from .sdtm import (
     SDTMVariableMappingPlan,
     SDTMVariableMappingReview,
 )
+from .sdtm_workbench import (
+    ArtifactEvidence,
+    RawDatasetInventory,
+    SDTMInputManifest,
+    SDTMLifecycle,
+    SDTMWorkbenchState,
+    SourceColumnProfile,
+)
 from .tlf import (
     TLFAnalysisPlan,
     TLFColumn,

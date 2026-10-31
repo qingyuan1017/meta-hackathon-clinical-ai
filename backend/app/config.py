@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     core_cli_path: Path = Path("/opt/cdisc-core/core.py")
     core_timeout_seconds: int = 600
     core_pool_size: int = 2
+    sdtm_runner_url: str = ""
+    sdtm_runner_timeout_seconds: int = 180
+    pinnacle21_cli_path: Path | None = None
+    pinnacle21_java_path: Path | None = None
+    pinnacle21_timeout_seconds: int = 600
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

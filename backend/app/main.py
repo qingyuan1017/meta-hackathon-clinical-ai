@@ -49,6 +49,7 @@ from .schemas import (
     VoiceTranscriptionRead,
 )
 from .security import detect_identifiers, validate_upload_metadata, verify_signature
+from .sdtm_workbench import initialize_state, inventory_raw_dataset, read_state
 from .use_cases import USE_CASES, get_use_case
 from .use_cases.sdtm import SDTMUseCase
 from .use_cases.tlf import TLFUseCase
@@ -213,6 +214,9 @@ async def create_job(
     workflow: str,
     options: str = Form("{}"),
     files: list[UploadFile] = File(default=[]),
+    raw_files: list[UploadFile] = File(default=[]),
+    crf_file: UploadFile | None = File(default=None),
+    validation_report: UploadFile | None = File(default=None),
     db: Session = Depends(get_db),
 ) -> JobRead:
     if workflow not in WORKFLOWS:
@@ -227,7 +231,16 @@ async def create_job(
         raise HTTPException(status_code=422, detail="The options field must contain a JSON object.")
     if parsed_options.get("deidentified_acknowledged") is not True:
         raise HTTPException(status_code=422, detail="Synthetic/de-identified data acknowledgement is required.")
-    _validate_required_inputs(workflow, files, parsed_options)
+    role_uploads: list[tuple[str, UploadFile]] = [("source", item) for item in files]
+    if workflow == "sdtm":
+        role_uploads.extend(("raw", item) for item in raw_files)
+        if crf_file is not None:
+            role_uploads.append(("crf", crf_file))
+        if validation_report is not None:
+            role_uploads.append(("validation", validation_report))
+    elif raw_files or crf_file is not None or validation_report is not None:
+        raise HTTPException(status_code=422, detail="Specialized SDTM uploads are only accepted for the SDTM workflow.")
+    _validate_required_inputs(workflow, [item for _, item in role_uploads], parsed_options)
 
     title = str(parsed_options.get("title") or _default_title(workflow, parsed_options))[:240]
     job = Job(
@@ -243,26 +256,57 @@ async def create_job(
     input_dir = job_dir / "input"
     input_dir.mkdir(parents=True, exist_ok=False)
     saved_names: list[str] = []
+    input_roles: dict[str, list[str]] = {"source": [], "raw": [], "crf": [], "validation": []}
+    raw_inventory = []
     try:
-        for index, upload in enumerate(files):
+        raw_logical_names: set[str] = set()
+        for index, (role, upload) in enumerate(role_uploads):
             safe_name = validate_upload_metadata(upload)
-            unique_name = f"{index + 1:02d}-{safe_name}"
+            prefix = "validation-" if role == "validation" else f"{index + 1:02d}-"
+            unique_name = f"{prefix}{safe_name}"
             destination = input_dir / unique_name
             await _save_limited(upload, destination)
             verify_signature(destination)
-            source_text = parse_source(destination)
-            identifiers = detect_identifiers(source_text)
-            if identifiers:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Potential direct identifiers detected in {safe_name}: {', '.join(identifiers)}. Remove them before upload.",
-                )
+            if role == "raw" or (role == "source" and destination.suffix.lower() in {".csv", ".xpt"}):
+                role = "raw"
+                try:
+                    inventory = inventory_raw_dataset(destination, safe_name)
+                except (OSError, UnicodeError, ValueError) as exc:
+                    raise HTTPException(status_code=422, detail=str(exc)) from exc
+                if inventory.logical_name in raw_logical_names:
+                    raise HTTPException(status_code=422, detail=f"Duplicate raw dataset logical name: {inventory.logical_name}.")
+                raw_logical_names.add(inventory.logical_name)
+                raw_inventory.append(inventory)
+            elif role != "validation":
+                source_text = parse_source(destination)
+                identifiers = detect_identifiers(source_text)
+                if identifiers:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Potential direct identifiers detected in {safe_name}: {', '.join(identifiers)}. Remove them before upload.",
+                    )
             saved_names.append(unique_name)
+            input_roles[role].append(unique_name)
         study_brief = str(parsed_options.get("study_brief", ""))
         identifiers = detect_identifiers(study_brief)
         if identifiers:
             raise HTTPException(status_code=422, detail=f"Potential direct identifiers detected in the study brief: {', '.join(identifiers)}.")
+        parsed_options["_input_roles"] = input_roles
+        job.options_json = json.dumps(parsed_options, ensure_ascii=False)
         job.input_files_json = json.dumps(saved_names)
+        if workflow == "sdtm":
+            metadata_files = [
+                name for name in input_roles["source"]
+                if Path(name).suffix.lower() in {".json", ".xlsx"}
+            ]
+            initialize_state(
+                job_dir,
+                metadata_files=metadata_files,
+                blank_crf=input_roles["crf"][0] if input_roles["crf"] else next((name for name in input_roles["source"] if Path(name).suffix.lower() == ".pdf"), None),
+                raw_datasets=raw_inventory,
+                validation_report=input_roles["validation"][0] if input_roles["validation"] else None,
+                study_metadata={str(k): str(v) for k, v in parsed_options.get("study_metadata", {}).items()} if isinstance(parsed_options.get("study_metadata"), dict) else {},
+            )
         db.commit()
         db.refresh(job)
     except Exception:
@@ -870,6 +914,7 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
         warnings=warnings,
         error=job.error,
         artifacts=artifacts,
+        sdtm_workbench=read_state(settings.jobs_dir / job.id) if job.workflow == "sdtm" else None,
     )
 
 

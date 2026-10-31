@@ -33,8 +33,8 @@ class SDTMUseCase(ClinicalUseCase):
         title="SDTM mapping and code generation",
         description="Generate reviewed SDTM mappings, metadata, and code from EDC JSON/XLSX, with an optional blank CRF for aCRF output.",
         skill_name="clinical-sdtm-artifacts",
-        accepted_extensions=(".pdf", ".json", ".xlsx", ".docx", ".txt", ".md"),
-        required_inputs=("EDC JSON or XLSX", "Optional blank CRF PDF", "Optional protocol context"),
+        accepted_extensions=(".pdf", ".json", ".xlsx", ".csv", ".xpt", ".docx", ".txt", ".md"),
+        required_inputs=("EDC JSON or XLSX", "Optional blank CRF PDF", "Optional raw CSV/XPT datasets", "Optional validation report"),
         output_formats=("json", "xlsx", "xml", "pdf", "r", "sas", "zip"),
         mcp_dependencies=("cdisc-library",),
         stages=("Domain mapping", "Variable & value-level mapping", "Rule augmentation"),
@@ -367,6 +367,11 @@ class SDTMUseCase(ClinicalUseCase):
         edc: Path,
     ) -> tuple[str, list[Path]]:
         excluded_inputs = {edc, *([crf] if crf is not None else [])}
-        context_inputs = [path for path in context.inputs if path not in excluded_inputs]
+        context_inputs = [
+            path for path in context.inputs
+            if path not in excluded_inputs
+            and path.suffix.lower() not in {".csv", ".xpt"}
+            and not path.name.startswith("validation-")
+        ]
         source = f"USER-APPROVED EDC SOURCE SPECIFICATION\n{source_spec.model_dump_json(indent=2)}"
         return source, context_inputs

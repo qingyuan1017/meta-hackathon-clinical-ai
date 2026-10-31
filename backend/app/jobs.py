@@ -14,6 +14,7 @@ from .config import get_settings
 from .db import SessionLocal
 from .models import Artifact, Job
 from .schemas import DISCLAIMER
+from .sdtm_workbench import read_state, write_state
 from .workflows import WorkflowService
 
 
@@ -68,6 +69,11 @@ class JobRunner:
                     job.completed_at = None
                     job.updated_at = datetime.now(timezone.utc)
                     session.commit()
+                if workflow == "sdtm":
+                    state = read_state(job_dir)
+                    state.lifecycle.program_generation = "not_started"
+                    state.lifecycle.submission_readiness = "blocked"
+                    write_state(job_dir, state)
                 return
             result = await service.execute(
                 workflow,
@@ -89,6 +95,16 @@ class JobRunner:
                     record = artifact_record(path, job_dir)
                     job.artifacts.append(Artifact(**record))
                 session.commit()
+            if workflow == "sdtm":
+                state = read_state(job_dir)
+                state.lifecycle.program_generation = "completed"
+                state.lifecycle.execution = "not_run"
+                state.lifecycle.submission_readiness = "blocked"
+                if not state.inputs.raw_datasets:
+                    limitation = "Generated R and SAS programs were not tested against raw datasets."
+                    if limitation not in state.limitations:
+                        state.limitations.append(limitation)
+                write_state(job_dir, state)
         except Exception as exc:
             logger.exception("Job %s failed", job_id)
             safe_error = sanitize_error(exc)
@@ -113,6 +129,11 @@ class JobRunner:
                 job.updated_at = datetime.now(timezone.utc)
                 job.completed_at = job.updated_at
                 session.commit()
+            if workflow == "sdtm":
+                state = read_state(job_dir)
+                state.lifecycle.program_generation = "failed"
+                state.lifecycle.submission_readiness = "blocked"
+                write_state(job_dir, state)
 
 
 def sanitize_error(exc: Exception) -> str:

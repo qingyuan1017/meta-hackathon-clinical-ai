@@ -21,6 +21,8 @@ ALLOWED_EXTENSIONS = {
     ".md",
     ".json",
     ".xlsx",
+    ".csv",
+    ".xpt",
 }
 
 
@@ -48,3 +50,5 @@ def verify_signature(path: Path) -> None:
         raise HTTPException(status_code=415, detail=f"{path.name} is not a valid PDF file.")
     if suffix in {".docx", ".xlsx"} and not prefix.startswith(b"PK"):
         raise HTTPException(status_code=415, detail=f"{path.name} is not a valid Office document.")
+    if suffix == ".xpt" and b"SAS" not in path.read_bytes()[:160]:
+        raise HTTPException(status_code=415, detail=f"{path.name} is not a recognizable SAS transport file.")

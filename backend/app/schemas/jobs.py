@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from .artifacts import ArtifactRead
+from .sdtm_workbench import SDTMWorkbenchState
 
 
 class JobRead(BaseModel):
@@ -29,6 +30,7 @@ class JobRead(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     error: str | None = None
     artifacts: list[ArtifactRead] = Field(default_factory=list)
+    sdtm_workbench: SDTMWorkbenchState | None = None
 
 
 class JobList(BaseModel):

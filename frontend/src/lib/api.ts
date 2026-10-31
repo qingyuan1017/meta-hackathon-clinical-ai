@@ -35,10 +35,13 @@ export const api = {
   agentProgress: (id: string) => request<AgentProgress>(`/api/v1/jobs/${id}/agent`),
   sdtmDataset: (domain: string, version: string, standard: "sdtm" | "sdtmig" = "sdtmig") =>
     request<CDISCDataset>(`/api/v1/standards/sdtm/datasets/${encodeURIComponent(domain)}?version=${encodeURIComponent(version)}&standard=${standard}`),
-  createJob: (workflow: Workflow, options: Record<string, unknown>, files: File[]) => {
+  createJob: (workflow: Workflow, options: Record<string, unknown>, files: File[], sdtm?: { rawFiles?: File[]; crfFile?: File | null; validationReport?: File | null }) => {
     const data = new FormData();
     data.set("options", JSON.stringify(options));
     files.forEach((file) => data.append("files", file));
+    sdtm?.rawFiles?.forEach((file) => data.append("raw_files", file));
+    if (sdtm?.crfFile) data.set("crf_file", sdtm.crfFile);
+    if (sdtm?.validationReport) data.set("validation_report", sdtm.validationReport);
     return request<Job>(`/api/v1/jobs/${workflow}`, { method: "POST", body: data });
   },
   retryJob: (id: string) => request<Job>(`/api/v1/jobs/${id}/retry`, { method: "POST" }),
