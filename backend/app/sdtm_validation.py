@@ -91,6 +91,9 @@ class Pinnacle21CLIProvider(ValidationProvider):
             return ValidationRecord(validation_id=run_dir.name, provider=self.name, status="failed", created_at=_now(), message="The configured local validator did not produce a supported report; no successful validation is recorded.")
         record = import_pinnacle21_report(job_dir, report, preserve_original=False)
         record.provider = self.name
+        if not record.findings and record.diagnostics and not record.diagnostics.warnings:
+            record.status = "passed"
+            record.message = "The configured local CLI completed and produced a supported report with no normalized findings."
         return record
 
 

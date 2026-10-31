@@ -3,6 +3,9 @@ from __future__ import annotations
 import io
 import shutil
 
+import pandas as pd
+import pyreadstat
+import pytest
 from fastapi.testclient import TestClient
 from reportlab.pdfgen import canvas
 
@@ -30,6 +33,75 @@ def test_csv_inventory_is_deterministic_and_contains_no_rows(tmp_path) -> None:
     serialized = inventory.model_dump_json()
     assert "SYN-001" not in serialized
     assert len(inventory.sha256) == 64
+
+
+def test_xpt_inventory_profiles_structure_without_serializing_rows(tmp_path) -> None:
+    path = tmp_path / "ae.xpt"
+    pyreadstat.write_xport(
+        pd.DataFrame({"USUBJID": ["SYN-001"], "AESEQ": [1.0], "AETERM": ["Headache"]}),
+        path,
+        table_name="AE",
+        file_format_version=5,
+    )
+    inventory = inventory_raw_dataset(path, "ae.xpt")
+    assert inventory.logical_name == "AE"
+    assert inventory.row_count == 1
+    assert [(item.name, item.data_type) for item in inventory.columns] == [
+        ("USUBJID", "character"),
+        ("AESEQ", "numeric"),
+        ("AETERM", "character"),
+    ]
+    assert "SYN-001" not in inventory.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "with_raw,with_crf,with_report",
+    [
+        (False, False, False),
+        (False, True, False),
+        (True, False, False),
+        (True, True, False),
+        (False, False, True),
+    ],
+    ids=["metadata-only", "crf-only", "raw-only", "raw-and-crf", "validation-report"],
+)
+def test_sdtm_submission_optional_input_combinations(monkeypatch, with_raw: bool, with_crf: bool, with_report: bool) -> None:
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key, settings.meta_model = "test", "test-model"
+    monkeypatch.setattr("app.main.runner.enqueue", lambda _: None)
+    job_id = ""
+    files = [("files", ("edc.json", b'{"study": "SYN-101", "datasets": []}', "application/json"))]
+    if with_raw:
+        files.append(("raw_files", ("dm.csv", b"USUBJID,AGE\nSYN-001,42\n", "text/csv")))
+    if with_crf:
+        files.append(("crf_file", ("blank.pdf", _searchable_pdf(), "application/pdf")))
+    if with_report:
+        files.append(("validation_report", ("p21.csv", b"Rule ID,Severity,Message\nSD0001,Warning,Example\n", "text/csv")))
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/v1/jobs/sdtm",
+                data={"options": '{"deidentified_acknowledged": true, "languages": ["r"]}'},
+                files=files,
+            )
+        assert response.status_code == 202, response.text
+        job_id = response.json()["id"]
+        state = read_state(settings.jobs_dir / job_id)
+        assert bool(state.inputs.raw_datasets) is with_raw
+        assert bool(state.inputs.blank_crf) is with_crf
+        assert bool(state.inputs.validation_report) is with_report
+        assert state.lifecycle.execution == "not_run"
+        assert state.lifecycle.validation == "not_run"
+        assert state.lifecycle.submission_readiness == "blocked"
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        if job_id:
+            with SessionLocal() as session:
+                stored = session.get(Job, job_id)
+                if stored:
+                    session.delete(stored)
+                    session.commit()
+            shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
 
 
 def test_invalid_and_duplicate_logical_names_are_rejected(tmp_path) -> None:

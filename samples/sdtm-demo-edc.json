@@ -1,0 +1,34 @@
+{
+  "study": "SYN-DMAE-001",
+  "standards": {"sdtmig": "3.4", "define_xml": "2.1"},
+  "datasets": [
+    {
+      "name": "RAW_DM",
+      "label": "Synthetic demographics source",
+      "keys": ["USUBJID"],
+      "variables": [
+        {"name": "STUDYID", "label": "Study Identifier", "type": "text"},
+        {"name": "USUBJID", "label": "Unique Subject Identifier", "type": "text"},
+        {"name": "SUBJID", "label": "Subject Identifier", "type": "text"},
+        {"name": "RFICDTC", "label": "Informed Consent Date", "type": "date"},
+        {"name": "AGE", "label": "Age", "type": "integer"},
+        {"name": "SEX", "label": "Sex", "type": "coded"}
+      ]
+    },
+    {
+      "name": "RAW_AE",
+      "label": "Synthetic adverse event source",
+      "keys": ["USUBJID", "AESEQ"],
+      "variables": [
+        {"name": "STUDYID", "label": "Study Identifier", "type": "text"},
+        {"name": "USUBJID", "label": "Unique Subject Identifier", "type": "text"},
+        {"name": "AESEQ", "label": "Adverse Event Sequence", "type": "integer"},
+        {"name": "AETERM", "label": "Adverse Event Term", "type": "text"},
+        {"name": "AESTDTC", "label": "Adverse Event Start Date", "type": "date"},
+        {"name": "AEENDTC", "label": "Adverse Event End Date", "type": "date"},
+        {"name": "AESEV", "label": "Severity", "type": "coded"},
+        {"name": "AESER", "label": "Serious Event", "type": "coded"}
+      ]
+    }
+  ]
+}

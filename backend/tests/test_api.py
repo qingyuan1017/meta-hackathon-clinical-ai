@@ -155,6 +155,20 @@ def test_unknown_workflow_is_rejected() -> None:
         settings.meta_api_key, settings.meta_model = original_key, original_model
 
 
+def test_sdtm_demo_samples_are_downloadable_with_stable_logical_names() -> None:
+    with TestClient(app) as client:
+        metadata = client.get("/api/v1/samples/sdtm-demo-edc.json")
+        raw_dm = client.get("/api/v1/samples/sdtm-raw-dm.csv")
+        mismatch = client.get("/api/v1/samples/sdtm-raw-ae-mismatch.csv")
+        report = client.get("/api/v1/samples/pinnacle21-demo-report.csv")
+    assert metadata.status_code == raw_dm.status_code == mismatch.status_code == report.status_code == 200
+    assert json.loads(metadata.text)["study"] == "SYN-DMAE-001"
+    assert raw_dm.text.startswith("STUDYID,USUBJID")
+    assert "filename=\"RAW_AE.csv\"" in mismatch.headers["content-disposition"]
+    assert mismatch.text.startswith("STUDYID,USUBJID,AESEQ,AETERM_RAW")
+    assert "Rule ID,Severity" in report.text
+
+
 def test_use_case_registry_is_exposed() -> None:
     with TestClient(app) as client:
         response = client.get("/api/v1/use-cases")

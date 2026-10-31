@@ -321,6 +321,126 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/sdtm-executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Sdtm Executions */
+        get: operations["read_sdtm_executions_api_v1_jobs__job_id__sdtm_executions_get"];
+        put?: never;
+        /** Create Sdtm Execution */
+        post: operations["create_sdtm_execution_api_v1_jobs__job_id__sdtm_executions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/sdtm-executions/{attempt_id}/repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Review And Run Sdtm Repair */
+        post: operations["review_and_run_sdtm_repair_api_v1_jobs__job_id__sdtm_executions__attempt_id__repair_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/validations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Validations */
+        get: operations["read_validations_api_v1_jobs__job_id__validations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/validations/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Validation Report */
+        post: operations["import_validation_report_api_v1_jobs__job_id__validations_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/validations/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Run Validation */
+        post: operations["run_validation_api_v1_jobs__job_id__validations_run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/validation-findings/{finding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Validation Finding */
+        put: operations["update_validation_finding_api_v1_jobs__job_id__validation_findings__finding_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/csdrg": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Csdrg */
+        put: operations["update_csdrg_api_v1_jobs__job_id__csdrg_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/tlf-inventory": {
         parameters: {
             query?: never;
@@ -536,6 +656,19 @@ export interface components {
             /** Max Turns */
             max_turns: number;
         };
+        /** ArtifactEvidence */
+        ArtifactEvidence: {
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Kind */
+            kind: string;
+            /** Attempt Id */
+            attempt_id?: string | null;
+        };
         /** ArtifactRead */
         ArtifactRead: {
             /** Id */
@@ -563,6 +696,28 @@ export interface components {
              * @default []
              */
             files: string[];
+            /**
+             * Raw Files
+             * @default []
+             */
+            raw_files: string[];
+            /** Crf File */
+            crf_file?: string | null;
+            /** Validation Report */
+            validation_report?: string | null;
+        };
+        /** Body_create_sdtm_execution_api_v1_jobs__job_id__sdtm_executions_post */
+        Body_create_sdtm_execution_api_v1_jobs__job_id__sdtm_executions_post: {
+            /**
+             * Raw Files
+             * @default []
+             */
+            raw_files: string[];
+        };
+        /** Body_import_validation_report_api_v1_jobs__job_id__validations_import_post */
+        Body_import_validation_report_api_v1_jobs__job_id__validations_import_post: {
+            /** Report */
+            report?: string | null;
         };
         /** Body_transcribe_review_guidance_api_v1_jobs__job_id__transcription_post */
         Body_transcribe_review_guidance_api_v1_jobs__job_id__transcription_post: {
@@ -584,6 +739,34 @@ export interface components {
             payload: {
                 [key: string]: unknown;
             } | unknown[];
+        };
+        /** CSDRGDocument */
+        CSDRGDocument: {
+            /** Study Name */
+            study_name: string;
+            /**
+             * Title
+             * @default Study Data Reviewer's Guide (Draft)
+             */
+            title: string;
+            /** Sections */
+            sections: components["schemas"]["CSDRGSection"][];
+            /** Limitations */
+            limitations?: string[];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+        };
+        /** CSDRGSection */
+        CSDRGSection: {
+            /** Heading */
+            heading: string;
+            /** Body */
+            body: string;
+            /** Todos */
+            todos?: string[];
         };
         /** EDCSourceCodeList */
         EDCSourceCodeList: {
@@ -670,6 +853,88 @@ export interface components {
             question?: string | null;
             provenance: components["schemas"]["EDCSourceProvenance"];
         };
+        /** ExecutionAttempt */
+        ExecutionAttempt: {
+            /** Attempt Id */
+            attempt_id: string;
+            /** Parent Attempt Id */
+            parent_attempt_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "review_required" | "passed" | "failed" | "timed_out" | "unavailable";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Program Hash */
+            program_hash: string;
+            /** Input Manifest */
+            input_manifest?: components["schemas"]["RawDatasetInventory"][];
+            /** Runtime */
+            runtime?: {
+                [key: string]: string;
+            };
+            /** Exit Code */
+            exit_code?: number | null;
+            /**
+             * Stdout
+             * @default
+             */
+            stdout: string;
+            /**
+             * Stderr
+             * @default
+             */
+            stderr: string;
+            /** Outputs */
+            outputs?: components["schemas"]["ExecutionOutput"][];
+            /** Checks */
+            checks?: components["schemas"]["ExecutionCheck"][];
+            /** Failure Classification */
+            failure_classification?: string | null;
+            /** Program Artifact */
+            program_artifact: string;
+            repair_proposal?: components["schemas"]["RepairProposal"] | null;
+        };
+        /** ExecutionAttemptList */
+        ExecutionAttemptList: {
+            /** Items */
+            items?: components["schemas"]["ExecutionAttempt"][];
+        };
+        /** ExecutionCheck */
+        ExecutionCheck: {
+            /** Check Id */
+            check_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "passed" | "failed" | "warning" | "not_run";
+            /** Message */
+            message: string;
+            /** Domain */
+            domain?: string | null;
+        };
+        /** ExecutionOutput */
+        ExecutionOutput: {
+            /** Name */
+            name: string;
+            /** Sha256 */
+            sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Row Count */
+            row_count?: number | null;
+            /** Columns */
+            columns?: string[];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -744,6 +1009,7 @@ export interface components {
             error?: string | null;
             /** Artifacts */
             artifacts?: components["schemas"]["ArtifactRead"][];
+            sdtm_workbench?: components["schemas"]["SDTMWorkbenchState"] | null;
         };
         /** JobResultUpdate */
         JobResultUpdate: {
@@ -751,6 +1017,70 @@ export interface components {
             result: {
                 [key: string]: unknown;
             };
+        };
+        /** RawDatasetInventory */
+        RawDatasetInventory: {
+            /** Stored Name */
+            stored_name: string;
+            /** Original Name */
+            original_name: string;
+            /** Logical Name */
+            logical_name: string;
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "csv" | "xpt";
+            /** Size Bytes */
+            size_bytes: number;
+            /** Sha256 */
+            sha256: string;
+            /** Row Count */
+            row_count?: number | null;
+            /** Columns */
+            columns?: components["schemas"]["SourceColumnProfile"][];
+            /** Diagnostics */
+            diagnostics?: string[];
+        };
+        /** RepairApproval */
+        RepairApproval: {
+            /** Proposal Id */
+            proposal_id: string;
+            /** Approved */
+            approved: boolean;
+            /** Reviewer */
+            reviewer: string;
+        };
+        /** RepairChange */
+        RepairChange: {
+            /** Domain */
+            domain: string;
+            /** Target Variable */
+            target_variable: string;
+            /** From Source Field */
+            from_source_field: string;
+            /** To Source Field */
+            to_source_field: string;
+        };
+        /** RepairProposal */
+        RepairProposal: {
+            /** Proposal Id */
+            proposal_id: string;
+            /**
+             * Status
+             * @default proposed
+             * @enum {string}
+             */
+            status: "proposed" | "approved" | "rejected";
+            /** Rationale */
+            rationale: string;
+            /** Diff */
+            diff: string;
+            change: components["schemas"]["RepairChange"];
+            /** Reviewer */
+            reviewer?: string | null;
+            /** Decided At */
+            decided_at?: string | null;
         };
         /** ReviewFeedbackUpdate */
         ReviewFeedbackUpdate: {
@@ -770,6 +1100,16 @@ export interface components {
             structure: string;
             /** Key Variables */
             key_variables?: string[];
+            /**
+             * Dataset Class
+             * @default Special Purpose
+             */
+            dataset_class: string;
+            /**
+             * Purpose
+             * @default Tabulation
+             */
+            purpose: string;
             /** Variables */
             variables: components["schemas"]["SDTMVariable"][];
         };
@@ -819,6 +1159,48 @@ export interface components {
         /** SDTMDomainMappingUpdate */
         SDTMDomainMappingUpdate: {
             domain_mapping: components["schemas"]["SDTMDomainMappingPlan"];
+        };
+        /** SDTMInputManifest */
+        SDTMInputManifest: {
+            /** Metadata Files */
+            metadata_files?: string[];
+            /** Blank Crf */
+            blank_crf?: string | null;
+            /** Raw Datasets */
+            raw_datasets?: components["schemas"]["RawDatasetInventory"][];
+            /** Validation Report */
+            validation_report?: string | null;
+            /** Study Metadata */
+            study_metadata?: {
+                [key: string]: string;
+            };
+        };
+        /** SDTMLifecycle */
+        SDTMLifecycle: {
+            /**
+             * Program Generation
+             * @default not_started
+             * @enum {string}
+             */
+            program_generation: "not_started" | "running" | "review_required" | "completed" | "failed";
+            /**
+             * Execution
+             * @default not_run
+             * @enum {string}
+             */
+            execution: "not_applicable" | "not_run" | "queued" | "running" | "review_required" | "passed" | "failed";
+            /**
+             * Validation
+             * @default not_run
+             * @enum {string}
+             */
+            validation: "not_run" | "imported" | "running" | "review_required" | "completed_with_findings" | "passed" | "failed" | "unavailable";
+            /**
+             * Submission Readiness
+             * @default not_assessed
+             * @enum {string}
+             */
+            submission_readiness: "not_assessed" | "blocked" | "review_required" | "ready";
         };
         /** SDTMValueLevelMetadata */
         SDTMValueLevelMetadata: {
@@ -874,6 +1256,16 @@ export interface components {
             value_level_metadata?: components["schemas"]["SDTMValueLevelMetadata"][];
             /** Crf Source Label */
             crf_source_label?: string | null;
+            /** Length */
+            length?: number | null;
+            /** Format */
+            format?: string | null;
+            /** Role */
+            role?: string | null;
+            /** Core */
+            core?: ("Req" | "Exp" | "Perm") | null;
+            /** Comment */
+            comment?: string | null;
         };
         /** SDTMVariableMappingPlan */
         SDTMVariableMappingPlan: {
@@ -899,6 +1291,24 @@ export interface components {
         /** SDTMVariableMappingUpdate */
         SDTMVariableMappingUpdate: {
             variable_mapping: components["schemas"]["SDTMVariableMappingPlan"];
+        };
+        /** SDTMWorkbenchState */
+        SDTMWorkbenchState: {
+            lifecycle?: components["schemas"]["SDTMLifecycle"];
+            inputs?: components["schemas"]["SDTMInputManifest"];
+            /** Artifacts */
+            artifacts?: components["schemas"]["ArtifactEvidence"][];
+            /** Updated At */
+            updated_at?: string | null;
+            /** Limitations */
+            limitations?: string[];
+        };
+        /** SourceColumnProfile */
+        SourceColumnProfile: {
+            /** Name */
+            name: string;
+            /** Data Type */
+            data_type: string;
         };
         /** TLFAnalysisPlan */
         TLFAnalysisPlan: {
@@ -1245,6 +1655,129 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** ValidationFinding */
+        ValidationFinding: {
+            /** Finding Id */
+            finding_id: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Provider Version
+             * @default not reported
+             */
+            provider_version: string;
+            /** Standard Version */
+            standard_version?: string | null;
+            /** Controlled Terminology Version */
+            controlled_terminology_version?: string | null;
+            /** Rule Id */
+            rule_id: string;
+            /** Severity */
+            severity: string;
+            /** Dataset */
+            dataset?: string | null;
+            /** Variable */
+            variable?: string | null;
+            /** Record Keys */
+            record_keys?: string | null;
+            /** Message */
+            message: string;
+            /**
+             * Finding Status
+             * @default open
+             * @enum {string}
+             */
+            finding_status: "open" | "accepted" | "corrected" | "not_applicable" | "explained";
+            /** Disposition */
+            disposition?: string | null;
+            /** Explanation */
+            explanation?: string | null;
+            /** Reviewer */
+            reviewer?: string | null;
+            /** Approved At */
+            approved_at?: string | null;
+        };
+        /** ValidationFindingUpdate */
+        ValidationFindingUpdate: {
+            /**
+             * Finding Status
+             * @enum {string}
+             */
+            finding_status: "open" | "accepted" | "corrected" | "not_applicable" | "explained";
+            /** Disposition */
+            disposition?: string | null;
+            /** Explanation */
+            explanation?: string | null;
+            /**
+             * Approved
+             * @default false
+             */
+            approved: boolean;
+            /** Reviewer */
+            reviewer?: string | null;
+        };
+        /** ValidationImportDiagnostics */
+        ValidationImportDiagnostics: {
+            /** Source Name */
+            source_name: string;
+            /** Format */
+            format: string;
+            /**
+             * Rows Read
+             * @default 0
+             */
+            rows_read: number;
+            /**
+             * Findings Imported
+             * @default 0
+             */
+            findings_imported: number;
+            /** Recognized Columns */
+            recognized_columns?: {
+                [key: string]: string;
+            };
+            /** Unknown Columns */
+            unknown_columns?: string[];
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** ValidationRecord */
+        ValidationRecord: {
+            /** Validation Id */
+            validation_id: string;
+            /** Provider */
+            provider: string;
+            /**
+             * Provider Version
+             * @default not reported
+             */
+            provider_version: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "imported" | "running" | "review_required" | "completed_with_findings" | "passed" | "failed" | "unavailable";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Source Artifact */
+            source_artifact?: string | null;
+            diagnostics?: components["schemas"]["ValidationImportDiagnostics"] | null;
+            /** Findings */
+            findings?: components["schemas"]["ValidationFinding"][];
+            /** Message */
+            message?: string | null;
+        };
+        /** ValidationRunRequest */
+        ValidationRunRequest: {
+            /**
+             * Provider
+             * @enum {string}
+             */
+            provider: "internal" | "pinnacle21-cli";
         };
         /** VoiceTranscriptionRead */
         VoiceTranscriptionRead: {
@@ -1806,6 +2339,280 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_sdtm_executions_api_v1_jobs__job_id__sdtm_executions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionAttemptList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_sdtm_execution_api_v1_jobs__job_id__sdtm_executions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_sdtm_execution_api_v1_jobs__job_id__sdtm_executions_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionAttempt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    review_and_run_sdtm_repair_api_v1_jobs__job_id__sdtm_executions__attempt_id__repair_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RepairApproval"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionAttempt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_validations_api_v1_jobs__job_id__validations_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationRecord"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    import_validation_report_api_v1_jobs__job_id__validations_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_import_validation_report_api_v1_jobs__job_id__validations_import_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_validation_api_v1_jobs__job_id__validations_run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValidationRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_validation_finding_api_v1_jobs__job_id__validation_findings__finding_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                finding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ValidationFindingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationFinding"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_csdrg_api_v1_jobs__job_id__csdrg_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CSDRGDocument"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CSDRGDocument"];
                 };
             };
             /** @description Validation Error */

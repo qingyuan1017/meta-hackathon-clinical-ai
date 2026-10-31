@@ -15,6 +15,7 @@ from .db import SessionLocal
 from .models import Artifact, Job
 from .schemas import DISCLAIMER
 from .sdtm_workbench import read_state, write_state
+from .sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
 from .workflows import WorkflowService
 
 
@@ -81,6 +82,16 @@ class JobRunner:
                 options=options,
                 output_dir=output_dir,
             )
+            if workflow == "sdtm":
+                state = read_state(job_dir)
+                state.lifecycle.program_generation = "completed"
+                state.lifecycle.execution = "not_run"
+                state.lifecycle.submission_readiness = "blocked"
+                if not state.inputs.raw_datasets:
+                    limitation = "Generated R and SAS programs were not tested against raw datasets."
+                    if limitation not in state.limitations:
+                        state.limitations.append(limitation)
+                write_state(job_dir, state)
             with SessionLocal() as session:
                 job = session.get(Job, job_id)
                 if job is None:
@@ -94,17 +105,22 @@ class JobRunner:
                 for path in result.paths:
                     record = artifact_record(path, job_dir)
                     job.artifacts.append(Artifact(**record))
+                if workflow == "sdtm":
+                    manifest_path = refresh_evidence_manifest(job_dir)
+                    manifest_record = artifact_record(manifest_path, job_dir)
+                    manifest_artifact = next((item for item in job.artifacts if item.relative_path == manifest_record["relative_path"]), None)
+                    if manifest_artifact is None:
+                        job.artifacts.append(Artifact(**manifest_record))
+                    else:
+                        manifest_artifact.size_bytes = manifest_record["size_bytes"]
+                        manifest_artifact.sha256 = manifest_record["sha256"]
+                    bundle_path = refresh_evidence_bundle(job_dir)
+                    bundle_artifact = next((item for item in job.artifacts if item.relative_path == bundle_path.relative_to(job_dir).as_posix()), None)
+                    if bundle_artifact is not None:
+                        record = artifact_record(bundle_path, job_dir)
+                        bundle_artifact.size_bytes = record["size_bytes"]
+                        bundle_artifact.sha256 = record["sha256"]
                 session.commit()
-            if workflow == "sdtm":
-                state = read_state(job_dir)
-                state.lifecycle.program_generation = "completed"
-                state.lifecycle.execution = "not_run"
-                state.lifecycle.submission_readiness = "blocked"
-                if not state.inputs.raw_datasets:
-                    limitation = "Generated R and SAS programs were not tested against raw datasets."
-                    if limitation not in state.limitations:
-                        state.limitations.append(limitation)
-                write_state(job_dir, state)
         except Exception as exc:
             logger.exception("Job %s failed", job_id)
             safe_error = sanitize_error(exc)

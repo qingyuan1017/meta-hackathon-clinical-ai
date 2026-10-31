@@ -170,7 +170,7 @@ def test_acrf_coverage_and_define_review_diagnostics(tmp_path) -> None:
     plan = SDTMPlan(
         study_name="SYN-ACRF",
         domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic")],
-        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", source_dataset="RAW_DM", source_field="AGE", crf_source_label="Age"), SDTMVariable(name="SEX", label="Sex", source_dataset="RAW_DM", source_field="SEX", crf_source_label="Sex")])],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", source_dataset="RAW_DM", source_field="AGE", crf_source_label="Age", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGEU = 'YEARS'", label="Age in years", data_type="Num", mapping_expression="Direct")]), SDTMVariable(name="SEX", label="Sex", source_dataset="RAW_DM", source_field="SEX", crf_source_label="Sex")])],
         domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Read", logic="Direct", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
         rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", description="Direct", logic="Direct", r_expression='.data[["AGE"]]', sas_expression="AGE"), SDTMRuleAugmentation(rule_id="DM-SEX", target_domain="DM", target_variable="SEX", description="Direct", logic="Direct", r_expression='.data[["SEX"]]', sas_expression="SEX")],
     )
@@ -183,6 +183,10 @@ def test_acrf_coverage_and_define_review_diagnostics(tmp_path) -> None:
     assert diagnostics["internal_references_valid"] is True
     assert diagnostics["xsd_validation"] == "not_run"
     tree = etree.parse(str(tmp_path / "define.xml"))
+    assert tree.xpath("//*[local-name()='ValueListDef'][@OID='VL.DM.AGE']")
+    assert tree.xpath("//*[local-name()='WhereClauseDef'][@OID='WC.DM.AGE.1']")
+    assert tree.xpath("//*[local-name()='leaf'][@ID='LF.ACRF'][@*[local-name()='href']='annotated-crf.pdf']")
+    assert tree.xpath("//*[local-name()='DocumentRef'][@leafID='LF.ACRF']/*[local-name()='PDFPageRef'][@PageRefs='1']")
     item_ref = tree.xpath("//*[local-name()='ItemRef']")[0]
     item_ref.set("ItemOID", "IT.MISSING")
     broken = tmp_path / "define-broken.xml"

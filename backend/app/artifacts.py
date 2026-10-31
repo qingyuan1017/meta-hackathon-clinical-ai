@@ -239,11 +239,18 @@ def render_edc(result: EDCDesign, output_dir: Path) -> list[Path]:
 
 def render_sdtm(result: SDTMPlan, crf_path: Path | None, output_dir: Path, languages: list[str]) -> list[Path]:
     paths: list[Path] = []
+    acrf_annotations: list[dict] = []
     json_path = output_dir / "sdtm-mapping.json"
     json_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     paths.append(json_path)
     paths.append(_render_sdtm_xlsx(result, output_dir / "sdtm-mapping.xlsx"))
-    define_path = _render_define_xml(result, output_dir / "define.xml")
+    if crf_path is not None:
+        annotated, coverage = _annotate_crf(result, crf_path, output_dir / "annotated-crf.pdf", output_dir / "acrf-annotations.json")
+        if annotated is not None:
+            paths.append(annotated)
+            acrf_annotations = json.loads(coverage.read_text(encoding="utf-8")).get("annotations", [])
+        paths.append(coverage)
+    define_path = _render_define_xml(result, output_dir / "define.xml", acrf_annotations)
     paths.append(define_path)
     stylesheet_path = _render_define_stylesheet(output_dir / "define.xsl")
     paths.append(stylesheet_path)
@@ -251,11 +258,6 @@ def render_sdtm(result: SDTMPlan, crf_path: Path | None, output_dir: Path, langu
     diagnostics_path = output_dir / "define-diagnostics.json"
     diagnostics_path.write_text(json.dumps(diagnose_define(define_path), indent=2), encoding="utf-8")
     paths.append(diagnostics_path)
-    if crf_path is not None:
-        annotated, coverage = _annotate_crf(result, crf_path, output_dir / "annotated-crf.pdf", output_dir / "acrf-annotations.json")
-        if annotated is not None:
-            paths.append(annotated)
-        paths.append(coverage)
     if "r" in languages:
         paths.append(_render_r_sdtm(result, output_dir / "build-sdtm.R"))
     if "sas" in languages:
@@ -409,18 +411,32 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
     return path
 
 
-def _render_define_xml(result: SDTMPlan, path: Path) -> Path:
+def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict] | None = None) -> Path:
     odm_ns = "http://www.cdisc.org/ns/odm/v1.3"
     def_ns = "http://www.cdisc.org/ns/def/v2.1"
     xlink_ns = "http://www.w3.org/1999/xlink"
     root = etree.Element(f"{{{odm_ns}}}ODM", nsmap={None: odm_ns, "def": def_ns, "xlink": xlink_ns}, FileOID="WORKBENCH.DEFINE", ODMVersion="1.3.2", FileType="Snapshot")
     root.addprevious(etree.Comment(DISCLAIMER))
     study = etree.SubElement(root, f"{{{odm_ns}}}Study", OID="STUDY.1")
-    etree.SubElement(study, f"{{{odm_ns}}}GlobalVariables")
+    global_variables = etree.SubElement(study, f"{{{odm_ns}}}GlobalVariables")
+    etree.SubElement(global_variables, f"{{{odm_ns}}}StudyName").text = result.study_name
+    etree.SubElement(global_variables, f"{{{odm_ns}}}StudyDescription").text = f"Draft SDTM metadata for {result.study_name}"
+    etree.SubElement(global_variables, f"{{{odm_ns}}}ProtocolName").text = result.study_name
     metadata = etree.SubElement(study, f"{{{odm_ns}}}MetaDataVersion", OID="MDV.1", Name=result.study_name, Description=DISCLAIMER)
     metadata.set(f"{{{def_ns}}}DefineVersion", result.define_standard.replace("Define-XML ", ""))
     metadata.set(f"{{{def_ns}}}StandardName", "SDTM-IG")
     metadata.set(f"{{{def_ns}}}StandardVersion", result.standard.replace("SDTMIG ", ""))
+    annotations = {
+        (str(item.get("domain", "")).upper(), str(item.get("variable", "")).upper()): item
+        for item in (acrf_annotations or [])
+    }
+    if acrf_annotations:
+        acrf_leaf = etree.SubElement(metadata, f"{{{def_ns}}}leaf", ID="LF.ACRF")
+        acrf_leaf.set(f"{{{xlink_ns}}}href", "annotated-crf.pdf")
+        etree.SubElement(acrf_leaf, f"{{{def_ns}}}title").text = "Annotated CRF"
+    csdrg_leaf = etree.SubElement(metadata, f"{{{def_ns}}}leaf", ID="LF.CSDRG")
+    csdrg_leaf.set(f"{{{xlink_ns}}}href", "csdrg.pdf")
+    etree.SubElement(csdrg_leaf, f"{{{def_ns}}}title").text = "Clinical Study Data Reviewer's Guide"
     methods = {(rule.target_domain.upper(), rule.target_variable.upper()): rule for rule in result.rule_augmentations}
     for dataset in result.datasets:
         group = etree.SubElement(metadata, f"{{{odm_ns}}}ItemGroupDef", OID=f"IG.{dataset.domain}", Name=dataset.domain, Repeating="Yes", IsReferenceData="No", Purpose=dataset.purpose)
@@ -430,6 +446,8 @@ def _render_define_xml(result: SDTMPlan, path: Path) -> Path:
         etree.SubElement(group, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, dataset.description))
         for order, variable in enumerate(dataset.variables, 1):
             reference = etree.SubElement(group, f"{{{odm_ns}}}ItemRef", ItemOID=f"IT.{dataset.domain}.{variable.name}", OrderNumber=str(order), Mandatory="Yes" if variable.core == "Req" else "No")
+            if variable.name in dataset.key_variables:
+                reference.set(f"{{{def_ns}}}KeySequence", str(dataset.key_variables.index(variable.name) + 1))
             if variable.role:
                 reference.set(f"{{{def_ns}}}Role", variable.role)
             item = etree.SubElement(metadata, f"{{{odm_ns}}}ItemDef", OID=f"IT.{dataset.domain}.{variable.name}", Name=variable.name, DataType="text" if variable.data_type == "Char" else "float", Length=str(variable.length or (200 if variable.data_type == "Char" else 8)))
@@ -437,11 +455,22 @@ def _render_define_xml(result: SDTMPlan, path: Path) -> Path:
                 item.set(f"{{{def_ns}}}Core", variable.core)
             if variable.format:
                 item.set("DisplayFormat", variable.format)
+            if variable.value_level_metadata:
+                item.set(f"{{{def_ns}}}ValueListOID", f"VL.{dataset.domain}.{variable.name}")
             description = etree.SubElement(item, f"{{{odm_ns}}}Description")
             description.append(_translated_text(odm_ns, variable.label))
             origin = etree.SubElement(item, f"{{{def_ns}}}Origin", Type=variable.origin)
             origin_description = etree.SubElement(origin, f"{{{odm_ns}}}Description")
             origin_description.append(_translated_text(odm_ns, variable.source_field))
+            annotation = annotations.get((dataset.domain.upper(), variable.name.upper()))
+            if annotation and annotation.get("page"):
+                document_reference = etree.SubElement(origin, f"{{{def_ns}}}DocumentRef", leafID="LF.ACRF")
+                etree.SubElement(
+                    document_reference,
+                    f"{{{def_ns}}}PDFPageRef",
+                    PageRefs=str(annotation["page"]),
+                    Type="PhysicalRef",
+                )
             rule = methods.get((dataset.domain.upper(), variable.name.upper()))
             if rule:
                 item.set(f"{{{def_ns}}}MethodOID", f"MT.{dataset.domain}.{variable.name}")
@@ -464,6 +493,38 @@ def _render_define_xml(result: SDTMPlan, path: Path) -> Path:
                 for term in variable.controlled_terms:
                     coded = etree.SubElement(codelist, f"{{{odm_ns}}}CodeListItem", CodedValue=term)
                     etree.SubElement(coded, f"{{{odm_ns}}}Decode").append(_translated_text(odm_ns, term))
+            if variable.value_level_metadata:
+                value_list = etree.SubElement(metadata, f"{{{def_ns}}}ValueListDef", OID=f"VL.{dataset.domain}.{variable.name}")
+                for index, value_metadata in enumerate(variable.value_level_metadata, 1):
+                    item_oid = f"IT.{dataset.domain}.{variable.name}.VL{index}"
+                    where_oid = f"WC.{dataset.domain}.{variable.name}.{index}"
+                    etree.SubElement(
+                        value_list,
+                        f"{{{odm_ns}}}ItemRef",
+                        ItemOID=item_oid,
+                        OrderNumber=str(index),
+                        Mandatory="No",
+                        **{f"{{{def_ns}}}WhereClauseOID": where_oid},
+                    )
+                    value_item = etree.SubElement(
+                        metadata,
+                        f"{{{odm_ns}}}ItemDef",
+                        OID=item_oid,
+                        Name=variable.name,
+                        DataType="text" if value_metadata.data_type == "Char" else "float",
+                    )
+                    etree.SubElement(value_item, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, value_metadata.label))
+                    value_origin = etree.SubElement(value_item, f"{{{def_ns}}}Origin", Type=value_metadata.origin)
+                    etree.SubElement(value_origin, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, value_metadata.mapping_expression))
+                    if value_metadata.controlled_terms:
+                        value_codelist_oid = f"CL.{dataset.domain}.{variable.name}.VL{index}"
+                        etree.SubElement(value_item, f"{{{odm_ns}}}CodeListRef", CodeListOID=value_codelist_oid)
+                        value_codelist = etree.SubElement(metadata, f"{{{odm_ns}}}CodeList", OID=value_codelist_oid, Name=f"{dataset.domain}.{variable.name} value-level {index}", DataType="text")
+                        for term in value_metadata.controlled_terms:
+                            coded = etree.SubElement(value_codelist, f"{{{odm_ns}}}CodeListItem", CodedValue=term)
+                            etree.SubElement(coded, f"{{{odm_ns}}}Decode").append(_translated_text(odm_ns, term))
+                    where = etree.SubElement(metadata, f"{{{def_ns}}}WhereClauseDef", OID=where_oid)
+                    etree.SubElement(where, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, value_metadata.where_clause))
     tree = etree.ElementTree(root)
     tree.write(str(path), encoding="UTF-8", xml_declaration=True, pretty_print=True)
     etree.parse(str(path))
@@ -492,8 +553,8 @@ def diagnose_define(path: Path) -> dict:
         diagnostics["parse_error"] = str(exc)
         return diagnostics
     diagnostics["well_formed"] = True
-    identifiers = {value for element in tree.iter() for key, value in element.attrib.items() if key.endswith("OID") and key.split("}")[-1] == "OID"}
-    reference_names = {"ItemOID", "MethodOID", "CodeListOID", "WhereClauseOID", "ItemGroupOID", "ValueListOID"}
+    identifiers = {value for element in tree.iter() for key, value in element.attrib.items() if key.split("}")[-1] in {"OID", "ID"}}
+    reference_names = {"ItemOID", "MethodOID", "CodeListOID", "WhereClauseOID", "ItemGroupOID", "ValueListOID", "leafID"}
     references = [value for element in tree.iter() for key, value in element.attrib.items() if key.split("}")[-1] in reference_names]
     missing = sorted(set(references) - identifiers)
     diagnostics["missing_references"] = missing

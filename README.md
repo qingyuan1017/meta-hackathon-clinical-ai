@@ -9,7 +9,7 @@ A local, single-user hackathon application that uses Meta's OpenAI-compatible AP
 - Protocol extraction to structured JSON, Markdown, and CDISC USDM 4.0 JSON accepted only after the complete CORE conformance gate passes
 - Ten clinical document templates with DOCX and PDF output
 - EDC build specifications and edit checks in JSON and XLSX
-- SDTM mapping, R/SAS programs, annotated CRF, and draft Define-XML 2.1
+- SDTM mapping, deterministic R/SAS programs, optional isolated R execution/XPT output, annotated CRF, Define-XML review, validation triage, and draft cSDRG
 - TLF shells with DOCX and R/SAS program scaffolds
 
 ## Use-case architecture
@@ -45,7 +45,63 @@ The API image fetches the official CORE v0.17.1 source at pinned release commit 
 
 The SDTM use case has three sequential human review gates. EDC JSON/XLSX is required; a blank CRF PDF is optional for code-only generation and is needed only when an annotated CRF should be produced. A source-normalization agent converts deterministically extracted JSON/XLSX content into a typed `EDCSourceSpecification` with dataset, variable, key, codelist, form/question, and file/sheet/row provenance metadata, then pauses for approval. The domain specialist maps every approved raw or existing-SDTM source to target domains and pauses again. The variable specialist adds traceability, value-level metadata, and aCRF labels when a CRF exists, then pauses for a third approval. Only after all three reviewed plans are accepted does rule augmentation contribute domain preparation plus R/SAS expressions. The registered SDTM lead reconciles the approved mappings and rule draft under the shared mapping policy and submits the complete plan used for deterministic rendering.
 
-Completed SDTM jobs open a five-tab review workspace instead of a raw JSON-only form: Domain mapping, Variable & VLM, Rule augmentation, aCRF review, and Define-XML. Reviewers can drag raw or existing-SDTM datasets onto target domains, import versioned domain metadata through the configured CDISC Library MCP service, modify standard variables or add sponsor SUPP/VLM qualifiers in a matrix, review R/SAS rule expressions, and inspect the derived XML before or after schema-validated artifact rebuilding. The aCRF tab displays the annotated PDF when a blank CRF was supplied and otherwise explains that the code-only job intentionally omitted it.
+Completed SDTM jobs open a dedicated review workspace instead of a raw JSON-only form. Reviewers can drag raw or existing-SDTM datasets onto target domains, import versioned domain metadata through the configured CDISC Library MCP service, modify standard variables or add sponsor SUPP/VLM qualifiers in a matrix, review R/SAS rule expressions, and inspect derived evidence before or after schema-validated artifact rebuilding. The aCRF tab displays the annotated PDF when a searchable blank CRF was supplied and otherwise explains the intentional not-applicable or OCR-required state.
+
+The completed SDTM workspace now has eight evidence-oriented sections: Domain mapping, Variable & VLM, Rule/program review, Execution, aCRF, Define-XML, Validation, and cSDRG. These sections deliberately keep program generation, execution, validation, and submission-readiness status independent. A skipped or unavailable phase is never displayed as passed.
+
+### Executable SDTM workbench
+
+EDC JSON/XLSX metadata remains required. Blank CRF PDF, raw CSV/XPT datasets, and a Pinnacle 21 CSV/XLSX report are independently optional:
+
+| Input/evidence | Generated | Executed or checked | Evidence meaning |
+| --- | --- | --- | --- |
+| Metadata only | Mapping XLSX/JSON, R, export-only SAS, Define XML/XSL/HTML/diagnostics, and `csdrg.pdf` | No program execution; validation remains not run | Draft artifacts only; readiness is blocked |
+| Searchable blank CRF | `annotated-crf.pdf` plus matched/ambiguous/unmatched coverage JSON | Text matching and visible annotations | Review aid, not OCR or standards validation |
+| Raw CSV/XPT | Same artifacts plus isolated R attempt | R runs in the dedicated runner; returned XPTs are reopened and structurally checked | Execution evidence, not CDISC conformance |
+| Pinnacle 21 report | Original report plus normalized findings | Imported only | Provider/version provenance is retained; import is not a pass |
+| Configured local P21 CLI | Provider report and normalized findings | Runs only with administrator-supplied Java and CLI paths | External validation evidence from the configured local software |
+| Workbench internal checks | Normalized internal findings | Expected domains/variables, readable XPTs, identifiers, names | Explicitly not Pinnacle 21 or standards validation |
+
+Generated R is deterministic from the approved typed mapping. Model-authored free-form programs are not executed. The renderer accepts only single side-effect-free mapping expressions and generates all file reads and XPT writes itself. Shell/subprocess calls, package installation, network APIs, path traversal, and external reads are rejected before execution and again by the runner.
+
+The `sdtm-runner` service is a separate non-root container with an internal-only Docker network, read-only root filesystem, dropped Linux capabilities, no-new-privileges, a temporary working directory, and CPU/memory/process/file/wall-clock limits. It receives read-only copies of job inputs and writes to a separate output directory. The API container never invokes `Rscript`. The runner image contains a fixed open-source R environment (`dplyr`, `readr`, and `haven`) and does not install packages during a job.
+
+Each immutable execution attempt records input and program hashes, parent attempt, timestamps, runner/package versions, exit status, sanitized logs, output hashes and summaries, and deterministic checks. Failed missing-column attempts may produce a typed source-field repair proposal. The reviewer must approve its diff and rationale before deterministic regeneration and rerun; no more than three approved repair attempts are allowed.
+
+aCRF review highlights the source label and adds a callout containing domain, variable, origin, and mapping information. Duplicate labels are `ambiguous`, absent labels are `unmatched`, and both appear in the PDF appendix and navigation list. A PDF without searchable text produces an OCR-required diagnostic and no pretend annotated PDF; OCR is not included.
+
+Define review exposes a safe local HTML rendering, the exact downloadable XML, and diagnostics for XML well-formedness/internal references. The repository does not bundle CDISC XSD or standards content, so full XSD and standards validation remain explicitly `not_run` unless supplied by a separate qualified process.
+
+Pinnacle 21 report import is the dependable integration path. The optional CLI provider checks server-side configuration and returns `unavailable` when Java or Pinnacle 21 is absent. The repository does not download, bundle, reverse engineer, or redistribute either dependency. Finding explanations enter `csdrg.pdf` only after an explicit reviewer approval. Evidence-controlled cSDRG sections cannot be overwritten through the editable source view.
+
+The cumulative `sdtm/evidence-manifest.json` and refreshed bundle preserve input hashes, attempts, outputs, validation records, finding decisions, artifact hashes, limitations, and human approvals. Rebuilding current artifacts does not delete earlier execution or validation evidence.
+
+#### SDTM runner and optional validator configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `SDTM_RUNNER_URL` | Dedicated runner base URL; Compose uses `http://sdtm-runner:8010` |
+| `SDTM_RUNNER_TIMEOUT_SECONDS` | Per-attempt wall-clock request limit; defaults to 180 seconds |
+| `PINNACLE21_CLI_PATH` | Optional server-side path to the administrator-supplied Pinnacle 21 Community/CLI JAR |
+| `PINNACLE21_JAVA_PATH` | Optional server-side path to a compatible licensed/local Java executable |
+| `PINNACLE21_TIMEOUT_SECONDS` | Optional CLI wall-clock limit; defaults to 600 seconds |
+
+Do not put these paths in frontend variables. If the optional validator is unavailable, use report import; an unavailable result is a limitation, not a successful validation.
+
+#### Synthetic DM/AE demo
+
+1. Start the full stack with `docker compose up --build`. Wait for `api`, `web`, and `sdtm-runner` to become healthy.
+2. On the dashboard, download **SDTM DM/AE EDC**, **Blank CRF**, **Raw DM**, **Raw AE**, and **P21 report fixture**. All content is fictional and de-identified.
+3. Open **Stats programming → SDTM**. Select `sdtm-demo-edc.json` as the required source, the blank CRF in its dedicated field, `RAW_DM.csv` and `RAW_AE.csv` as raw datasets, and optionally the report fixture. Submit and approve source normalization, domain mapping, and variable/VLM mapping in order.
+4. Confirm the reviewed mappings use source datasets `RAW_DM` and `RAW_AE`; review the deterministic R and export-only SAS rules. Saving regenerates the programs but does not execute them.
+5. Open **Execution** and select **Execute reviewed R**. Inspect the attempt's program/input/output hashes, sanitized logs, runtime metadata, XPT summaries, and structural checks. Download `dm.xpt` and `ae.xpt` from the artifact list.
+6. For the repair path, create a second job using the dashboard's **Raw AE mismatch** download instead of Raw AE. It downloads as `RAW_AE.csv` but intentionally contains `AETERM_RAW` while the approved mapping expects `AETERM`. Execute, review the typed `AETERM → AETERM_RAW` proposal, then choose **Approve and rerun**. Both attempts remain visible.
+7. Inspect the highlighted aCRF and its coverage sidebar. In Define-XML, switch among **Styled**, **Raw**, and **Diagnostics**; the Raw tab is the exact `define.xml` content.
+8. In **Validation**, import the fixture. Disposition one finding, enter an explanation, check **Approve explanation for cSDRG**, and save. Alternatively run the configured local CLI; without local prerequisites the result is truthfully `unavailable`.
+9. Open **cSDRG**, inspect/edit the non-evidence narrative, save, and open `csdrg.pdf`. Confirm the approved explanation and execution trace appear while unapproved explanations do not.
+10. Contrast with a metadata-only job using only `sdtm-demo-edc.json`: generation succeeds, execution and validation are `not_run`, readiness remains blocked, and R/SAS/cSDRG state that the programs were not tested against raw data.
+
+Known limitations: only CSV/XPT raw inputs and CSV/XLSX Pinnacle 21 exports are supported; OCR is not included; SAS is never executed; the local CLI adapter depends on the installed release's compatible command interface; Define XSD/standards validation requires externally supplied authoritative content; and the workbench does not certify CDISC conformance or submission readiness. Qualified statistical programming and regulatory review remain required.
 
 The TLF use case follows the same staged architecture without using SDTM as an analysis input. It first extracts only source-supported outputs from the SAP or protocol and maps them to optional ADaM metadata and display rules. The job then pauses in a dedicated shell-review workspace; programming augmentation cannot start until the user approves the output inventory and analysis/display shells. After approval, the final stage adds one non-executed R/SAS scaffold per output. Incomplete specifications remain in the package with explicit blockers and TODO markers.
 
@@ -348,4 +404,4 @@ The standalone `samples/generate_blank_crf.py` helper can also create `samples/b
 
 ## Standards posture
 
-SDTM outputs are labeled for SDTMIG 3.4 and Define-XML 2.1, but this repository does not distribute CDISC standards content and does not claim conformance. XML is checked for well-formedness and internal references only. All generated programs contain review markers and are never executed by the application.
+SDTM outputs are labeled for SDTMIG 3.4 and Define-XML 2.1, but this repository does not distribute CDISC standards content and does not claim conformance. XML is checked for well-formedness and internal references only. Generated programs contain review markers. Reviewed R can run only through the isolated runner with raw data; SAS remains export-only and is never executed by the application.

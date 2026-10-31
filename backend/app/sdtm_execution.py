@@ -253,6 +253,11 @@ def repair_depth(job_dir: Path, attempt: ExecutionAttempt) -> int:
     return depth
 
 
+def ensure_repair_allowed(job_dir: Path, attempt: ExecutionAttempt, maximum: int = 3) -> None:
+    if repair_depth(job_dir, attempt) >= maximum:
+        raise ValueError(f"The maximum of {maximum} approved repair attempts has been reached.")
+
+
 def propose_repair(attempt: ExecutionAttempt, plan: SDTMPlan, inventory: list[RawDatasetInventory]) -> RepairProposal | None:
     if attempt.failure_classification != "missing_source_column":
         return None
@@ -320,7 +325,7 @@ def classify_failure(attempt: ExecutionAttempt) -> str:
         return "timeout"
     if attempt.status == "unavailable":
         return "runner_unavailable"
-    if ("object" in text and "not found" in text) or "unknown columns" in text or ("column" in text and "doesn't exist" in text):
+    if (("object" in text or "column" in text) and "not found" in text) or "unknown columns" in text or ("column" in text and "doesn't exist" in text):
         return "missing_source_column"
     if any(item.check_id == "expected-variables" and item.status == "failed" for item in attempt.checks):
         return "missing_output_variable"

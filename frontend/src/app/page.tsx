@@ -73,7 +73,7 @@ export default function HomePage() {
           <h2 id="samples-heading" className="mt-2 text-lg font-semibold">Synthetic sample inputs</h2>
           <p className="mt-2 text-sm leading-5 text-zinc-400">Fictional files for exercising every workflow without sensitive data.</p>
           <div className="mt-5 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
-            {[["synthetic-protocol.md", "Protocol"], ["blank-crf.pdf", "Blank CRF"], ["edc-specification.json", "EDC spec"], ["synthetic-sap.md", "SAP"], ["adam-metadata.json", "ADaM"]].map(([file, label]) => (
+            {[["synthetic-protocol.md", "Protocol"], ["blank-crf.pdf", "Blank CRF"], ["edc-specification.json", "EDC spec"], ["synthetic-sap.md", "SAP"], ["adam-metadata.json", "ADaM"], ["sdtm-demo-edc.json", "SDTM DM/AE EDC"], ["sdtm-raw-dm.csv", "Raw DM"], ["sdtm-raw-ae.csv", "Raw AE"], ["sdtm-raw-ae-mismatch.csv", "Raw AE mismatch"], ["pinnacle21-demo-report.csv", "P21 report fixture"]].map(([file, label]) => (
               <a key={file} href={`${API_URL}/api/v1/samples/${file}`} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2.5 text-xs font-medium text-zinc-200 transition hover:bg-white/10"><Download size={13} />{label}</a>
             ))}
           </div>

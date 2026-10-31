@@ -6,7 +6,7 @@ export type ReviewStage = "edc_source" | "domain_mapping" | "variable_mapping" |
 
 export type Artifact = components["schemas"]["ArtifactRead"];
 
-export interface Job extends Omit<components["schemas"]["JobRead"], "workflow" | "status" | "result" | "error" | "warnings" | "artifacts" | "review_stage"> {
+export interface Job extends Omit<components["schemas"]["JobRead"], "workflow" | "status" | "result" | "error" | "warnings" | "artifacts" | "review_stage" | "sdtm_workbench"> {
   workflow: Workflow;
   status: JobStatus;
   result: Record<string, unknown> | unknown[] | null;

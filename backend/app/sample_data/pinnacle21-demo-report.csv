@@ -1,0 +1,3 @@
+Rule ID,Severity,Dataset,Variable,Record Keys,Message,P21 Version,Standard Version,CT Version
+SD0001,Warning,DM,AGE,USUBJID=SYN-DMAE-001-003,Age exceeds the configured demo review threshold,3.1-demo,SDTMIG 3.4,2025-12-19
+SD0080,Notice,AE,AETERM,,Verify sponsor handling of verbatim adverse event terms,3.1-demo,SDTMIG 3.4,2025-12-19

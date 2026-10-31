@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import zipfile
 
 from openpyxl import Workbook
 
@@ -8,6 +9,7 @@ from app.csdrg import build_csdrg, render_csdrg
 from app.schemas import SDTMDataset, SDTMDomainMapping, SDTMDomainRuleAugmentation, SDTMPlan, SDTMRuleAugmentation, SDTMVariable
 from app.sdtm_validation import Pinnacle21CLIProvider, import_pinnacle21_report, save_validation
 from app.sdtm_workbench import initialize_state
+from app.sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
 
 
 def _plan() -> SDTMPlan:
@@ -87,4 +89,26 @@ def test_csdrg_includes_only_approved_explanations_and_truthful_metadata_only_to
     paths = render_csdrg(job_dir, _plan())
     assert {path.name for path in paths} == {"csdrg.json", "csdrg.md", "csdrg.pdf"}
     assert "were not executed" in (job_dir / "output" / "csdrg.md").read_text(encoding="utf-8")
+
+
+def test_evidence_manifest_and_bundle_include_audit_records_without_raw_rows(tmp_path) -> None:
+    job_dir = _job_dir(tmp_path)
+    output = job_dir / "output"
+    output.mkdir()
+    (output / "build-sdtm.R").write_text("# generated; not run\n", encoding="utf-8")
+    report = tmp_path / "p21.csv"
+    report.write_text("Rule ID,Severity,Message\nSD0001,Warning,Example\n", encoding="utf-8")
+    import_pinnacle21_report(job_dir, report)
+    manifest_path = refresh_evidence_manifest(job_dir)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["claims"]["generation_implies_conformance"] is False
+    assert manifest["validation_records"][0]["provider"] == "Pinnacle 21 report import"
+    assert "Example" in json.dumps(manifest["validation_records"])
+    assert any(item["relative_path"].endswith("original-p21.csv") and len(item["sha256"]) == 64 for item in manifest["artifacts"])
+    bundle = refresh_evidence_bundle(job_dir)
+    with zipfile.ZipFile(bundle) as archive:
+        names = set(archive.namelist())
+    assert "sdtm/evidence-manifest.json" in names
+    assert "output/build-sdtm.R" in names
+    assert not any(name.startswith("input/") for name in names)
 

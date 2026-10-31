@@ -52,7 +52,7 @@ def inventory_raw_dataset(path: Path, original_name: str) -> RawDatasetInventory
     if suffix == ".csv":
         _profile_csv(path, inventory)
     else:
-        inventory.diagnostics.append("XPT columns and row count are inspected by the isolated runner before execution.")
+        _profile_xpt(path, inventory)
     return inventory
 
 
@@ -81,6 +81,23 @@ def _profile_csv(path: Path, inventory: RawDatasetInventory) -> None:
             SourceColumnProfile(name=name, data_type=data_type)
             for name, data_type in zip(normalized, inferred, strict=True)
         ]
+
+
+def _profile_xpt(path: Path, inventory: RawDatasetInventory) -> None:
+    try:
+        import pyreadstat
+
+        frame, _metadata = pyreadstat.read_xport(str(path))
+    except Exception as exc:
+        raise ValueError(f"XPT {inventory.original_name!r} is not readable.") from exc
+    inventory.row_count = len(frame.index)
+    inventory.columns = [
+        SourceColumnProfile(
+            name=str(name),
+            data_type="numeric" if getattr(dtype, "kind", "") in {"i", "u", "f", "c"} else "character",
+        )
+        for name, dtype in frame.dtypes.items()
+    ]
 
 
 def _is_number(value: str) -> bool:

@@ -14,7 +14,7 @@ from app.schemas import (
     SDTMRuleAugmentation,
     SDTMVariable,
 )
-from app.sdtm_execution import ProviderResult, RExecutionProvider, SDTMExecutionService, apply_typed_repair, inspect_outputs, repair_depth
+from app.sdtm_execution import ProviderResult, RExecutionProvider, SDTMExecutionService, apply_typed_repair, ensure_repair_allowed, inspect_outputs, repair_depth
 from app.sdtm_workbench import initialize_state, inventory_raw_dataset
 
 
@@ -101,7 +101,7 @@ def test_missing_column_proposes_typed_repair_and_preserves_parent_history(tmp_p
     age.source_field = "AGEE"
     age_rule = next(item for item in plan.rule_augmentations if item.target_variable == "AGE")
     age_rule.r_expression = '.data[["AGEE"]]'
-    provider = FakeProvider(ProviderResult(status="failed", exit_code=1, stdout="", stderr="Error: object 'AGEE' not found"))
+    provider = FakeProvider(ProviderResult(status="failed", exit_code=1, stdout="", stderr="Caused by error in `.data[[\"AGEE\"]]`: Column `AGEE` not found in `.data`."))
     job_dir = _job_dir(tmp_path)
     first = SDTMExecutionService(provider).execute(job_dir, plan)
     assert first.status == "failed"
@@ -120,4 +120,6 @@ def test_missing_column_proposes_typed_repair_and_preserves_parent_history(tmp_p
     assert repair_depth(job_dir, first) == 0
     assert repair_depth(job_dir, fourth) == 3
     assert (job_dir / "sdtm" / "executions" / first.attempt_id / "attempt.json").is_file()
+    with pytest.raises(ValueError, match="maximum of 3"):
+        ensure_repair_allowed(job_dir, fourth)
 

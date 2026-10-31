@@ -231,6 +231,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
           <div><p className="text-xs font-black uppercase tracking-[0.14em] text-violet-300">SDTM review workspace</p><p className="mt-1 text-sm text-zinc-300">Review each mapping stage, then inspect the derived aCRF and Define-XML. Saving revalidates the complete plan and rebuilds every artifact.</p></div>
           <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-200">Draft · review required</span>
         </div>
+        {workbench && <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{Object.entries(workbench.lifecycle).map(([label, status]) => <div key={label} className="rounded-lg border border-white/10 bg-black/15 px-3 py-2"><p className="text-[9px] font-black uppercase tracking-wider text-zinc-500">{label.replaceAll("_", " ")}</p><p className={`mt-1 text-xs font-bold ${status === "passed" || status === "completed" || status === "ready" ? "text-emerald-300" : status === "failed" || status === "blocked" || status === "unavailable" ? "text-rose-300" : "text-amber-200"}`}>{status.replaceAll("_", " ")}</p></div>)}</div>}
       </div>
 
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4" role="tablist" aria-label="SDTM review steps">
@@ -343,7 +344,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
             {plan.domain_rule_augmentations.map((rule, index) => <DomainRuleEditor key={rule.rule_id} rule={rule} onUpdate={(key, nextValue) => update((next) => { (next.domain_rule_augmentations[index] as unknown as Record<string, unknown>)[key] = nextValue; })} />)}
           </section>
           <section className="space-y-3">
-            <div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">Variable rule review</p><p className="mt-1 text-xs text-zinc-600">Expressions are draft code inputs. They are saved and rendered, never executed by the Workbench.</p></div>
+            <div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">Variable rule review</p><p className="mt-1 text-xs text-zinc-600">Expressions are draft code inputs. After approval, R may run only in the isolated runner when raw data is present; SAS remains export-only.</p></div>
             {plan.rule_augmentations.map((rule, index) => <VariableRuleEditor key={`${rule.target_domain}-${rule.target_variable}`} rule={rule} onUpdate={(key, nextValue) => update((next) => { (next.rule_augmentations[index] as unknown as Record<string, unknown>)[key] = nextValue; })} />)}
           </section>
         </div>

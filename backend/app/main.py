@@ -66,9 +66,9 @@ from .sdtm_execution import (
     UnavailableRExecutionProvider,
     list_attempts,
     load_attempt,
-    repair_depth,
     save_attempt,
     apply_typed_repair,
+    ensure_repair_allowed,
 )
 from .sdtm_validation import (
     InternalChecksProvider,
@@ -80,6 +80,7 @@ from .sdtm_validation import (
     update_readiness,
 )
 from .csdrg import build_csdrg, render_csdrg, render_csdrg_document
+from .sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
 from .use_cases import USE_CASES, get_use_case
 from .use_cases.sdtm import SDTMUseCase
 from .use_cases.tlf import TLFUseCase
@@ -220,23 +221,28 @@ def read_agent(workflow: str) -> AgentRead:
 @app.get(f"{settings.api_prefix}/samples/{{sample_name}}")
 def download_sample(sample_name: str) -> FileResponse:
     allowed = {
-        "synthetic-protocol.md": "synthetic-protocol.md",
-        "edc-specification.json": "edc-specification.json",
-        "synthetic-sap.md": "synthetic-sap.md",
-        "adam-metadata.json": "adam-metadata.json",
-        "blank-crf.pdf": "blank-crf.pdf",
+        "synthetic-protocol.md": ("synthetic-protocol.md", "synthetic-protocol.md"),
+        "edc-specification.json": ("edc-specification.json", "edc-specification.json"),
+        "synthetic-sap.md": ("synthetic-sap.md", "synthetic-sap.md"),
+        "adam-metadata.json": ("adam-metadata.json", "adam-metadata.json"),
+        "blank-crf.pdf": ("blank-crf.pdf", "blank-crf.pdf"),
+        "sdtm-demo-edc.json": ("sdtm-demo-edc.json", "sdtm-demo-edc.json"),
+        "sdtm-raw-dm.csv": ("RAW_DM.csv", "RAW_DM.csv"),
+        "sdtm-raw-ae.csv": ("RAW_AE.csv", "RAW_AE.csv"),
+        "sdtm-raw-ae-mismatch.csv": ("RAW_AE-mismatch.csv", "RAW_AE.csv"),
+        "pinnacle21-demo-report.csv": ("pinnacle21-demo-report.csv", "pinnacle21-demo-report.csv"),
     }
-    filename = allowed.get(sample_name)
-    if filename is None:
+    selected = allowed.get(sample_name)
+    if selected is None:
         raise HTTPException(status_code=404, detail="Sample not found.")
-    if filename == "blank-crf.pdf":
-        path = settings.data_dir / "samples" / filename
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            _write_sample_crf(path)
+    source_name, download_name = selected
+    if source_name == "blank-crf.pdf":
+        path = settings.data_dir / "samples" / source_name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_sample_crf(path)
     else:
-        path = Path(__file__).parent / "sample_data" / filename
-    return FileResponse(path, filename=filename)
+        path = Path(__file__).parent / "sample_data" / source_name
+    return FileResponse(path, filename=download_name)
 
 
 @app.post(f"{settings.api_prefix}/jobs/{{workflow}}", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
@@ -541,7 +547,9 @@ async def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
         raise HTTPException(status_code=409, detail="This job is already in progress.")
     output_dir = settings.jobs_dir / job_id / "output"
     shutil.rmtree(output_dir, ignore_errors=True)
-    job.artifacts.clear()
+    for artifact in list(job.artifacts):
+        if artifact.relative_path.startswith("output/"):
+            job.artifacts.remove(artifact)
     options = json.loads(job.options_json)
     options.pop("_review_stage", None)
     if job.workflow == "tlf":
@@ -754,8 +762,10 @@ def review_and_run_sdtm_repair(
         proposal.status = "rejected"
         save_attempt(job_dir, failed_attempt)
         return failed_attempt
-    if repair_depth(job_dir, failed_attempt) >= 3:
-        raise HTTPException(status_code=409, detail="The maximum of three approved repair attempts has been reached.")
+    try:
+        ensure_repair_allowed(job_dir, failed_attempt)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     proposal.status = "approved"
     save_attempt(job_dir, failed_attempt)
 
@@ -1047,7 +1057,9 @@ def update_job_result(job_id: str, update: JobResultUpdate, db: Session = Depend
         if current_output.exists():
             current_output.rename(backup_output)
         next_output.rename(current_output)
-        job.artifacts.clear()
+        for artifact in list(job.artifacts):
+            if artifact.relative_path.startswith("output/"):
+                job.artifacts.remove(artifact)
         db.flush()
         for old_path in rendered.paths:
             final_path = current_output / old_path.relative_to(next_output)
@@ -1061,6 +1073,9 @@ def update_job_result(job_id: str, update: JobResultUpdate, db: Session = Depend
             ],
             ensure_ascii=False,
         )
+        if job.workflow == "sdtm":
+            _upsert_artifact(job, refresh_evidence_manifest(job_dir), job_dir)
+            _upsert_artifact(job, refresh_evidence_bundle(job_dir), job_dir)
         db.commit()
         db.refresh(job)
     except Exception:
@@ -1248,6 +1263,8 @@ def _refresh_csdrg_artifacts(job: Job, db: Session) -> None:
     plan = SDTMPlan.model_validate(json.loads(job.result_json))
     for path in render_csdrg(job_dir, plan):
         _upsert_artifact(job, path, job_dir)
+    _upsert_artifact(job, refresh_evidence_manifest(job_dir), job_dir)
+    _upsert_artifact(job, refresh_evidence_bundle(job_dir), job_dir)
     db.flush()
 
 
@@ -1365,9 +1382,9 @@ def _write_sample_crf(path: Path) -> None:
         y -= 64
     pdf.showPage()
     pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(54, 760, "SYNTHETIC STUDY — VITAL SIGNS")
+    pdf.drawString(54, 760, "SYNTHETIC STUDY — ADVERSE EVENTS")
     y = 690
-    for label in ["Visit Date", "Height", "Weight", "Systolic Blood Pressure", "Diastolic Blood Pressure", "Pulse Rate"]:
+    for label in ["Adverse Event Term", "Adverse Event Start Date", "Adverse Event End Date", "Severity", "Serious Event"]:
         pdf.setFont("Helvetica-Bold", 11)
         pdf.drawString(54, y, label)
         pdf.line(54, y - 20, 540, y - 20)

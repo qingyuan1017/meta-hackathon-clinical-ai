@@ -21,13 +21,12 @@ def main() -> None:
             "Race",
             "Ethnicity",
         ],
-        "SYNTHETIC STUDY — VITAL SIGNS": [
-            "Visit Date",
-            "Height",
-            "Weight",
-            "Systolic Blood Pressure",
-            "Diastolic Blood Pressure",
-            "Pulse Rate",
+        "SYNTHETIC STUDY — ADVERSE EVENTS": [
+            "Adverse Event Term",
+            "Adverse Event Start Date",
+            "Adverse Event End Date",
+            "Severity",
+            "Serious Event",
         ],
     }
     for title, fields in pages.items():
