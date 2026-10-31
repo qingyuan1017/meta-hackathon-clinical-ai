@@ -5,7 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, Mic, MicOff, PanelRightClose, PanelRightOpen, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { convertRecordingToWav } from "@/lib/audio";
-import type { Job } from "@/lib/types";
+import { useReviewDraft } from "@/lib/review-draft-context";
+import type { Job, ReviewScope } from "@/lib/types";
 import { AgentTurnTimeline } from "./agent-turn-timeline";
 import { StatusBadge } from "./status-badge";
 
@@ -14,13 +15,19 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
   const [drawerOpen, setDrawerOpen] = useState(shouldStartOpen);
   const [message, setMessage] = useState("");
   const queryClient = useQueryClient();
+  const { currentResult } = useReviewDraft();
   const query = useQuery({
     queryKey: ["agent-progress", job.id],
     queryFn: () => api.agentProgress(job.id),
     refetchInterval: job.status === "queued" || job.status === "running" ? 2_000 : false,
   });
   const feedbackMutation = useMutation({
-    mutationFn: (feedback: string) => api.submitReviewFeedback(job.id, feedback),
+    mutationFn: ({ feedback, scope }: { feedback: string; scope: ReviewScope }) => api.submitReviewFeedback(job.id, {
+      message: feedback,
+      scope,
+      baseline_revision: job.result_revision!,
+      current_result: currentResult ?? asRecord(job.result),
+    }),
     onSuccess: (updated) => {
       setMessage("");
       queryClient.setQueryData(["job", job.id], updated);
@@ -36,12 +43,13 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
     : <div className="grid min-h-48 place-items-center rounded-lg border border-dashed border-white/15 px-4 text-center text-xs leading-5 text-zinc-500">
         {query.isError ? `Agent trace unavailable: ${query.error.message}` : "Loading agent activity…"}
       </div>;
-  const composer = job.status === "review_required" ? (
+  const composer = job.status === "review_required" && !job.review_patch ? (
     <FeedbackComposer
       job={job}
+      currentResult={currentResult ?? asRecord(job.result)}
       message={message}
       onMessageChange={setMessage}
-      onSubmit={() => feedbackMutation.mutate(message.trim())}
+      onSubmit={(scope) => feedbackMutation.mutate({ feedback: message.trim(), scope })}
       submitting={feedbackMutation.isPending}
       error={feedbackMutation.error?.message}
     />
@@ -83,9 +91,15 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
   );
 }
 
-function FeedbackComposer({ job, message, onMessageChange, onSubmit, submitting, error }: { job: Job; message: string; onMessageChange: (value: string) => void; onSubmit: () => void; submitting: boolean; error?: string }) {
+function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubmit, submitting, error }: { job: Job; currentResult: Record<string, unknown>; message: string; onMessageChange: (value: string) => void; onSubmit: (scope: ReviewScope) => void; submitting: boolean; error?: string }) {
   const stage = job.review_stage ? REVIEW_STAGE_LABELS[job.review_stage] : "current stage";
-  const canSubmit = Boolean(message.trim()) && !submitting;
+  const [scope, setScope] = useState<ReviewScope>(emptyScope);
+  const scopeMutation = useMutation({
+    mutationFn: () => api.proposeReviewScope(job.id, message.trim(), currentResult),
+    onSuccess: (proposal) => setScope(proposal.scope),
+  });
+  const hasScope = scope.paths.length > 0 || scope.source_datasets.length > 0 || scope.target_domains.length > 0 || scope.variables.length > 0;
+  const canSubmit = Boolean(message.trim()) && hasScope && Boolean(job.result_revision) && !submitting;
   const [voiceSupported, setVoiceSupported] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -96,6 +110,8 @@ function FeedbackComposer({ job, message, onMessageChange, onSubmit, submitting,
   const [voiceError, setVoiceError] = useState<string>();
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   messageRef.current = message;
+
+  useEffect(() => { if (!message) setScope(emptyScope()); }, [message]);
 
   useEffect(() => {
     setVoiceSupported(typeof MediaRecorder !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia));
@@ -181,7 +197,7 @@ function FeedbackComposer({ job, message, onMessageChange, onSubmit, submitting,
   return (
     <form
       className="border-t border-white/[0.08] bg-[#151518] p-3"
-      onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(); }}
+      onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(scope); }}
     >
       <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300">Guide this revision</p>
       <p className="mt-1 text-[11px] leading-4 text-zinc-500">Ask the agent to revise {stage}. This does not approve or advance the workflow.</p>
@@ -209,11 +225,18 @@ function FeedbackComposer({ job, message, onMessageChange, onSubmit, submitting,
         placeholder="Example: Use the Safety population for every adverse-event output and keep unsupported decisions as TODOs."
         className="focus-ring mt-2 w-full resize-y rounded-lg border border-white/10 bg-[#0d0d0f] px-3 py-2 text-xs leading-5 text-zinc-200 placeholder:text-zinc-600"
       />
+      <ScopePicker job={job} currentResult={currentResult} scope={scope} onChange={setScope} />
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <button type="button" disabled={!message.trim() || scopeMutation.isPending} onClick={() => scopeMutation.mutate()} className="focus-ring rounded-md border border-white/10 px-2.5 py-1.5 text-[10px] font-bold text-zinc-300 disabled:opacity-40">{scopeMutation.isPending ? "Finding scope…" : "Suggest scope from comment"}</button>
+        <span className={`text-[10px] ${hasScope ? "text-emerald-300" : "text-amber-300"}`}>{hasScope ? "Scope confirmed" : "Select a scope before submitting"}</span>
+      </div>
+      {scopeMutation.data && <p className="mt-1 text-[10px] leading-4 text-zinc-500">{scopeMutation.data.explanation} Confirm or adjust the selection.</p>}
+      {scopeMutation.error && <p className="mt-1 text-[10px] text-rose-300">{scopeMutation.error.message}</p>}
       <div className="mt-2 flex items-center justify-between gap-3">
         <span className="text-[10px] text-zinc-600">{message.length}/4000</span>
         <button type="submit" disabled={!canSubmit} className="focus-ring inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">
           {submitting ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}
-          {submitting ? "Queuing revision…" : "Request revision"}
+          {submitting ? "Generating scoped patch…" : "Generate patch"}
         </button>
       </div>
       {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{error}</p>}
@@ -222,6 +245,82 @@ function FeedbackComposer({ job, message, onMessageChange, onSubmit, submitting,
     </form>
   );
 }
+
+const variableFields = ["label", "data_type", "source_dataset", "source_field", "origin", "mapping_expression", "controlled_terms", "value_level_metadata", "crf_source_label"];
+
+function ScopePicker({ job, currentResult, scope, onChange }: { job: Job; currentResult: Record<string, unknown>; scope: ReviewScope; onChange: (value: ReviewScope) => void }) {
+  if (job.workflow === "sdtm" && job.review_stage === "domain_mapping") {
+    const sourceSpec = asRecord(currentResult.source_spec);
+    const datasets = asRecords(sourceSpec.datasets);
+    return <ScopeChecklist label="Affected source datasets" items={datasets.map((item) => String(item.name ?? "")).filter(Boolean)} selected={scope.source_datasets} onChange={(source_datasets) => onChange({ ...emptyScope(), source_datasets })} />;
+  }
+  if (job.workflow === "sdtm" && job.review_stage === "variable_mapping") {
+    const plan = asRecord(currentResult.variable_mapping);
+    const datasets = asRecords(plan.datasets);
+    const selectedDomain = scope.variables[0]?.domain ?? scope.target_domains[0] ?? "";
+    const dataset = datasets.find((item) => String(item.domain).toUpperCase() === selectedDomain);
+    const variables = asRecords(dataset?.variables);
+    const selectedVariable = scope.variables[0]?.variable ?? "";
+    const selectedFields = scope.variables[0]?.fields ?? [];
+    return <div className="mt-2 grid gap-2 rounded-lg border border-white/10 bg-black/15 p-2">
+      <label className="text-[10px] font-bold text-zinc-400">Affected target domain<select aria-label="Affected target domain" value={selectedDomain} onChange={(event) => onChange({ ...emptyScope(), target_domains: event.target.value ? [event.target.value] : [] })} className={scopeInput}><option value="">Select domain</option>{datasets.map((item) => <option key={String(item.domain)}>{String(item.domain)}</option>)}</select></label>
+      {selectedDomain && <label className="text-[10px] font-bold text-zinc-400">Narrow to one variable<select aria-label="Affected target variable" value={selectedVariable} onChange={(event) => onChange(event.target.value ? { ...emptyScope(), variables: [{ domain: selectedDomain, variable: event.target.value, fields: [] }] } : { ...emptyScope(), target_domains: [selectedDomain] })} className={scopeInput}><option value="">Entire {selectedDomain} domain</option>{variables.map((item) => <option key={String(item.name)}>{String(item.name)}</option>)}</select></label>}
+      {selectedVariable && <div><p className="text-[10px] font-bold text-zinc-400">Optional field lock</p><div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-auto">{variableFields.map((field) => <label key={field} className="flex items-center gap-1 rounded border border-white/10 px-1.5 py-1 text-[9px] text-zinc-400"><input type="checkbox" checked={selectedFields.includes(field)} onChange={() => { const fields = selectedFields.includes(field) ? selectedFields.filter((item) => item !== field) : [...selectedFields, field]; onChange({ ...emptyScope(), variables: [{ domain: selectedDomain, variable: selectedVariable, fields }] }); }} />{field}</label>)}</div><p className="mt-1 text-[9px] text-zinc-600">No checked fields means the full variable row is in scope.</p></div>}
+    </div>;
+  }
+  const choices = genericPathChoices(job, currentResult);
+  return <ScopeChecklist label="Affected draft sections" items={choices.map((item) => item.path)} labels={Object.fromEntries(choices.map((item) => [item.path, item.label]))} selected={scope.paths} onChange={(paths) => onChange({ ...emptyScope(), paths })} />;
+}
+
+function ScopeChecklist({ label, items, labels = {}, selected, onChange }: { label: string; items: string[]; labels?: Record<string, string>; selected: string[]; onChange: (items: string[]) => void }) {
+  return <div className="mt-2 rounded-lg border border-white/10 bg-black/15 p-2"><p className="text-[10px] font-bold text-zinc-400">{label}</p><div className="mt-1 max-h-28 space-y-1 overflow-auto">{items.map((item) => <label key={item} className="flex items-center gap-2 text-[10px] text-zinc-300"><input type="checkbox" checked={selected.includes(item)} onChange={() => onChange(selected.includes(item) ? selected.filter((value) => value !== item) : [...selected, item])} /><span>{labels[item] ?? item}</span></label>)}</div></div>;
+}
+
+function genericPathChoices(job: Job, current: Record<string, unknown>): Array<{ path: string; label: string }> {
+  const choices: Array<{ path: string; label: string }> = [];
+  collectPathChoices(current, "", "", choices, 0);
+  return choices.slice(0, 200);
+}
+
+function collectPathChoices(value: unknown, path: string, label: string, choices: Array<{ path: string; label: string }>, depth: number) {
+  if (choices.length >= 200 || depth > 5) return;
+  if (Array.isArray(value)) {
+    if (!value.length || !value.every((item) => item && typeof item === "object" && !Array.isArray(item))) {
+      if (path) choices.push({ path, label });
+      return;
+    }
+    value.forEach((item, index) => {
+      const record = asRecord(item);
+      const selector = entitySelector(record, index);
+      const itemPath = `${path}/${selector}`;
+      const itemLabel = `${label} · ${entityLabel(record, index)}`;
+      choices.push({ path: itemPath, label: `${itemLabel} (entire item)` });
+      collectPathChoices(record, itemPath, itemLabel, choices, depth + 1);
+    });
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      const childPath = `${path}/${escapePointer(key)}`;
+      const childLabel = label ? `${label} · ${key.replaceAll("_", " ")}` : key.replaceAll("_", " ");
+      if (child && typeof child === "object") collectPathChoices(child, childPath, childLabel, choices, depth + 1);
+      else choices.push({ path: childPath, label: childLabel });
+    }
+  }
+}
+
+function emptyScope(): ReviewScope { return { paths: [], source_datasets: [], target_domains: [], variables: [] }; }
+function asRecord(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
+function asRecords(value: unknown): Record<string, unknown>[] { return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : []; }
+function entityLabel(item: Record<string, unknown>, index: number): string { return String(item.output_id ?? item.domain ?? item.name ?? item.title ?? index + 1); }
+function entitySelector(item: Record<string, unknown>, index: number): string {
+  for (const key of ["output_id", "domain", "name", "source_dataset", "variable", "finding_id", "where_clause"]) {
+    if (item[key] !== undefined && item[key] !== null && String(item[key])) return `${key}=${escapePointer(String(item[key]))}`;
+  }
+  return String(index);
+}
+function escapePointer(value: string): string { return value.replaceAll("~", "~0").replaceAll("/", "~1"); }
+const scopeInput = "mt-1 w-full rounded-md border border-white/10 bg-[#0d0d0f] px-2 py-1.5 text-[11px] text-zinc-200";
 
 const REVIEW_STAGE_LABELS: Record<NonNullable<Job["review_stage"]>, string> = {
   edc_source: "EDC source specification",

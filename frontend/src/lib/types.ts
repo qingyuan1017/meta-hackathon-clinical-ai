@@ -15,7 +15,19 @@ export interface Job extends Omit<components["schemas"]["JobRead"], "workflow" |
   artifacts: Artifact[];
   review_stage: ReviewStage | null;
   sdtm_workbench?: SDTMWorkbenchState | null;
+  result_revision: string | null;
+  review_patch: ReviewPatch | null;
 }
+
+export interface ReviewVariableScope { domain: string; variable: string; fields: string[]; }
+export interface ReviewScope { paths: string[]; source_datasets: string[]; target_domains: string[]; variables: ReviewVariableScope[]; }
+export interface ReviewPatchOperation { path: string; before: unknown; after: unknown; }
+export interface ReviewPatch {
+  transaction_id: string; status: "generating" | "proposed" | "approved" | "rejected" | "conflict";
+  stage: string; message: string; scope: ReviewScope; baseline_revision: string; proposed_revision: string | null;
+  operations: ReviewPatchOperation[]; conflicts: string[]; submitted_at: string; decided_at: string | null; reviewer: string | null;
+}
+export interface ReviewScopeProposal { stage: string; scope: ReviewScope; matched_terms: string[]; requires_confirmation: boolean; explanation: string; }
 
 export interface JobList { items: Job[]; total: number; page: number; page_size: number; }
 

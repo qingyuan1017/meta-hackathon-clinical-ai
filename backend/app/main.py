@@ -39,7 +39,10 @@ from .schemas import (
     JobList,
     JobRead,
     JobResultUpdate,
+    ReviewPatchDecision,
     ReviewFeedbackUpdate,
+    ReviewScopeProposal,
+    ReviewScopeProposalRequest,
     SDTMDomainMappingUpdate,
     ExecutionAttempt,
     ExecutionAttemptList,
@@ -81,6 +84,17 @@ from .sdtm_validation import (
 )
 from .csdrg import build_csdrg, render_csdrg, render_csdrg_document
 from .sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
+from .review_patches import (
+    load_patch_record,
+    new_patch_request,
+    propose_scope,
+    public_patch,
+    result_revision,
+    three_way_merge,
+    validate_scope,
+    write_patch_record,
+)
+from .review_validation import validate_review_result
 from .use_cases import USE_CASES, get_use_case
 from .use_cases.sdtm import SDTMUseCase
 from .use_cases.tlf import TLFUseCase
@@ -479,19 +493,151 @@ async def submit_review_feedback(
     if job.status != "review_required" or not isinstance(review_stage, str):
         raise HTTPException(status_code=409, detail="This job is not waiting for human review feedback.")
 
+    if options.get("_pending_review_patch") or options.get("_review_patch_request"):
+        raise HTTPException(status_code=409, detail="Decide the current review patch before requesting another revision.")
     message = update.message.strip()
     if not message:
         raise HTTPException(status_code=422, detail="Review feedback cannot be empty.")
     _reject_review_identifiers(message, "review feedback")
+    if update.scope is None or update.current_result is None or update.baseline_revision is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Scoped feedback requires a confirmed scope, the current draft, and its server revision.",
+        )
+    stored_result = json.loads(job.result_json) if job.result_json else None
+    if not isinstance(stored_result, dict):
+        raise HTTPException(status_code=409, detail="This review stage has no structured draft to revise.")
+    stored_revision = result_revision(stored_result)
+    if update.baseline_revision != stored_revision:
+        raise HTTPException(status_code=409, detail="The review draft changed. Reload it before requesting a revision.")
+    try:
+        current_result = validate_review_result(job.workflow, review_stage, update.current_result, options)
+        validate_scope(review_stage, update.scope, current_result)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     submitted_at = datetime.now(timezone.utc).isoformat()
+    request = new_patch_request(stage=review_stage, message=message, scope=update.scope, baseline=current_result)
     prior_feedback = options.get("review_feedback")
     feedback = list(prior_feedback) if isinstance(prior_feedback, list) else []
-    feedback.append({"stage": review_stage, "message": message, "submitted_at": submitted_at})
+    feedback.append({
+        "stage": review_stage,
+        "message": message,
+        "scope": update.scope.model_dump(mode="json"),
+        "transaction_id": request["transaction_id"],
+        "baseline_revision": request["baseline_revision"],
+        "submitted_at": submitted_at,
+    })
     options["review_feedback"] = feedback
-    if job.result_json:
-        options["_review_revision_result"] = json.loads(job.result_json)
-    _append_user_feedback_event(job, review_stage, message, submitted_at)
+    options["_review_revision_result"] = current_result
+    options["_review_patch_request"] = request
+    job.result_json = json.dumps(current_result, ensure_ascii=False)
+    write_patch_record(settings.jobs_dir / job.id, {**request, "baseline": current_result})
+    _append_user_feedback_event(job, review_stage, message, submitted_at, scope=update.scope.model_dump(mode="json"))
     return _resume_review(job, options, db, preserve_review_context=True)
+
+
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/feedback/scope",
+    response_model=ReviewScopeProposal,
+)
+async def propose_review_feedback_scope(
+    job_id: str,
+    request: ReviewScopeProposalRequest,
+    db: Session = Depends(get_db),
+) -> ReviewScopeProposal:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    stage = options.get("_review_stage")
+    if job.status != "review_required" or not isinstance(stage, str):
+        raise HTTPException(status_code=409, detail="This job is not waiting for human review feedback.")
+    current = request.current_result or (json.loads(job.result_json) if job.result_json else None)
+    if not isinstance(current, dict):
+        raise HTTPException(status_code=409, detail="This review stage has no structured draft to scope.")
+    scope, matched, explanation = propose_scope(stage, request.message, current)
+    return ReviewScopeProposal(
+        stage=stage,
+        scope=scope,
+        matched_terms=matched,
+        requires_confirmation=True,
+        explanation=explanation,
+    )
+
+
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/feedback/{{transaction_id}}/decision",
+    response_model=JobRead,
+)
+async def decide_review_patch(
+    job_id: str,
+    transaction_id: str,
+    decision: ReviewPatchDecision,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    pending = options.get("_pending_review_patch")
+    if job.status != "review_required" or not isinstance(pending, dict) or pending.get("transaction_id") != transaction_id:
+        raise HTTPException(status_code=409, detail="This review patch is not awaiting a decision.")
+    stored_current = json.loads(job.result_json) if job.result_json else None
+    if not isinstance(stored_current, dict):
+        raise HTTPException(status_code=409, detail="The current review draft is unavailable.")
+    current_revision = result_revision(stored_current)
+    if decision.expected_revision != current_revision:
+        raise HTTPException(status_code=409, detail="The review draft changed. Reload it before deciding this patch.")
+    try:
+        record = load_patch_record(settings.jobs_dir / job.id, transaction_id)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail="The saved review patch is unavailable.") from exc
+    try:
+        current = validate_review_result(job.workflow, str(pending.get("stage")), decision.current_result, options)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    now = datetime.now(timezone.utc).isoformat()
+    if decision.approved:
+        merged, conflicts = three_way_merge(record["baseline"], current, record["proposed"])
+        if conflicts:
+            record.update({"status": "conflict", "conflicts": conflicts, "decided_at": now, "reviewer": decision.reviewer})
+            write_patch_record(settings.jobs_dir / job.id, record)
+            options["_pending_review_patch"] = public_patch(record)
+            job.options_json = json.dumps(options, ensure_ascii=False)
+            db.commit()
+            raise HTTPException(
+                status_code=409,
+                detail={"message": "The patch conflicts with newer edits and was not applied.", "conflicts": conflicts},
+            )
+        try:
+            merged = validate_review_result(job.workflow, str(record["stage"]), merged, options)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        job.result_json = json.dumps(merged, ensure_ascii=False)
+        record.update({"status": "approved", "conflicts": [], "decided_at": now, "reviewer": decision.reviewer})
+        output_summary = "The scoped patch was approved and merged; untouched paths were preserved."
+    else:
+        job.result_json = json.dumps(current, ensure_ascii=False)
+        record.update({"status": "rejected", "conflicts": [], "decided_at": now, "reviewer": decision.reviewer})
+        output_summary = "The scoped patch was rejected; the current draft was not changed."
+    write_patch_record(settings.jobs_dir / job.id, record)
+    remaining_feedback = [
+        item for item in options.get("review_feedback", [])
+        if not isinstance(item, dict) or item.get("transaction_id") != transaction_id
+    ]
+    if remaining_feedback:
+        options["review_feedback"] = remaining_feedback
+    else:
+        options.pop("review_feedback", None)
+    options.pop("_pending_review_patch", None)
+    options.pop("_review_patch_request", None)
+    options.pop("_review_revision_result", None)
+    job.options_json = json.dumps(options, ensure_ascii=False)
+    job.updated_at = datetime.now(timezone.utc)
+    _append_patch_decision_event(job, record, output_summary)
+    db.commit()
+    db.refresh(job)
+    return _job_read(job)
 
 
 @app.post(
@@ -586,6 +732,7 @@ async def approve_edc_source_spec(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     options = json.loads(job.options_json)
+    _ensure_no_pending_review_patch(options)
     if job.workflow != "sdtm" or job.status != "review_required" or options.get("_review_stage") != "edc_source":
         raise HTTPException(status_code=409, detail="This job is not waiting for EDC source review.")
     problems = verify_result("sdtm-source-normalization", update.source_spec)
@@ -618,6 +765,7 @@ async def approve_sdtm_domain_mapping(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     options = json.loads(job.options_json)
+    _ensure_no_pending_review_patch(options)
     if job.workflow != "sdtm" or job.status != "review_required" or options.get("_review_stage") != "domain_mapping":
         raise HTTPException(status_code=409, detail="This job is not waiting for SDTM domain mapping review.")
     source_spec = SDTMUseCase._approved_source_spec(options)
@@ -646,6 +794,7 @@ async def approve_sdtm_variable_mapping(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     options = json.loads(job.options_json)
+    _ensure_no_pending_review_patch(options)
     if job.workflow != "sdtm" or job.status != "review_required" or options.get("_review_stage") != "variable_mapping":
         raise HTTPException(status_code=409, detail="This job is not waiting for SDTM variable mapping review.")
     source_spec = SDTMUseCase._approved_source_spec(options)
@@ -946,6 +1095,7 @@ async def approve_tlf_inventory(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     options = json.loads(job.options_json)
+    _ensure_no_pending_review_patch(options)
     if job.workflow != "tlf" or job.status != "review_required" or options.get("_review_stage") != "tlf_inventory":
         raise HTTPException(status_code=409, detail="This job is not waiting for TLF output inventory review.")
     try:
@@ -973,6 +1123,7 @@ async def approve_tlf_shell(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     options = json.loads(job.options_json)
+    _ensure_no_pending_review_patch(options)
     if job.workflow != "tlf" or job.status != "review_required" or options.get("_review_stage") != "tlf_shell":
         raise HTTPException(status_code=409, detail="This job is not waiting for TLF shell review.")
     try:
@@ -1002,6 +1153,7 @@ async def approve_tlf_programming(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     options = json.loads(job.options_json)
+    _ensure_no_pending_review_patch(options)
     if job.workflow != "tlf" or job.status != "review_required" or options.get("_review_stage") != "tlf_programming":
         raise HTTPException(status_code=409, detail="This job is not waiting for TLF programming review.")
     try:
@@ -1193,6 +1345,7 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
     result = json.loads(job.result_json) if include_result and job.result_json else None
     warnings = json.loads(job.warnings_json or "[]") if include_result else []
     options = json.loads(job.options_json)
+    pending_patch = options.get("_pending_review_patch")
     review_stage = options.get("_review_stage") if job.status == "review_required" else None
     if review_stage not in {
         "edc_source",
@@ -1229,6 +1382,8 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
         error=job.error,
         artifacts=artifacts,
         sdtm_workbench=read_state(settings.jobs_dir / job.id) if job.workflow == "sdtm" else None,
+        result_revision=result_revision(result) if result is not None else None,
+        review_patch=public_patch(pending_patch) if isinstance(pending_patch, dict) else None,
     )
 
 
@@ -1277,6 +1432,14 @@ def _reject_review_identifiers(serialized: str, label: str) -> None:
         )
 
 
+def _ensure_no_pending_review_patch(options: dict) -> None:
+    if options.get("_pending_review_patch") or options.get("_review_patch_request"):
+        raise HTTPException(
+            status_code=409,
+            detail="Approve or reject the current scoped revision before approving this review stage.",
+        )
+
+
 def _resume_sdtm_review(job: Job, options: dict, db: Session) -> JobRead:
     return _resume_review(job, options, db)
 
@@ -1286,6 +1449,8 @@ def _resume_review(job: Job, options: dict, db: Session, *, preserve_review_cont
     if not preserve_review_context:
         options.pop("review_feedback", None)
         options.pop("_review_revision_result", None)
+        options.pop("_review_patch_request", None)
+        options.pop("_pending_review_patch", None)
     job.options_json = json.dumps(options, ensure_ascii=False)
     job.status = "queued"
     if not preserve_review_context:
@@ -1300,7 +1465,14 @@ def _resume_review(job: Job, options: dict, db: Session, *, preserve_review_cont
     return _job_read(job)
 
 
-def _append_user_feedback_event(job: Job, stage: str, message: str, occurred_at: str) -> None:
+def _append_user_feedback_event(
+    job: Job,
+    stage: str,
+    message: str,
+    occurred_at: str,
+    *,
+    scope: dict | None = None,
+) -> None:
     path = settings.jobs_dir / job.id / "agent" / "progress.json"
     progress: dict = {}
     if path.is_file():
@@ -1325,7 +1497,7 @@ def _append_user_feedback_event(job: Job, stage: str, message: str, occurred_at:
         "intent": "Guide a revision of the current draft without approving or advancing the workflow stage.",
         "input_summary": message,
         "output_summary": "The current stage was queued for an agent revision.",
-        "input_details": {"Review stage": stage},
+        "input_details": {"Review stage": stage, "Scope": scope or {}},
         "output_details": {"Decision": "Revise current stage"},
         "evidence": ["Human review guidance"],
         "occurred_at": occurred_at,
@@ -1346,6 +1518,46 @@ def _append_user_feedback_event(job: Job, stage: str, message: str, occurred_at:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(progress, indent=2, ensure_ascii=False), encoding="utf-8")
     temporary.replace(path)
+
+
+def _append_patch_decision_event(job: Job, record: dict, output_summary: str) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    path = settings.jobs_dir / job.id / "agent" / "progress.json"
+    progress: dict = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                progress = loaded
+        except (OSError, json.JSONDecodeError):
+            progress = {}
+    events = progress.get("events") if isinstance(progress.get("events"), list) else []
+    turn = max(
+        [int(progress.get("turn", 0)), *[int(item.get("turn", 0)) for item in events if isinstance(item, dict)]]
+    ) + 1
+    events.append({
+        "turn": turn,
+        "type": "human_patch_decision",
+        "actor": "user",
+        "name": "review_patch_decision",
+        "stage": record.get("stage"),
+        "ok": record.get("status") == "approved",
+        "summary": f"Review patch {record.get('status')} by {record.get('reviewer')}.",
+        "intent": "Decide a scoped mapping revision without changing paths outside the approved patch.",
+        "input_summary": f"Decision for patch {record.get('transaction_id')}.",
+        "output_summary": output_summary,
+        "input_details": {"Scope": record.get("scope", {}), "Reviewer": record.get("reviewer")},
+        "output_details": {"Status": record.get("status"), "Operations": len(record.get("operations", []))},
+        "evidence": [f"Review transaction {record.get('transaction_id')}", str(record.get("baseline_revision", ""))],
+        "occurred_at": now,
+    })
+    progress.update({"events": events, "turn": turn, "status": "completed", "updated_at": now})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(progress, indent=2, ensure_ascii=False), encoding="utf-8")
+    temporary.replace(path)
+
+
 
 
 def _safe_artifact_path(job_id: str, relative_path: str) -> Path:

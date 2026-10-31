@@ -224,6 +224,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/feedback/scope": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Propose Review Feedback Scope */
+        post: operations["propose_review_feedback_scope_api_v1_jobs__job_id__feedback_scope_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/feedback/{transaction_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decide Review Patch */
+        post: operations["decide_review_patch_api_v1_jobs__job_id__feedback__transaction_id__decision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/transcription": {
         parameters: {
             query?: never;
@@ -1015,6 +1049,9 @@ export interface components {
             /** Artifacts */
             artifacts?: components["schemas"]["ArtifactRead"][];
             sdtm_workbench?: components["schemas"]["SDTMWorkbenchState"] | null;
+            /** Result Revision */
+            result_revision?: string | null;
+            review_patch?: components["schemas"]["ReviewPatchRead"] | null;
         };
         /** JobResultUpdate */
         JobResultUpdate: {
@@ -1091,6 +1128,114 @@ export interface components {
         ReviewFeedbackUpdate: {
             /** Message */
             message: string;
+            scope?: components["schemas"]["ReviewScope"] | null;
+            /** Baseline Revision */
+            baseline_revision?: string | null;
+            /** Current Result */
+            current_result?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** ReviewPatchDecision */
+        ReviewPatchDecision: {
+            /** Approved */
+            approved: boolean;
+            /** Expected Revision */
+            expected_revision: string;
+            /** Current Result */
+            current_result: {
+                [key: string]: unknown;
+            };
+            /**
+             * Reviewer
+             * @default Workbench reviewer
+             */
+            reviewer: string;
+        };
+        /** ReviewPatchOperation */
+        ReviewPatchOperation: {
+            /** Path */
+            path: string;
+            /** Before */
+            before?: unknown;
+            /** After */
+            after?: unknown;
+        };
+        /** ReviewPatchRead */
+        ReviewPatchRead: {
+            /** Transaction Id */
+            transaction_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "generating" | "proposed" | "approved" | "rejected" | "conflict";
+            /** Stage */
+            stage: string;
+            /** Message */
+            message: string;
+            scope: components["schemas"]["ReviewScope"];
+            /** Baseline Revision */
+            baseline_revision: string;
+            /** Proposed Revision */
+            proposed_revision?: string | null;
+            /** Operations */
+            operations?: components["schemas"]["ReviewPatchOperation"][];
+            /** Conflicts */
+            conflicts?: string[];
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+            /** Decided At */
+            decided_at?: string | null;
+            /** Reviewer */
+            reviewer?: string | null;
+        };
+        /** ReviewScope */
+        ReviewScope: {
+            /** Paths */
+            paths?: string[];
+            /** Source Datasets */
+            source_datasets?: string[];
+            /** Target Domains */
+            target_domains?: string[];
+            /** Variables */
+            variables?: components["schemas"]["ReviewVariableScope"][];
+        };
+        /** ReviewScopeProposal */
+        ReviewScopeProposal: {
+            /** Stage */
+            stage: string;
+            scope: components["schemas"]["ReviewScope"];
+            /** Matched Terms */
+            matched_terms?: string[];
+            /**
+             * Requires Confirmation
+             * @default true
+             */
+            requires_confirmation: boolean;
+            /** Explanation */
+            explanation: string;
+        };
+        /** ReviewScopeProposalRequest */
+        ReviewScopeProposalRequest: {
+            /** Message */
+            message: string;
+            /** Current Result */
+            current_result?: {
+                [key: string]: unknown;
+            } | null;
+        };
+        /** ReviewVariableScope */
+        ReviewVariableScope: {
+            /** Domain */
+            domain: string;
+            /** Variable */
+            variable: string;
+            /** Fields */
+            fields?: string[];
         };
         /** SDTMDataset */
         SDTMDataset: {
@@ -2189,6 +2334,77 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    propose_review_feedback_scope_api_v1_jobs__job_id__feedback_scope_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewScopeProposalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewScopeProposal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_review_patch_api_v1_jobs__job_id__feedback__transaction_id__decision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                transaction_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReviewPatchDecision"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

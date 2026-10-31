@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from .artifacts import ArtifactRead
+from .reviews import ReviewPatchRead
 from .sdtm_workbench import SDTMWorkbenchState
 
 
@@ -31,6 +32,8 @@ class JobRead(BaseModel):
     error: str | None = None
     artifacts: list[ArtifactRead] = Field(default_factory=list)
     sdtm_workbench: SDTMWorkbenchState | None = None
+    result_revision: str | None = None
+    review_patch: ReviewPatchRead | None = None
 
 
 class JobList(BaseModel):

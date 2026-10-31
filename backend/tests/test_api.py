@@ -14,6 +14,8 @@ from app.main import app, settings
 from app.jobs import runner
 from app.models import Artifact, Job
 from app.schemas import StudySummary
+from app.review_patches import build_patch_record, new_patch_request, public_patch, result_revision, write_patch_record
+from app.schemas.reviews import ReviewScope
 
 
 def test_health_does_not_expose_secret() -> None:
@@ -610,18 +612,25 @@ def test_review_feedback_records_user_turn_and_reruns_current_stage(monkeypatch)
         with TestClient(app) as client:
             response = client.post(
                 f"/api/v1/jobs/{job_id}/feedback",
-                json={"message": "Use the Safety population for all adverse-event outputs."},
+                json={
+                    "message": "Use the Safety population for all adverse-event outputs.",
+                    "scope": {"paths": ["/outputs/0"]},
+                    "baseline_revision": result_revision(draft),
+                    "current_result": draft,
+                },
             )
         assert response.status_code == 202, response.text
         assert response.json()["status"] == "queued"
-        assert response.json()["result"] == draft
+        assert response.json()["result"]["outputs"][0]["population"] == "TODO: confirm population"
         assert queued == [job_id]
         with SessionLocal() as session:
             stored = session.get(Job, job_id)
             assert stored is not None
             saved_options = json.loads(stored.options_json)
             assert saved_options["review_feedback"][-1]["stage"] == "tlf_inventory"
-            assert saved_options["_review_revision_result"] == draft
+            assert saved_options["review_feedback"][-1]["scope"]["paths"] == ["/outputs/0"]
+            assert saved_options["_review_revision_result"]["outputs"][0]["population"] == "TODO: confirm population"
+            assert saved_options["_review_patch_request"]["status"] == "generating"
         trace = json.loads(progress_path.read_text(encoding="utf-8"))
         assert trace["status"] == "queued"
         assert trace["turn"] == 4
@@ -629,6 +638,124 @@ def test_review_feedback_records_user_turn_and_reruns_current_stage(monkeypatch)
         assert trace["events"][-1]["summary"].startswith("Use the Safety population")
     finally:
         settings.meta_api_key, settings.meta_model = original_key, original_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
+def test_scoped_review_patch_three_way_merge_preserves_newer_unrelated_edit() -> None:
+    baseline = {
+        "study_name": "SYN-101",
+        "outputs": [{
+            "output_id": "T-01", "output_type": "table", "title": "Adverse events",
+            "population": "TODO", "source_reference": "SAP 7.1",
+        }],
+    }
+    proposed = json.loads(json.dumps(baseline))
+    proposed["outputs"][0]["population"] = "Safety"
+    current = json.loads(json.dumps(baseline))
+    current["outputs"][0]["title"] = "Treatment-emergent adverse events"
+    request = new_patch_request(
+        stage="tlf_inventory",
+        message="Use Safety population.",
+        scope=ReviewScope(paths=["/outputs/0/population"]),
+        baseline=baseline,
+    )
+    record = build_patch_record(request, baseline, proposed)
+    with SessionLocal() as session:
+        job = Job(
+            workflow="tlf",
+            title="Scoped TLF revision",
+            status="review_required",
+            options_json=json.dumps({
+                "_review_stage": "tlf_inventory",
+                "_pending_review_patch": public_patch(record),
+                "review_feedback": [{"transaction_id": request["transaction_id"], "message": "Use Safety."}],
+            }),
+            input_files_json='["01-sap.md"]',
+            result_json=json.dumps(current),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    write_patch_record(settings.jobs_dir / job_id, record)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/feedback/{request['transaction_id']}/decision",
+                json={
+                    "approved": True,
+                    "expected_revision": result_revision(current),
+                    "current_result": current,
+                    "reviewer": "Unit reviewer",
+                },
+            )
+        assert response.status_code == 200, response.text
+        result = response.json()["result"]
+        assert result["outputs"][0]["population"] == "Safety"
+        assert result["outputs"][0]["title"] == "Treatment-emergent adverse events"
+        assert response.json()["review_patch"] is None
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            assert "review_feedback" not in json.loads(stored.options_json)
+        approved = settings.jobs_dir / job_id / "reviews" / request["transaction_id"] / "approved.json"
+        assert approved.is_file()
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
+def test_scoped_review_patch_conflict_is_not_applied() -> None:
+    baseline = {
+        "study_name": "SYN-101",
+        "outputs": [{
+            "output_id": "T-01", "output_type": "table", "title": "Adverse events",
+            "population": "TODO", "source_reference": "SAP 7.1",
+        }],
+    }
+    proposed = json.loads(json.dumps(baseline))
+    proposed["outputs"][0]["population"] = "Safety"
+    current = json.loads(json.dumps(baseline))
+    current["outputs"][0]["population"] = "Intent-to-Treat"
+    request = new_patch_request(
+        stage="tlf_inventory",
+        message="Use Safety population.",
+        scope=ReviewScope(paths=["/outputs/0/population"]),
+        baseline=baseline,
+    )
+    record = build_patch_record(request, baseline, proposed)
+    with SessionLocal() as session:
+        job = Job(
+            workflow="tlf", title="Conflicting revision", status="review_required",
+            options_json=json.dumps({"_review_stage": "tlf_inventory", "_pending_review_patch": public_patch(record)}),
+            input_files_json='["01-sap.md"]', result_json=json.dumps(current),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    write_patch_record(settings.jobs_dir / job_id, record)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/feedback/{request['transaction_id']}/decision",
+                json={
+                    "approved": True,
+                    "expected_revision": result_revision(current),
+                    "current_result": current,
+                },
+            )
+        assert response.status_code == 409
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            assert json.loads(stored.result_json)["outputs"][0]["population"] == "Intent-to-Treat"
+    finally:
         with SessionLocal() as session:
             stored = session.get(Job, job_id)
             if stored:

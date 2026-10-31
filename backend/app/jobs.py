@@ -16,6 +16,9 @@ from .models import Artifact, Job
 from .schemas import DISCLAIMER
 from .sdtm_workbench import read_state, write_state
 from .sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
+from .review_patches import build_patch_record, public_patch, scope_candidate, write_patch_record
+from .schemas.reviews import ReviewScope
+from .review_validation import validate_review_result
 from .workflows import WorkflowService
 
 
@@ -61,9 +64,39 @@ class JobRunner:
                     if job is None:
                         shutil.rmtree(job_dir, ignore_errors=True)
                         return
-                    job.result_json = json.dumps(review.result, ensure_ascii=False)
-                    job.warnings_json = json.dumps([DISCLAIMER, *review.warnings], ensure_ascii=False)
                     saved_options = json.loads(job.options_json)
+                    patch_request = options.get("_review_patch_request")
+                    if isinstance(patch_request, dict):
+                        baseline = options.get("_review_revision_result")
+                        if not isinstance(baseline, dict):
+                            raise ValueError("The scoped review baseline is unavailable.")
+                        saved_options.pop("_review_patch_request", None)
+                        saved_options.pop("_review_revision_result", None)
+                        job.result_json = json.dumps(baseline, ensure_ascii=False)
+                        try:
+                            scope = ReviewScope.model_validate(patch_request.get("scope", {}))
+                            proposed = scope_candidate(str(patch_request["stage"]), baseline, review.result, scope)
+                            proposed = validate_review_result(workflow, str(patch_request["stage"]), proposed, options)
+                            patch_record = build_patch_record(patch_request, baseline, proposed)
+                        except (KeyError, TypeError, ValueError) as exc:
+                            write_patch_record(job_dir, {**patch_request, "status": "failed", "error": str(exc)})
+                            saved_options["review_feedback"] = [
+                                item for item in saved_options.get("review_feedback", [])
+                                if not isinstance(item, dict)
+                                or item.get("transaction_id") != patch_request.get("transaction_id")
+                            ]
+                            review.warnings.append(
+                                f"The scoped revision was not proposed and nothing was applied: {exc}"
+                            )
+                        else:
+                            write_patch_record(job_dir, patch_record)
+                            saved_options["_pending_review_patch"] = public_patch(patch_record)
+                            review.warnings.append(
+                                f"Scoped revision proposed {len(patch_record['operations'])} change(s); human approval is required before merge."
+                            )
+                    else:
+                        job.result_json = json.dumps(review.result, ensure_ascii=False)
+                    job.warnings_json = json.dumps([DISCLAIMER, *review.warnings], ensure_ascii=False)
                     saved_options["_review_stage"] = review.review_stage
                     job.options_json = json.dumps(saved_options, ensure_ascii=False)
                     job.status = "review_required"

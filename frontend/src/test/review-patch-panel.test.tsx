@@ -1,0 +1,30 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
+import { ReviewPatchPanel } from "@/components/review-patch-panel";
+import { api } from "@/lib/api";
+import { ReviewDraftProvider } from "@/lib/review-draft-context";
+import type { Job } from "@/lib/types";
+
+describe("ReviewPatchPanel", () => {
+  it("previews exact paths and requires an explicit decision", async () => {
+    const job = {
+      id: "job-1", status: "review_required", result_revision: "b".repeat(64),
+      result: { study_name: "SYN-101" },
+      review_patch: {
+        transaction_id: "patch-1", status: "proposed", stage: "variable_mapping", message: "Revise DM.AGE.",
+        scope: { paths: [], source_datasets: [], target_domains: [], variables: [{ domain: "DM", variable: "AGE", fields: ["mapping_expression"] }] },
+        baseline_revision: "a".repeat(64), proposed_revision: "c".repeat(64), conflicts: [],
+        submitted_at: "2026-10-31T12:00:00Z", decided_at: null, reviewer: null,
+        operations: [{ path: "/variable_mapping/datasets/domain=DM/variables/name=AGE/mapping_expression", before: "Direct", after: "as.numeric(AGE)" }],
+      },
+    } as Job;
+    const decide = vi.spyOn(api, "decideReviewPatch").mockResolvedValue({ ...job, review_patch: null } as Job);
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><ReviewPatchPanel job={job} /></ReviewDraftProvider></QueryClientProvider>);
+    expect(screen.getByText(/mapping_expression/)).toBeInTheDocument();
+    expect(screen.getByText(/as\.numeric\(AGE\)/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Accept patch" }));
+    await waitFor(() => expect(decide).toHaveBeenCalledWith(job.id, "patch-1", true, "b".repeat(64), job.result));
+  });
+});

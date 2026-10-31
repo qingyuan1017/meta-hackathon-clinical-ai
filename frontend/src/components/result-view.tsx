@@ -14,8 +14,11 @@ import { SDTMReviewEditor, type SDTMPlanDraft } from "./sdtm-review-editor";
 import { TLFInventoryReview, TLFJsonEditor, TLFProgrammingReview, TLFShellReview, TLFTableOfContents, TLFReviewEditor, type TLFAnalysisPlanDraft, type TLFInventoryPlanDraft, type TLFPlanDraft } from "./tlf-review-editor";
 import { StatusBadge } from "./status-badge";
 import { RevisionDecisionPanel } from "./revision-decision-panel";
+import { useReviewDraft } from "@/lib/review-draft-context";
+import { ReviewPatchPanel } from "./review-patch-panel";
 
 export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) {
+  const { setCurrentResult } = useReviewDraft();
   const [tab, setTab] = useState<"preview" | "edit" | "json" | "artifacts" | "warnings">(
     job.workflow === "sdtm" && job.status === "succeeded" ? "edit" : "preview",
   );
@@ -36,6 +39,10 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
     setEdcSourceDraft(asRecord(job.result));
     setTlfDraft(asRecord(job.result));
   }, [job.id, job.result]);
+  useEffect(() => {
+    if (job.status !== "review_required") { setCurrentResult(null); return; }
+    setCurrentResult(job.workflow === "tlf" ? tlfDraft : edcSourceDraft);
+  }, [job.status, job.workflow, edcSourceDraft, tlfDraft, setCurrentResult]);
   useEffect(() => {
     setTab(job.workflow === "sdtm" && job.status === "succeeded" ? "edit" : "preview");
   }, [job.id]);
@@ -129,6 +136,7 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
         )}
         {job.status === "review_required" ? (
           <div className="space-y-5 py-5">
+            {job.review_patch && <ReviewPatchPanel job={job} />}
             <div>{job.workflow === "tlf" ? (job.review_stage === "tlf_inventory" ? <TLFInventoryReview value={tlfDraft} onChange={(next) => setTlfDraft(next)} onApprove={(next: TLFInventoryPlanDraft) => approveTlfInventoryMutation.mutate(next)} saving={approveTlfInventoryMutation.isPending} error={approveTlfInventoryMutation.error?.message} /> : job.review_stage === "tlf_programming" ? <TLFProgrammingReview value={tlfDraft} onChange={(next) => setTlfDraft(next)} onApprove={(next: TLFPlanDraft) => approveTlfProgrammingMutation.mutate(next)} saving={approveTlfProgrammingMutation.isPending} error={approveTlfProgrammingMutation.error?.message} /> : <TLFShellReview value={tlfDraft} onChange={(next) => setTlfDraft(next)} onApprove={(next: TLFAnalysisPlanDraft) => approveTlfShellMutation.mutate(next)} saving={approveTlfShellMutation.isPending} error={approveTlfShellMutation.error?.message} />) : job.review_stage === "domain_mapping" ? <SDTMDomainMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMDomainMappingPlanDraft) => approveDomainMutation.mutate(next)} saving={approveDomainMutation.isPending} error={approveDomainMutation.error?.message} /> : job.review_stage === "variable_mapping" ? <SDTMVariableMappingReview value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: SDTMVariableMappingPlanDraft) => approveVariableMutation.mutate(next)} saving={approveVariableMutation.isPending} error={approveVariableMutation.error?.message} /> : <EDCSourceReviewEditor value={edcSourceDraft} onChange={(next) => setEdcSourceDraft(next)} onApprove={(next: EDCSourceSpecificationDraft) => approveSourceMutation.mutate(next)} saving={approveSourceMutation.isPending} error={approveSourceMutation.error?.message} />}</div>
             <RevisionDecisionPanel result={job.result} warnings={job.warnings} events={agentQuery.data?.events} />
           </div>

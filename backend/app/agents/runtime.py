@@ -146,12 +146,15 @@ class ClinicalAgentRunner:
         current_feedback = [
             item
             for item in review_entries
-            if isinstance(item, dict) and (not stage or item.get("stage") == stage) and str(item.get("message", "")).strip()
+            if isinstance(item, dict)
+            and (not stage or _review_stage_matches(str(item.get("stage", "")), stage))
+            and str(item.get("message", "")).strip()
         ] if isinstance(review_entries, list) else []
         feedback_section = ""
         if current_feedback:
             guidance = "\n".join(
-                f"{index}. {str(item['message']).strip()}"
+                f"{index}. {str(item['message']).strip()}\n"
+                f"   Confirmed scope: {json.dumps(item.get('scope', {}), ensure_ascii=False)}"
                 for index, item in enumerate(current_feedback, start=1)
             )
             baseline = options.get("_review_revision_result")
@@ -160,8 +163,9 @@ class ClinicalAgentRunner:
                 "\n\nHUMAN REVIEW GUIDANCE\n"
                 f"{guidance}\n\nCURRENT DRAFT TO REVISE\n{baseline_text}\n\n"
                 "Apply the guidance in order; newer guidance overrides older conflicting guidance. "
-                "Treat it as a user decision, not as source evidence. Preserve source traceability and "
-                "leave unsupported requests explicit rather than inventing facts."
+                "Treat it as a user decision, not as source evidence. Change only the confirmed scope; "
+                "the server will discard and audit every out-of-scope difference. Preserve source traceability "
+                "and leave unsupported requests explicit rather than inventing facts."
             )
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self.definition.instructions()},
@@ -786,6 +790,18 @@ class ClinicalAgentRunner:
     @staticmethod
     def _now() -> str:
         return datetime.now(timezone.utc).isoformat()
+
+
+def _review_stage_matches(saved_stage: str, agent_stage: str) -> bool:
+    aliases = {
+        "edc_source": "edc source normalization",
+        "domain_mapping": "domain mapping",
+        "variable_mapping": "variable & value-level mapping",
+        "tlf_inventory": "output inventory",
+        "tlf_shell": "analysis & display specification",
+        "tlf_programming": "programming augmentation",
+    }
+    return aliases.get(saved_stage, saved_stage).casefold() == agent_stage.casefold()
 
 
 def verify_result(workflow: str, value: BaseModel) -> list[str]:

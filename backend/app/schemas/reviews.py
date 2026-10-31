@@ -1,14 +1,95 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 from .edc import EDCSourceSpecification
 from .sdtm import SDTMDomainMappingPlan, SDTMVariableMappingPlan
 from .tlf import TLFAnalysisPlan, TLFInventoryPlan, TLFPlan
 
 
+class ReviewVariableScope(BaseModel):
+    domain: str = Field(min_length=1, max_length=8)
+    variable: str = Field(min_length=1, max_length=32)
+    fields: list[str] = Field(default_factory=list, max_length=16)
+
+    @field_validator("domain", "variable")
+    @classmethod
+    def normalize_identifier(cls, value: str) -> str:
+        return value.strip().upper()
+
+
+class ReviewScope(BaseModel):
+    paths: list[str] = Field(default_factory=list, max_length=200)
+    source_datasets: list[str] = Field(default_factory=list, max_length=100)
+    target_domains: list[str] = Field(default_factory=list, max_length=50)
+    variables: list[ReviewVariableScope] = Field(default_factory=list, max_length=200)
+
+    @field_validator("source_datasets", "target_domains")
+    @classmethod
+    def normalize_identifiers(cls, values: list[str]) -> list[str]:
+        return list(dict.fromkeys(value.strip().upper() for value in values if value.strip()))
+
+    @field_validator("paths")
+    @classmethod
+    def normalize_paths(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for value in values:
+            path = value.strip()
+            if not path.startswith("/") or ".." in path:
+                raise ValueError("Review scope paths must be absolute JSON pointers.")
+            normalized.append(path.rstrip("/") or "/")
+        return list(dict.fromkeys(normalized))
+
+
 class ReviewFeedbackUpdate(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
+    scope: ReviewScope | None = None
+    baseline_revision: str | None = Field(default=None, min_length=64, max_length=64)
+    current_result: dict[str, Any] | None = None
+
+
+class ReviewScopeProposalRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    current_result: dict[str, Any] | None = None
+
+
+class ReviewScopeProposal(BaseModel):
+    stage: str
+    scope: ReviewScope
+    matched_terms: list[str] = Field(default_factory=list)
+    requires_confirmation: bool = True
+    explanation: str
+
+
+class ReviewPatchOperation(BaseModel):
+    path: str
+    before: Any = None
+    after: Any = None
+
+
+class ReviewPatchRead(BaseModel):
+    transaction_id: str
+    status: Literal["generating", "proposed", "approved", "rejected", "conflict"]
+    stage: str
+    message: str
+    scope: ReviewScope
+    baseline_revision: str
+    proposed_revision: str | None = None
+    operations: list[ReviewPatchOperation] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
+    submitted_at: datetime
+    decided_at: datetime | None = None
+    reviewer: str | None = None
+
+
+class ReviewPatchDecision(BaseModel):
+    approved: bool
+    expected_revision: str = Field(min_length=64, max_length=64)
+    current_result: dict[str, Any]
+    reviewer: str = Field(default="Workbench reviewer", min_length=1, max_length=160)
 
 
 class VoiceTranscriptionRead(BaseModel):

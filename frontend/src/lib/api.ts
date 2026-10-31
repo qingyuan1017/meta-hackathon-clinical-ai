@@ -1,4 +1,4 @@
-import type { AgentProgress, CDISCDataset, ExecutionAttempt, Health, Job, JobList, UseCaseContract, ValidationFinding, ValidationRecord, Workflow } from "./types";
+import type { AgentProgress, CDISCDataset, ExecutionAttempt, Health, Job, JobList, ReviewScope, ReviewScopeProposal, UseCaseContract, ValidationFinding, ValidationRecord, Workflow } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -45,11 +45,23 @@ export const api = {
     return request<Job>(`/api/v1/jobs/${workflow}`, { method: "POST", body: data });
   },
   retryJob: (id: string) => request<Job>(`/api/v1/jobs/${id}/retry`, { method: "POST" }),
-  submitReviewFeedback: (id: string, message: string) =>
+  submitReviewFeedback: (id: string, update: { message: string; scope: ReviewScope; baseline_revision: string; current_result: Record<string, unknown> }) =>
     request<Job>(`/api/v1/jobs/${id}/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(update),
+    }),
+  proposeReviewScope: (id: string, message: string, currentResult: Record<string, unknown>) =>
+    request<ReviewScopeProposal>(`/api/v1/jobs/${id}/feedback/scope`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, current_result: currentResult }),
+    }),
+  decideReviewPatch: (id: string, transactionId: string, approved: boolean, expectedRevision: string, currentResult: Record<string, unknown>, reviewer = "Workbench reviewer") =>
+    request<Job>(`/api/v1/jobs/${id}/feedback/${transactionId}/decision`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approved, expected_revision: expectedRevision, current_result: currentResult, reviewer }),
     }),
   transcribeReviewAudio: (id: string, audio: Blob) => {
     const data = new FormData();

@@ -12,6 +12,7 @@ import { WorkflowJobHistory } from "@/components/workflow-job-history";
 import { api } from "@/lib/api";
 import type { Job, Workflow } from "@/lib/types";
 import { workflowById } from "@/lib/workflows";
+import { ReviewDraftProvider } from "@/lib/review-draft-context";
 
 export default function WorkflowPage() {
   const params = useParams<{ workflow: string }>();
@@ -48,6 +49,7 @@ export default function WorkflowPage() {
       ? ["Validate and scan input", "Output table of contents", "User inventory review", "Detailed shell generation", "User shell review", "ADaM-linked programming", "User programming review", "Validate and render artifacts"]
     : ["Validate and scan input", "Inspect workflow contract", "Investigate all source chunks", "Validate and render artifacts"];
   return (
+    <ReviewDraftProvider jobId={jobId}>
     <div className="mx-auto max-w-[1840px] px-5 py-8 lg:px-10 lg:py-10">
       <div className="border-b border-white/10 pb-6">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-clinical-700">{workspaceLabel} / {definition.shortTitle}</p>
@@ -88,5 +90,6 @@ export default function WorkflowPage() {
         {jobId && jobQuery.data && <AgentActivitySidebar job={jobQuery.data} />}
       </div>
     </div>
+    </ReviewDraftProvider>
   );
 }

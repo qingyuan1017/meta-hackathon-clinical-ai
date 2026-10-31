@@ -23,6 +23,7 @@ from ..schemas import (
     SDTMVariableMappingPlan,
     SDTMVariableMappingReview,
 )
+from ..schemas.reviews import ReviewScope
 from .base import ClinicalUseCase, GeneratedContent, UseCaseContext, UseCaseDescriptor
 from .utilities import normalize_languages
 
@@ -59,8 +60,9 @@ class SDTMUseCase(ClinicalUseCase):
 
     async def prepare_review(self, context: UseCaseContext) -> GeneratedContent | None:
         crf, edc = self._workflow_inputs(context.inputs)
+        patch_request = context.options.get("_review_patch_request")
         if context.options.get("edc_source_spec") is None:
-            if edc.suffix.lower() == ".json":
+            if edc.suffix.lower() == ".json" and not isinstance(patch_request, dict):
                 normalized = normalize_edc_json(edc)
                 if normalized is not None:
                     problems = verify_result("sdtm-source-normalization", normalized.specification)
@@ -152,6 +154,13 @@ class SDTMUseCase(ClinicalUseCase):
 
         domain_mapping = self._approved_domain_mapping(context.options, source_spec)
         if context.options.get("sdtm_variable_mapping") is None:
+            scoped_domains: list[str] | None = None
+            if isinstance(patch_request, dict) and patch_request.get("stage") == "variable_mapping":
+                scope = ReviewScope.model_validate(patch_request.get("scope", {}))
+                scoped_domains = list(dict.fromkeys([
+                    *scope.target_domains,
+                    *[item.domain for item in scope.variables],
+                ]))
             variable_mapping, variable_warnings = await self._generate_variable_mapping_batches(
                 context,
                 source_spec=source_spec,
@@ -160,8 +169,10 @@ class SDTMUseCase(ClinicalUseCase):
                 crf=crf,
                 agent_options=agent_options,
                 stage_count=stage_count,
+                target_domains=scoped_domains,
             )
-            self.validate_variable_mapping(source_spec, domain_mapping, variable_mapping)
+            if scoped_domains is None:
+                self.validate_variable_mapping(source_spec, domain_mapping, variable_mapping)
             return GeneratedContent(
                 value=SDTMVariableMappingReview(
                     source_spec=source_spec,
@@ -185,11 +196,16 @@ class SDTMUseCase(ClinicalUseCase):
         crf: Path | None,
         agent_options: dict[str, Any],
         stage_count: int,
+        target_domains: list[str] | None = None,
     ) -> tuple[SDTMVariableMappingPlan, list[str]]:
         source_by_name = {dataset.name.casefold(): dataset for dataset in source_spec.datasets}
-        target_domains = list(
+        approved_target_domains = list(
             dict.fromkeys(item.target_domain.upper() for item in domain_mapping.domain_mappings)
         )
+        target_domains = target_domains or approved_target_domains
+        unknown_targets = sorted(set(target_domains) - set(approved_target_domains))
+        if unknown_targets:
+            raise ValueError(f"Scoped variable revision references unapproved domains: {', '.join(unknown_targets)}.")
         datasets = []
         assumptions: list[str] = []
         unresolved: list[str] = []
@@ -682,7 +698,12 @@ class SDTMUseCase(ClinicalUseCase):
     @staticmethod
     def _agent_options(options: dict[str, Any]) -> dict[str, Any]:
         excluded = {"edc_source_spec", "sdtm_domain_mapping", "sdtm_variable_mapping"}
-        return {key: value for key, value in options.items() if key not in excluded and not key.startswith("_")}
+        review_context = {"_review_revision_result"}
+        return {
+            key: value
+            for key, value in options.items()
+            if key not in excluded and (not key.startswith("_") or key in review_context)
+        }
 
     @staticmethod
     def _crf_source(crf: Path | None) -> str:

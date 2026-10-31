@@ -5,6 +5,7 @@ import { AgentActivitySidebar } from "@/components/agent-activity-sidebar";
 import { api } from "@/lib/api";
 import { convertRecordingToWav } from "@/lib/audio";
 import type { AgentProgress, Job } from "@/lib/types";
+import { ReviewDraftProvider } from "@/lib/review-draft-context";
 
 const job = {
   id: "job-review",
@@ -20,6 +21,8 @@ const job = {
   warnings: [],
   error: null,
   artifacts: [],
+  result_revision: "a".repeat(64),
+  review_patch: null,
 } as Job;
 
 const progress = {
@@ -53,14 +56,20 @@ describe("AgentActivitySidebar", () => {
     vi.spyOn(api, "agentProgress").mockResolvedValue(progress);
     const submit = vi.spyOn(api, "submitReviewFeedback").mockResolvedValue({ ...job, status: "queued", review_stage: null });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    render(<QueryClientProvider client={client}><AgentActivitySidebar job={job} /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><AgentActivitySidebar job={job} /></ReviewDraftProvider></QueryClientProvider>);
 
     const inputs = await screen.findAllByLabelText("Review guidance for the agent");
     fireEvent.change(inputs[0], { target: { value: "Use the Safety population for every AE output." } });
-    const buttons = screen.getAllByRole("button", { name: "Request revision" });
+    fireEvent.click(screen.getAllByRole("checkbox")[0]);
+    const buttons = screen.getAllByRole("button", { name: "Generate patch" });
     fireEvent.click(buttons[0]);
 
-    await waitFor(() => expect(submit).toHaveBeenCalledWith(job.id, "Use the Safety population for every AE output."));
+    await waitFor(() => expect(submit).toHaveBeenCalledWith(job.id, expect.objectContaining({
+      message: "Use the Safety population for every AE output.",
+      baseline_revision: "a".repeat(64),
+      current_result: job.result,
+      scope: expect.objectContaining({ paths: ["/study_name"] }),
+    })));
     expect(screen.getAllByText(/does not approve or advance/i)).not.toHaveLength(0);
   });
 
@@ -95,7 +104,7 @@ describe("AgentActivitySidebar", () => {
     });
     const submit = vi.spyOn(api, "submitReviewFeedback");
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    render(<QueryClientProvider client={client}><AgentActivitySidebar job={job} /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><AgentActivitySidebar job={job} /></ReviewDraftProvider></QueryClientProvider>);
 
     fireEvent.click((await screen.findAllByRole("button", { name: "Start voice input" }))[0]);
     const stop = await screen.findByRole("button", { name: "Stop voice input" });
