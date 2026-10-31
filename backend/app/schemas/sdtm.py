@@ -42,8 +42,14 @@ class SDTMVariable(BaseModel):
     name: str
     label: str
     data_type: Literal["Char", "Num"] = "Char"
-    source_dataset: str
-    source_field: str
+    source_dataset: str | None = Field(
+        default=None,
+        description="Approved source dataset when the target has a direct single-field source; null for assigned or derived values without one raw source",
+    )
+    source_field: str | None = Field(
+        default=None,
+        description="Source field paired with source_dataset; null for assigned or derived values without one raw source",
+    )
     origin: str = "CRF"
     mapping_expression: str = "Direct"
     controlled_terms: list[str] = Field(default_factory=list)

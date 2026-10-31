@@ -869,6 +869,24 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
             variables = [variable.name.upper() for variable in dataset.variables]
             if len(variables) != len(set(variables)):
                 problems.append(f"Domain {dataset.domain} has duplicate variable names.")
+            for variable in dataset.variables:
+                source_dataset = (variable.source_dataset or "").strip()
+                source_field = (variable.source_field or "").strip()
+                if bool(source_dataset) != bool(source_field):
+                    problems.append(
+                        f"Variable {dataset.domain}.{variable.name} must provide both source_dataset and "
+                        "source_field, or leave both null."
+                    )
+                if not source_dataset:
+                    origin = variable.origin.strip().casefold()
+                    if not any(token in origin for token in ("assigned", "derived", "protocol", "system", "sponsor")):
+                        problems.append(
+                            f"Sourceless variable {dataset.domain}.{variable.name} needs an assigned or derived origin."
+                        )
+                    if not variable.mapping_expression.strip() or variable.mapping_expression.strip().casefold() == "direct":
+                        problems.append(
+                            f"Sourceless variable {dataset.domain}.{variable.name} needs explicit mapping logic."
+                        )
         if "3.4" not in value.standard:
             problems.append("The draft must identify SDTMIG 3.4 as its baseline.")
         if "2.1" not in value.define_standard:
@@ -885,7 +903,7 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
                     if mapping.target_domain.upper() == dataset.domain.upper()
                 }
                 for variable in dataset.variables:
-                    if variable.source_dataset.casefold() not in mapped_sources:
+                    if variable.source_dataset and variable.source_dataset.casefold() not in mapped_sources:
                         problems.append(
                             f"Variable {dataset.domain}.{variable.name} references source dataset "
                             f"{variable.source_dataset} without a domain mapping."

@@ -540,7 +540,7 @@ function normalizePlan(value: Record<string, unknown>): SDTMPlanDraft {
     standard: stringValue(value.standard, "SDTMIG 3.4"),
     define_standard: stringValue(value.define_standard, "Define-XML 2.1"),
     domain_mappings: arrayValue<DomainMapping>(value.domain_mappings),
-    datasets: arrayValue<SDTMDataset>(value.datasets).map((dataset) => ({ ...dataset, variables: arrayValue<SDTMVariable>(dataset.variables).map((variable) => ({ ...variable, controlled_terms: arrayValue<string>(variable.controlled_terms), value_level_metadata: arrayValue<ValueLevelMetadata>(variable.value_level_metadata) })) })),
+    datasets: arrayValue<SDTMDataset>(value.datasets).map((dataset) => ({ ...dataset, variables: arrayValue<SDTMVariable>(dataset.variables).map((variable) => ({ ...variable, source_dataset: stringValue(variable.source_dataset, ""), source_field: stringValue(variable.source_field, ""), controlled_terms: arrayValue<string>(variable.controlled_terms), value_level_metadata: arrayValue<ValueLevelMetadata>(variable.value_level_metadata) })) })),
     domain_rule_augmentations: arrayValue<DomainRule>(value.domain_rule_augmentations),
     rule_augmentations: arrayValue<VariableRule>(value.rule_augmentations),
     assumptions: arrayValue<string>(value.assumptions),
@@ -558,9 +558,7 @@ function reconcilePlan(plan: SDTMPlanDraft): SDTMPlanDraft {
   });
   const variableRules: VariableRule[] = [];
   plan.datasets.forEach((dataset) => {
-    const sources = plan.domain_mappings.filter((mapping) => mapping.target_domain === dataset.domain).map((mapping) => mapping.source_dataset);
     dataset.variables.forEach((variable) => {
-      if (!variable.source_dataset && sources[0]) variable.source_dataset = sources[0];
       const existing = plan.rule_augmentations.find((rule) => rule.target_domain === dataset.domain && rule.target_variable === variable.name);
       variableRules.push(existing ?? newVariableRule(dataset.domain, variable));
     });
@@ -578,8 +576,12 @@ function reviewIssues(plan: SDTMPlanDraft): string[] {
     if (!dataset.variables.length) issues.push(`${dataset.domain} needs at least one variable.`);
     dataset.variables.forEach((variable) => {
       if (!variable.name.trim()) issues.push(`${dataset.domain} has a variable without a target name.`);
-      if (!variable.source_dataset.trim()) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs a source dataset.`);
-      if (!mappings.some((mapping) => mapping.source_dataset === variable.source_dataset)) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} uses an unmapped source dataset.`);
+      const hasDataset = Boolean(variable.source_dataset.trim());
+      const hasField = Boolean(variable.source_field.trim());
+      if (hasDataset !== hasField) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs both a source dataset and field, or neither.`);
+      if (hasDataset && !mappings.some((mapping) => mapping.source_dataset === variable.source_dataset)) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} uses an unmapped source dataset.`);
+      if (!hasDataset && !allowsSourcelessOrigin(variable.origin)) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs an assigned or derived origin without a raw source.`);
+      if (!hasDataset && (!variable.mapping_expression.trim() || variable.mapping_expression.trim().toLowerCase() === "direct")) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs explicit assignment or derivation logic.`);
     });
   });
   return issues;
@@ -618,5 +620,6 @@ function stringList(value: unknown): string[] | null { if (!Array.isArray(value)
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function stringValue(value: unknown, fallback: string): string { return typeof value === "string" ? value : fallback; }
 function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
+function allowsSourcelessOrigin(value: string): boolean { const normalized = value.trim().toLowerCase(); return ["assigned", "derived", "protocol", "system", "sponsor"].some((token) => normalized.includes(token)); }
 function splitList(value: string): string[] { return value.split(",").map((item) => item.trim()).filter(Boolean); }
 function splitLines(value: string): string[] { return value.split("\n").map((item) => item.trim()).filter(Boolean); }

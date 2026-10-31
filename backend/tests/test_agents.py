@@ -91,6 +91,68 @@ def test_sdtm_domain_mapping_accepts_reviewed_not_mapped_sources() -> None:
         SDTMUseCase.validate_domain_mapping(source_spec, conflicting)
 
 
+def test_sdtm_variable_mapping_accepts_assigned_values_without_raw_sources() -> None:
+    source_spec = EDCSourceSpecification.model_validate(
+        {
+            "study_name": "SYN-ASSIGNED",
+            "datasets": [
+                {
+                    "name": "RAW_DM",
+                    "label": "Demographics",
+                    "variables": [
+                        {"name": "SUBJID", "label": "Subject", "provenance": {"file": "edc.json"}}
+                    ],
+                    "provenance": {"file": "edc.json"},
+                }
+            ],
+        }
+    )
+    domain_mapping = SDTMDomainMappingPlan.model_validate(
+        {
+            "study_name": "SYN-ASSIGNED",
+            "domain_mappings": [
+                {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "Demographics"}
+            ],
+        }
+    )
+    payload = {
+        "study_name": "SYN-ASSIGNED",
+        "datasets": [
+            {
+                "domain": "DM",
+                "description": "Demographics",
+                "variables": [
+                    {
+                        "name": "STUDYID",
+                        "label": "Study Identifier",
+                        "source_dataset": None,
+                        "source_field": None,
+                        "origin": "Assigned",
+                        "mapping_expression": "Assign the approved study identifier SYN-ASSIGNED.",
+                    },
+                    {
+                        "name": "SUBJID",
+                        "label": "Subject Identifier",
+                        "source_dataset": "RAW_DM",
+                        "source_field": "SUBJID",
+                        "origin": "CRF",
+                        "mapping_expression": "Direct",
+                    },
+                ],
+            }
+        ],
+    }
+    mapping = SDTMVariableMappingPlan.model_validate(payload)
+    SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, mapping)
+
+    invalid_payload = mapping.model_dump()
+    invalid_payload["datasets"][0]["variables"][0]["source_dataset"] = "Assigned"
+    invalid_payload["datasets"][0]["variables"][0]["source_field"] = "STUDYID"
+    invalid = SDTMVariableMappingPlan.model_validate(invalid_payload)
+    with pytest.raises(ValueError, match="unknown source dataset Assigned"):
+        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid)
+
+
 class FakeMessage:
     def __init__(self, call):
         self.content = None

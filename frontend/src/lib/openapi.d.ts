@@ -1256,10 +1256,16 @@ export interface components {
              * @enum {string}
              */
             data_type: "Char" | "Num";
-            /** Source Dataset */
-            source_dataset: string;
-            /** Source Field */
-            source_field: string;
+            /**
+             * Source Dataset
+             * @description Approved source dataset when the target has a direct single-field source; null for assigned or derived values without one raw source
+             */
+            source_dataset?: string | null;
+            /**
+             * Source Field
+             * @description Source field paired with source_dataset; null for assigned or derived values without one raw source
+             */
+            source_field?: string | null;
             /**
              * Origin
              * @default CRF

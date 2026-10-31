@@ -466,7 +466,9 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
             description.append(_translated_text(odm_ns, variable.label))
             origin = etree.SubElement(item, f"{{{def_ns}}}Origin", Type=variable.origin)
             origin_description = etree.SubElement(origin, f"{{{odm_ns}}}Description")
-            origin_description.append(_translated_text(odm_ns, variable.source_field))
+            origin_description.append(
+                _translated_text(odm_ns, variable.source_field or variable.mapping_expression)
+            )
             annotation = annotations.get((dataset.domain.upper(), variable.name.upper()))
             if annotation and annotation.get("page"):
                 document_reference = etree.SubElement(origin, f"{{{def_ns}}}DocumentRef", leafID="LF.ACRF")
@@ -584,7 +586,7 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
     for dataset in result.datasets:
         for variable in dataset.variables:
             matches: list[tuple[fitz.Page, fitz.Rect]] = []
-            needle = (variable.crf_source_label or variable.source_field).strip()
+            needle = (variable.crf_source_label or variable.source_field or "").strip()
             if needle and len(needle) >= 2:
                 for page in document:
                     for rect in page.search_for(needle):

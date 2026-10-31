@@ -268,6 +268,8 @@ def propose_repair(attempt: ExecutionAttempt, plan: SDTMPlan, inventory: list[Ra
         return None
     for dataset in plan.datasets:
         for variable in dataset.variables:
+            if not variable.source_dataset or not variable.source_field:
+                continue
             if variable.source_field.casefold() != unknown.casefold() and unknown.casefold() not in next((rule.r_expression.casefold() for rule in plan.rule_augmentations if rule.target_domain == dataset.domain and rule.target_variable == variable.name), ""):
                 continue
             source_inventory = next((item for item in inventory if item.logical_name == variable.source_dataset.upper()), None)

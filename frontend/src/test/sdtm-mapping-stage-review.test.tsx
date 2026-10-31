@@ -46,6 +46,17 @@ describe("SDTM mapping review gates", () => {
     expect(approve).toHaveBeenCalledWith(variable);
   });
 
+  it("accepts an assigned variable without a raw source", () => {
+    const approve = vi.fn();
+    const assigned = structuredClone(variable);
+    assigned.datasets[0].variables.push({ name: "STUDYID", label: "Study Identifier", data_type: "Char", source_dataset: null, source_field: null, origin: "Assigned", mapping_expression: "Assign the approved study identifier SYN-101.", controlled_terms: [], value_level_metadata: [], crf_source_label: null });
+    render(<SDTMVariableMappingReview value={{ source_spec: source, domain_mapping: domain, variable_mapping: assigned }} onChange={vi.fn()} onApprove={approve} saving={false} />);
+
+    expect(screen.getByDisplayValue("No raw source — assigned/derived")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Approve mappings and generate rules/code"));
+    expect(approve).toHaveBeenCalledWith(expect.objectContaining({ datasets: assigned.datasets }));
+  });
+
   it("allows a source to be reviewed as intentionally not mapped", () => {
     const approve = vi.fn();
     const onChange = vi.fn();

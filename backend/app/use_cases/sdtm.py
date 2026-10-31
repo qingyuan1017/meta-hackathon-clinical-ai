@@ -242,8 +242,11 @@ class SDTMUseCase(ClinicalUseCase):
                 objective=(
                     f"Stage 2 of 3, complete-data batch for target {target_domain}: preserve the supplied "
                     "approved domain relationships and return exactly one target dataset for this domain. "
-                    "Determine its complete variable and value-level mapping. When no blank CRF is supplied, "
-                    "leave crf_source_label null. Do not generate code."
+                    "Determine its complete variable and value-level mapping. For assigned constants or derived "
+                    "variables without one direct raw field, set both source_dataset and source_field to null, "
+                    "use an Assigned, Derived, Protocol, or System origin, and document the value or derivation "
+                    "in mapping_expression. Never use an origin such as Assigned as a dataset name. When no blank "
+                    "CRF is supplied, leave crf_source_label null. Do not generate code."
                 ),
                 source=self._variable_mapping_source(
                     target_domain=target_domain,
@@ -639,17 +642,42 @@ class SDTMUseCase(ClinicalUseCase):
         for dataset in mapping.datasets:
             allowed_sources = mapped_sources.get(dataset.domain.upper(), set())
             for variable in dataset.variables:
-                source_name = variable.source_dataset.upper()
+                source_dataset = (variable.source_dataset or "").strip()
+                source_field = (variable.source_field or "").strip()
+                if bool(source_dataset) != bool(source_field):
+                    problems.append(
+                        f"{dataset.domain}.{variable.name} must provide both source_dataset and source_field, "
+                        "or leave both null for an assigned or derived value."
+                    )
+                    continue
+                if not source_dataset:
+                    if not SDTMUseCase._allows_sourceless_variable(variable.origin):
+                        problems.append(
+                            f"{dataset.domain}.{variable.name} has no raw source and needs an Assigned, Derived, "
+                            "Protocol, System, or Sponsor origin."
+                        )
+                    if not variable.mapping_expression.strip() or variable.mapping_expression.strip().casefold() == "direct":
+                        problems.append(
+                            f"{dataset.domain}.{variable.name} has no raw source and needs an explicit assignment "
+                            "or derivation in mapping_expression."
+                        )
+                    continue
+                source_name = source_dataset.upper()
                 if source_name not in known_sources:
                     problems.append(
-                        f"{dataset.domain}.{variable.name} references unknown source dataset {variable.source_dataset}."
+                        f"{dataset.domain}.{variable.name} references unknown source dataset {source_dataset}."
                     )
                 elif source_name not in allowed_sources:
                     problems.append(
-                        f"{dataset.domain}.{variable.name} source {variable.source_dataset} is not approved for {dataset.domain}."
+                        f"{dataset.domain}.{variable.name} source {source_dataset} is not approved for {dataset.domain}."
                     )
         if problems:
             raise ValueError(" ".join(problems))
+
+    @staticmethod
+    def _allows_sourceless_variable(origin: str) -> bool:
+        normalized = origin.strip().casefold()
+        return any(token in normalized for token in ("assigned", "derived", "protocol", "system", "sponsor"))
 
     @staticmethod
     def _agent_options(options: dict[str, Any]) -> dict[str, Any]:

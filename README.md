@@ -352,6 +352,8 @@ The corresponding REST interfaces are:
 
 At the SDTM domain gate, every normalized source dataset must receive an explicit reviewed disposition. Applicable sources may map to one or more target domains; sources outside SDTM tabulation scope are recorded in `unmapped_datasets` with a rationale. The completeness check prevents a source from disappearing because of truncation, but it does not require every source dataset to map to SDTM. A source cannot be both mapped and marked not mapped.
 
+At the variable gate, directly collected variables retain an approved `source_dataset` and `source_field`. Assigned constants and derivations without one direct raw field use `null` for both fields, an Assigned/Derived/Protocol/System/Sponsor origin, and explicit reviewed logic in `mapping_expression`. Origin labels such as `Assigned` are never treated as raw dataset identifiers; their generated variable rules have no fabricated source dependency.
+
 Repository-local Codex skills under `.codex/skills/` describe how an agent coordinates these Workbench MCP tools with the read-only CDISC Library MCP tools where standards metadata is needed. Each skill includes `agents/openai.yaml` metadata that declares its local MCP dependencies.
 
 After the Compose services are running, reload the repository in Codex and invoke a workflow directly:

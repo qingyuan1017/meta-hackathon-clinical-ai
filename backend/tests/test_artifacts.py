@@ -117,6 +117,28 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
         domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Use demographics source", logic="Read the raw demographics dataset", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
         rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", source_dependencies=["RAW_DM.AGE"], description="Copy collected age", logic="Direct assignment", r_expression='.data[["AGE"]]', sas_expression="AGE")],
     )
+    sdtm.datasets[0].variables.append(
+        SDTMVariable(
+            name="STUDYID",
+            label="Study Identifier",
+            source_dataset=None,
+            source_field=None,
+            origin="Assigned",
+            mapping_expression="Assign the approved study identifier SYN-101.",
+        )
+    )
+    sdtm.rule_augmentations.append(
+        SDTMRuleAugmentation(
+            rule_id="DM-STUDYID",
+            target_domain="DM",
+            target_variable="STUDYID",
+            source_dependencies=[],
+            description="Assign study identifier",
+            logic="Assign the approved constant SYN-101",
+            r_expression='"SYN-101"',
+            sas_expression='"SYN-101"',
+        )
+    )
     sdtm_paths = render_sdtm(sdtm, crf, tmp_path, ["r", "sas"])
     define_path = next(path for path in sdtm_paths if path.name == "define.xml")
     tree = etree.parse(str(define_path))
