@@ -1,23 +1,24 @@
 import { AlertTriangle, Info } from "lucide-react";
 import { getFeedbackDecisionSequence, type RevisionFeedbackEvent } from "@/lib/revision-decision";
 
-export function RevisionDecisionPanel({ result, warnings = [], events = [], compact = false }: { result: unknown; warnings?: string[]; events?: RevisionFeedbackEvent[]; compact?: boolean }) {
+export function RevisionDecisionPanel({ result, warnings = [], events = [], compact = false, title = "Feedback decisions", ariaLabel = "Feedback decisions", onlyMatchedFeedback = false }: { result: unknown; warnings?: string[]; events?: RevisionFeedbackEvent[]; compact?: boolean; title?: string; ariaLabel?: string; onlyMatchedFeedback?: boolean }) {
   const sequence = getFeedbackDecisionSequence(result, warnings, events);
-  if (!sequence.entries.length && !sequence.unmatched.length && !sequence.assumptions.length) return null;
+  const entries = onlyMatchedFeedback ? sequence.entries.filter((entry) => entry.decisions.length > 0) : sequence.entries;
+  if (!entries.length && !sequence.unmatched.length && !sequence.assumptions.length) return null;
 
   return (
-    <section aria-label="Feedback decisions" className={`rounded-xl border border-amber-500/25 bg-amber-500/[0.07] ${compact ? "p-3" : "p-4"}`}>
+    <section aria-label={ariaLabel} className={`rounded-xl border border-amber-500/25 bg-amber-500/[0.07] ${compact ? "p-3" : "p-4"}`}>
       <div className="flex items-start gap-3">
         <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-amber-500/15 text-amber-300"><AlertTriangle size={17} /></span>
         <div className="min-w-0">
-          <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-300">Feedback decisions</p>
+          <p className="text-xs font-black uppercase tracking-[0.12em] text-amber-300">{title}</p>
           <p className="mt-1 text-xs leading-5 text-amber-100/80">Feedback and its recorded outcome are shown together in submission order. This is an audit summary, not private model reasoning.</p>
         </div>
       </div>
 
-      {sequence.entries.length > 0 && (
+      {entries.length > 0 && (
         <ol className="mt-4 space-y-3">
-          {sequence.entries.map((entry, index) => (
+          {entries.map((entry, index) => (
             <li key={`${entry.eventIndex}-${entry.feedback}`} className="rounded-lg border border-white/10 bg-black/10 p-3">
               <div className="flex gap-2 text-xs leading-5"><span className="font-black text-sky-300">{index + 1}.</span><div><p className="font-bold text-sky-200">Your feedback</p><p className="text-zinc-300">{entry.feedback}</p></div></div>
               <div className="mt-2 border-l-2 border-amber-400/50 pl-3">

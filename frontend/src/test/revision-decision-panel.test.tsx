@@ -49,4 +49,17 @@ describe("RevisionDecisionPanel", () => {
     expect(decision.unresolved).toHaveLength(2);
     expect(decision.assumptions).toEqual(result.assumptions);
   });
+
+  it("can hide unrelated feedback in a domain-scoped decision panel", () => {
+    render(<RevisionDecisionPanel
+      result={{ unresolved_mappings: ["DM decision"] }}
+      events={[{ type: "user_feedback", actor: "user", summary: "Revise AE" }]}
+      title="DM feedback decisions"
+      ariaLabel="DM feedback decisions"
+      onlyMatchedFeedback
+    />);
+
+    expect(screen.getByRole("region", { name: "DM feedback decisions" })).toHaveTextContent("DM decision");
+    expect(screen.queryByText("Revise AE")).not.toBeInTheDocument();
+  });
 });

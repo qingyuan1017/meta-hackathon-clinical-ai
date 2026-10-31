@@ -3,7 +3,9 @@
 import { useMemo, useState, type DragEvent, type ReactNode } from "react";
 import { AlertTriangle, ArrowRight, Database, GripVertical, Plus, Save, Table2, Trash2 } from "lucide-react";
 import type { Job } from "@/lib/types";
+import type { RevisionFeedbackEvent } from "@/lib/revision-decision";
 import { groupOperationsByDomain, ReviewPatchPanel } from "./review-patch-panel";
+import { RevisionDecisionPanel } from "./revision-decision-panel";
 import { Button } from "./ui/button";
 
 type SourceType = "raw" | "sdtm";
@@ -156,13 +158,14 @@ export function SDTMDomainMappingReview({ value, onChange, onApprove, saving, er
   </div>;
 }
 
-export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, error, reviewJob }: {
+export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, error, reviewJob, feedbackEvents }: {
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>) => void;
   onApprove: (value: SDTMVariableMappingPlanDraft) => void;
   saving: boolean;
   error?: string | null;
   reviewJob?: Job;
+  feedbackEvents?: RevisionFeedbackEvent[];
 }) {
   const envelope = normalizeVariableEnvelope(value);
   const plan = envelope.variable_mapping;
@@ -181,6 +184,10 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
       ? groupOperationsByDomain(reviewJob.review_patch.operations, recordValue(reviewJob.result)).map((group) => [group.domain, group.operations.length])
       : [],
   );
+  const activeAssumptions = active ? domainReviewNotes(plan, envelope.domain_mapping, active.domain, "review_assumptions") : [];
+  const activeUnresolved = active ? domainReviewNotes(plan, envelope.domain_mapping, active.domain, "review_unresolved_mappings") : [];
+  const stageAssumptions = stageWideReviewNotes(plan, envelope.domain_mapping, "assumptions");
+  const stageUnresolved = stageWideReviewNotes(plan, envelope.domain_mapping, "unresolved_mappings");
 
   return <div className="space-y-5">
     <ReviewGateHeader step="3 of 3" title="Variable and value-level mapping review required" description="Review each SDTM variable row and the VLM cells. Rule augmentation and code generation remain blocked until this matrix is approved." />
@@ -195,8 +202,8 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
       {reviewJob?.review_patch && <div className="px-4"><ReviewPatchPanel job={reviewJob} domain={active.domain} /></div>}
       <div className="border-b border-white/10 p-4"><ReviewNotes
         title={`${active.domain} mapping comments`}
-        assumptions={domainReviewNotes(plan, envelope.domain_mapping, active.domain, "review_assumptions")}
-        unresolved={domainReviewNotes(plan, envelope.domain_mapping, active.domain, "review_unresolved_mappings")}
+        assumptions={activeAssumptions}
+        unresolved={activeUnresolved}
         onAssumptions={(items) => updateDomainReviewNotes(active.domain, "review_assumptions", items, update)}
         onUnresolved={(items) => updateDomainReviewNotes(active.domain, "review_unresolved_mappings", items, update)}
       /></div>
@@ -211,9 +218,19 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
         <Cell className="min-w-[360px]"><div className="space-y-2">{variable.value_level_metadata.map((vlm, vlmIndex) => <div key={vlmIndex} className="rounded-lg border border-cyan-500/15 bg-cyan-500/[0.04] p-2"><div className="grid grid-cols-2 gap-1"><input value={vlm.where_clause} onChange={(event) => updateVlm(active.domain, variableIndex, vlmIndex, update, "where_clause", event.target.value)} placeholder="Where clause" className={inputClass} /><input value={vlm.label} onChange={(event) => updateVlm(active.domain, variableIndex, vlmIndex, update, "label", event.target.value)} placeholder="Label" className={inputClass} /></div><textarea rows={2} value={vlm.mapping_expression} onChange={(event) => updateVlm(active.domain, variableIndex, vlmIndex, update, "mapping_expression", event.target.value)} placeholder="Mapping value / expression" className={`${inputClass} mt-1`} /><div className="mt-1 flex gap-1"><input value={vlm.controlled_terms.join(", ")} onChange={(event) => updateVlm(active.domain, variableIndex, vlmIndex, update, "controlled_terms", splitList(event.target.value))} placeholder="Controlled terms" className={inputClass} /><button type="button" aria-label="Remove VLM" onClick={() => update((next) => { next.datasets.find((item) => item.domain === active.domain)?.variables[variableIndex].value_level_metadata.splice(vlmIndex, 1); })} className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-zinc-600 hover:text-rose-300"><Trash2 size={13} /></button></div></div>)}<button type="button" onClick={() => update((next) => { next.datasets.find((item) => item.domain === active.domain)?.variables[variableIndex].value_level_metadata.push(newVlm()); })} className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-white/10 py-2 text-[10px] font-black uppercase tracking-wider text-zinc-500 hover:text-cyan-300"><Plus size={12} />VLM cell</button></div></Cell>
         <Cell><button type="button" aria-label={`Remove ${variable.name}`} onClick={() => update((next) => { next.datasets.find((item) => item.domain === active.domain)?.variables.splice(variableIndex, 1); })} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:text-rose-300"><Trash2 size={14} /></button></Cell>
       </tr>)}</tbody></table></div>
+      {(activeAssumptions.length > 0 || activeUnresolved.length > 0) && <div className="border-t border-white/10 p-4"><RevisionDecisionPanel
+        result={{ assumptions: activeAssumptions, unresolved_mappings: activeUnresolved }}
+        events={feedbackEvents}
+        title={`${active.domain} feedback decisions`}
+        ariaLabel={`${active.domain} feedback decisions`}
+        onlyMatchedFeedback
+      /></div>}
     </section>}
     {reviewJob?.review_patch && <ReviewPatchPanel job={reviewJob} domain="General" />}
-    {(stageWideReviewNotes(plan, envelope.domain_mapping, "assumptions").length > 0 || stageWideReviewNotes(plan, envelope.domain_mapping, "unresolved_mappings").length > 0) && <ReviewNotes title="Stage-wide comments" assumptions={stageWideReviewNotes(plan, envelope.domain_mapping, "assumptions")} unresolved={stageWideReviewNotes(plan, envelope.domain_mapping, "unresolved_mappings")} onAssumptions={(items) => update((next) => { next.assumptions = mergeStageAndDomainNotes(items, next.datasets, "review_assumptions"); })} onUnresolved={(items) => update((next) => { next.unresolved_mappings = mergeStageAndDomainNotes(items, next.datasets, "review_unresolved_mappings"); })} />}
+    {(stageAssumptions.length > 0 || stageUnresolved.length > 0) && <>
+      <ReviewNotes title="Stage-wide comments" assumptions={stageAssumptions} unresolved={stageUnresolved} onAssumptions={(items) => update((next) => { next.assumptions = mergeStageAndDomainNotes(items, next.datasets, "review_assumptions"); })} onUnresolved={(items) => update((next) => { next.unresolved_mappings = mergeStageAndDomainNotes(items, next.datasets, "review_unresolved_mappings"); })} />
+      <RevisionDecisionPanel result={{ assumptions: stageAssumptions, unresolved_mappings: stageUnresolved }} events={feedbackEvents} title="Stage-wide feedback decisions" ariaLabel="Stage-wide feedback decisions" onlyMatchedFeedback />
+    </>}
     <ApprovalBar issues={issues} error={error} saving={saving} readyText="Every approved domain has a reviewable variable matrix." actionText="Approve mappings and generate rules/code" onApprove={() => onApprove(plan)} />
   </div>;
 }

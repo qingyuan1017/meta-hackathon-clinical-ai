@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { SDTMDomainMappingReview, SDTMVariableMappingReview } from "@/components/sdtm-mapping-stage-review";
@@ -66,10 +66,18 @@ describe("SDTM mapping review gates", () => {
     expect(screen.getByText("DM mapping comments")).toBeInTheDocument();
     expect(screen.getByDisplayValue("DM assumption")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("AE assumption")).not.toBeInTheDocument();
+    const dmDecisions = screen.getByRole("region", { name: "DM feedback decisions" });
+    expect(within(dmDecisions).getByText("DM decision")).toBeInTheDocument();
+    expect(within(dmDecisions).queryByText("AE decision")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "AE feedback decisions" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "AE" }));
     expect(screen.getByText("AE mapping comments")).toBeInTheDocument();
     expect(screen.getByDisplayValue("AE assumption")).toBeInTheDocument();
     expect(screen.queryByDisplayValue("DM assumption")).not.toBeInTheDocument();
+    const aeDecisions = screen.getByRole("region", { name: "AE feedback decisions" });
+    expect(within(aeDecisions).getByText("AE decision")).toBeInTheDocument();
+    expect(within(aeDecisions).queryByText("DM decision")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "DM feedback decisions" })).not.toBeInTheDocument();
   });
 
   it("accepts an assigned variable without a raw source", () => {
