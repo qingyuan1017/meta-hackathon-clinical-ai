@@ -27,6 +27,7 @@ from app.use_cases.base import UseCaseContext
 from app.use_cases.protocol_extraction import ProtocolExtractionUseCase
 from app.use_cases.sdtm import SDTMUseCase
 from app.use_cases.tlf import TLFUseCase
+from tests.sdtm_helpers import read_plan, source
 
 
 def test_sdtm_submission_requires_edc_but_not_crf() -> None:
@@ -121,20 +122,20 @@ def test_sdtm_variable_mapping_accepts_assigned_values_without_raw_sources() -> 
             {
                 "domain": "DM",
                 "description": "Demographics",
+                "record_plan": read_plan("DM", "RAW_DM").model_dump(mode="json"),
                 "variables": [
                     {
                         "name": "STUDYID",
                         "label": "Study Identifier",
-                        "source_dataset": None,
-                        "source_field": None,
+                        "mapping_type": "assigned",
+                        "sources": [],
                         "origin": "Assigned",
                         "mapping_expression": "Assign the approved study identifier SYN-ASSIGNED.",
                     },
                     {
                         "name": "SUBJID",
                         "label": "Subject Identifier",
-                        "source_dataset": "RAW_DM",
-                        "source_field": "SUBJID",
+                        "sources": [source("RAW_DM", "SUBJID").model_dump(mode="json")],
                         "origin": "CRF",
                         "mapping_expression": "Direct",
                     },
@@ -146,10 +147,86 @@ def test_sdtm_variable_mapping_accepts_assigned_values_without_raw_sources() -> 
     SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, mapping)
 
     invalid_payload = mapping.model_dump()
-    invalid_payload["datasets"][0]["variables"][0]["source_dataset"] = "Assigned"
-    invalid_payload["datasets"][0]["variables"][0]["source_field"] = "STUDYID"
+    invalid_payload["datasets"][0]["variables"][0]["mapping_type"] = "direct"
+    invalid_payload["datasets"][0]["variables"][0]["sources"] = [
+        {"dataset": "Assigned", "variable": "STUDYID", "role": "value"}
+    ]
     invalid = SDTMVariableMappingPlan.model_validate(invalid_payload)
     with pytest.raises(ValueError, match="unknown source dataset Assigned"):
+        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid)
+
+
+def test_sdtm_variable_mapping_validates_multi_source_lineage_and_ordered_record_plan() -> None:
+    source_spec = EDCSourceSpecification.model_validate(
+        {
+            "study_name": "SYN-MULTI",
+            "datasets": [
+                {
+                    "name": "RAW_AE",
+                    "label": "Adverse events",
+                    "variables": [
+                        {"name": "SUBJID", "label": "Subject", "provenance": {"file": "edc.json"}},
+                        {"name": "AETERM", "label": "Term", "provenance": {"file": "edc.json"}},
+                    ],
+                    "provenance": {"file": "edc.json"},
+                },
+                {
+                    "name": "RAW_SAE",
+                    "label": "Serious adverse events",
+                    "variables": [
+                        {"name": "SUBJECT", "label": "Subject", "provenance": {"file": "edc.json"}},
+                        {"name": "TERM", "label": "Term", "provenance": {"file": "edc.json"}},
+                    ],
+                    "provenance": {"file": "edc.json"},
+                },
+            ],
+        }
+    )
+    domain_mapping = SDTMDomainMappingPlan.model_validate(
+        {
+            "study_name": "SYN-MULTI",
+            "domain_mappings": [
+                {"source_dataset": "RAW_AE", "target_domain": "AE", "relationship": "merge", "rationale": "AE stream"},
+                {"source_dataset": "RAW_SAE", "target_domain": "AE", "relationship": "merge", "rationale": "SAE stream"},
+            ],
+        }
+    )
+    payload = {
+        "study_name": "SYN-MULTI",
+        "datasets": [
+            {
+                "domain": "AE",
+                "description": "Adverse events",
+                "record_plan": {
+                    "steps": [
+                        {"step_id": "read_ae", "operation": "read", "description": "Read AE", "output": "ae", "source_dataset": "RAW_AE"},
+                        {"step_id": "read_sae", "operation": "read", "description": "Read SAE", "output": "sae", "source_dataset": "RAW_SAE"},
+                        {"step_id": "stack", "operation": "stack", "description": "Stack event streams", "output": "events", "inputs": ["read_ae", "read_sae"]},
+                    ],
+                    "output_step": "stack",
+                },
+                "variables": [
+                    {
+                        "name": "AETERM",
+                        "label": "Reported Term",
+                        "mapping_type": "coalesce",
+                        "sources": [
+                            {"dataset": "RAW_AE", "variable": "AETERM", "role": "value"},
+                            {"dataset": "RAW_SAE", "variable": "TERM", "role": "value"},
+                        ],
+                        "mapping_expression": "Use the aligned term from each stacked source.",
+                    }
+                ],
+            }
+        ],
+    }
+    mapping = SDTMVariableMappingPlan.model_validate(payload)
+    SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, mapping)
+
+    invalid_payload = mapping.model_dump(mode="json")
+    invalid_payload["datasets"][0]["record_plan"]["steps"][0]["inputs"] = ["stack"]
+    invalid = SDTMVariableMappingPlan.model_validate(invalid_payload)
+    with pytest.raises(ValueError, match="unavailable or later step stack"):
         SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid)
 
 
@@ -173,13 +250,15 @@ def test_sdtm_domain_revision_preserves_only_unchanged_variable_batches() -> Non
         "datasets": [
             {
                 "domain": "DM", "description": "Demographics",
+                "record_plan": read_plan("DM", "RAW_DM").model_dump(mode="json"),
                 "review_assumptions": ["DM reviewed"],
-                "variables": [{"name": "AGE", "label": "Age", "data_type": "Num", "source_dataset": "RAW_DM", "source_field": "AGE"}],
+                "variables": [{"name": "AGE", "label": "Age", "data_type": "Num", "sources": [{"dataset": "RAW_DM", "variable": "AGE"}]}],
             },
             {
                 "domain": "AE", "description": "Adverse Events",
+                "record_plan": read_plan("AE", "RAW_AE").model_dump(mode="json"),
                 "review_unresolved_mappings": ["AE obsolete"],
-                "variables": [{"name": "AETERM", "label": "Reported Term", "source_dataset": "RAW_AE", "source_field": "AETERM"}],
+                "variables": [{"name": "AETERM", "label": "Reported Term", "sources": [{"dataset": "RAW_AE", "variable": "AETERM"}]}],
             },
         ],
         "assumptions": ["DM reviewed"],
@@ -189,8 +268,9 @@ def test_sdtm_domain_revision_preserves_only_unchanged_variable_batches() -> Non
         "study_name": "SYN-101",
         "datasets": [{
             "domain": "DS", "description": "Disposition",
+            "record_plan": read_plan("DS", "RAW_AE").model_dump(mode="json"),
             "review_unresolved_mappings": ["DS review"],
-            "variables": [{"name": "DSTERM", "label": "Reported Term", "source_dataset": "RAW_AE", "source_field": "AETERM"}],
+            "variables": [{"name": "DSTERM", "label": "Reported Term", "sources": [{"dataset": "RAW_AE", "variable": "AETERM"}]}],
         }],
         "unresolved_mappings": ["DS review"],
     })
@@ -229,7 +309,8 @@ async def test_sdtm_unchanged_reopened_domain_plan_reuses_variable_mapping_witho
         "study_name": "SYN-101",
         "datasets": [{
             "domain": "DM", "description": "Demographics", "review_assumptions": ["Reviewed DM"],
-            "variables": [{"name": "AGE", "label": "Age", "data_type": "Num", "source_dataset": "RAW_DM", "source_field": "AGE"}],
+            "record_plan": read_plan("DM", "RAW_DM").model_dump(mode="json"),
+            "variables": [{"name": "AGE", "label": "Age", "data_type": "Num", "sources": [{"dataset": "RAW_DM", "variable": "AGE"}]}],
         }],
         "assumptions": ["Reviewed DM"],
     })
@@ -657,13 +738,13 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
             {
                 "domain": "DM",
                 "description": "Demographics",
+                "record_plan": read_plan("DM", "RAW_DM").model_dump(mode="json"),
                 "variables": [
                     {
                         "name": "AGE",
                         "label": "Age",
                         "data_type": "Num",
-                        "source_dataset": "RAW_DM",
-                        "source_field": "AGE",
+                        "sources": [{"dataset": "RAW_DM", "variable": "AGE"}],
                         "crf_source_label": None,
                     }
                 ],
@@ -672,23 +753,11 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
     }
     final_result = {
         "study_name": "SYN-101",
-        "domain_rule_augmentations": [
-            {
-                "rule_id": "DM-SOURCE",
-                "target_domain": "DM",
-                "source_datasets": ["RAW_DM"],
-                "description": "Use demographics source",
-                "logic": "Read the raw demographics dataset",
-                "r_input_expression": "raw_dm",
-                "sas_input_statement": "set raw.raw_dm;",
-            }
-        ],
         "rule_augmentations": [
             {
                 "rule_id": "DM-AGE",
                 "target_domain": "DM",
                 "target_variable": "AGE",
-                "source_dependencies": ["RAW_DM.AGE"],
                 "description": "Copy collected age",
                 "logic": "Direct assignment",
                 "r_expression": '.data[["AGE"]]',
@@ -895,12 +964,12 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
                             {
                                 "domain": target,
                                 "description": target,
+                                "record_plan": read_plan(target, source_dataset).model_dump(mode="json"),
                                 "variables": [
                                     {
                                         "name": source_field,
                                         "label": source_field,
-                                        "source_dataset": source_dataset,
-                                        "source_field": source_field,
+                                        "sources": [{"dataset": source_dataset, "variable": source_field}],
                                     }
                                 ],
                             }
@@ -953,23 +1022,11 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
                 value=SDTMRuleAugmentationPlan.model_validate(
                     {
                         "study_name": "SYN-BATCH",
-                        "domain_rule_augmentations": [
-                            {
-                                "rule_id": f"{target}-SOURCE",
-                                "target_domain": target,
-                                "source_datasets": [source_dataset],
-                                "description": "Prepare source",
-                                "logic": "Direct",
-                                "r_input_expression": source_dataset.lower(),
-                                "sas_input_statement": f"set raw.{source_dataset.lower()};",
-                            }
-                        ],
                         "rule_augmentations": [
                             {
                                 "rule_id": f"{target}-{variable}",
                                 "target_domain": target,
                                 "target_variable": variable,
-                                "source_dependencies": [f"{source_dataset}.{variable}"],
                                 "description": "Direct",
                                 "logic": "Direct",
                                 "r_expression": f'.data[["{variable}"]] ',
@@ -995,7 +1052,7 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
         variable_mapping=variable_mapping,
     )
 
-    assert [rule.target_domain for rule in rule_plan.domain_rule_augmentations] == ["DM", "AE"]
+    assert [rule.target_domain for rule in rule_plan.rule_augmentations] == ["DM", "AE"]
     assert [call["target"] for call in rule_calls] == ["DM", "AE"]
     assert '"domain":"AE"' not in rule_calls[0]["source"]
     assert '"domain":"DM"' not in rule_calls[1]["source"]

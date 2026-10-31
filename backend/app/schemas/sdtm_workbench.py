@@ -74,8 +74,9 @@ class ExecutionCheck(BaseModel):
 class RepairChange(BaseModel):
     domain: str
     target_variable: str
-    from_source_field: str
-    to_source_field: str
+    source_dataset: str
+    from_source_variable: str
+    to_source_variable: str
 
 
 class RepairProposal(BaseModel):

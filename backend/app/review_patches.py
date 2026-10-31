@@ -13,7 +13,7 @@ from .schemas.reviews import ReviewPatchOperation, ReviewScope
 
 
 VARIABLE_FIELDS = {
-    "name", "label", "data_type", "source_dataset", "source_field", "origin",
+    "name", "label", "data_type", "mapping_type", "sources", "origin",
     "mapping_expression", "controlled_terms", "value_level_metadata", "crf_source_label",
 }
 

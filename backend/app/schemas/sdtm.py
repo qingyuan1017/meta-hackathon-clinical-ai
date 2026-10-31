@@ -29,12 +29,78 @@ class SDTMDomainMappingPlan(BaseModel):
     unresolved_mappings: list[str] = Field(default_factory=list)
 
 
+class SDTMSourceReference(BaseModel):
+    dataset: str = Field(description="Approved source dataset identifier")
+    variable: str = Field(description="Approved source variable identifier")
+    role: Literal["value", "join_key", "lookup", "filter", "timing", "grouping", "sequence"] = "value"
+
+
+class SDTMJoinKey(BaseModel):
+    left: str
+    right: str
+
+
+class SDTMStackColumnSource(BaseModel):
+    input: str = Field(description="Source dataset or earlier step identifier")
+    variable: str
+
+
+class SDTMStackColumn(BaseModel):
+    target: str
+    sources: list[SDTMStackColumnSource] = Field(min_length=1)
+
+
+class SDTMTransposeValue(BaseModel):
+    source_variable: str
+    name_value: str
+
+
+class SDTMAggregation(BaseModel):
+    output_variable: str
+    operation: Literal["count", "sum", "min", "max", "mean", "first", "last"]
+    source_variable: str | None = None
+
+
+class SDTMRecordStep(BaseModel):
+    step_id: str
+    operation: Literal["read", "stack", "join", "transpose", "filter", "deduplicate", "aggregate"]
+    description: str
+    output: str
+    inputs: list[str] = Field(default_factory=list)
+    source_dataset: str | None = None
+    column_alignment: list[SDTMStackColumn] = Field(default_factory=list)
+    left: str | None = None
+    right: str | None = None
+    join_type: Literal["left", "inner", "full", "right"] | None = None
+    join_keys: list[SDTMJoinKey] = Field(default_factory=list)
+    cardinality: Literal["one_to_one", "one_to_many", "many_to_one", "many_to_many"] | None = None
+    id_variables: list[str] = Field(default_factory=list)
+    value_variables: list[str] = Field(default_factory=list)
+    name_variable: str | None = None
+    value_variable: str | None = None
+    transpose_values: list[SDTMTransposeValue] = Field(default_factory=list)
+    condition: str | None = None
+    sas_condition: str | None = None
+    keys: list[str] = Field(default_factory=list)
+    order_by: list[str] = Field(default_factory=list)
+    keep: Literal["first", "last"] = "first"
+    group_by: list[str] = Field(default_factory=list)
+    aggregations: list[SDTMAggregation] = Field(default_factory=list)
+    review_notes: list[str] = Field(default_factory=list)
+
+
+class SDTMRecordPlan(BaseModel):
+    steps: list[SDTMRecordStep] = Field(min_length=1)
+    output_step: str
+
+
 class SDTMValueLevelMetadata(BaseModel):
     where_clause: str
     label: str
     data_type: Literal["Char", "Num"] = "Char"
     origin: str = "CRF"
     mapping_expression: str
+    sources: list[SDTMSourceReference] = Field(default_factory=list)
     controlled_terms: list[str] = Field(default_factory=list)
 
 
@@ -42,14 +108,8 @@ class SDTMVariable(BaseModel):
     name: str
     label: str
     data_type: Literal["Char", "Num"] = "Char"
-    source_dataset: str | None = Field(
-        default=None,
-        description="Approved source dataset when the target has a direct single-field source; null for assigned or derived values without one raw source",
-    )
-    source_field: str | None = Field(
-        default=None,
-        description="Source field paired with source_dataset; null for assigned or derived values without one raw source",
-    )
+    mapping_type: Literal["direct", "assigned", "derived", "coalesce", "lookup", "transpose", "aggregate"] = "direct"
+    sources: list[SDTMSourceReference] = Field(default_factory=list)
     origin: str = "CRF"
     mapping_expression: str = "Direct"
     controlled_terms: list[str] = Field(default_factory=list)
@@ -69,6 +129,7 @@ class SDTMDataset(BaseModel):
     key_variables: list[str] = Field(default_factory=lambda: ["STUDYID", "USUBJID"])
     dataset_class: str = "Special Purpose"
     purpose: str = "Tabulation"
+    record_plan: SDTMRecordPlan
     variables: list[SDTMVariable] = Field(min_length=1)
     review_assumptions: list[str] = Field(
         default_factory=list,
@@ -100,22 +161,10 @@ class SDTMVariableMappingReview(BaseModel):
     variable_mapping: SDTMVariableMappingPlan
 
 
-class SDTMDomainRuleAugmentation(BaseModel):
-    rule_id: str
-    target_domain: str
-    source_datasets: list[str] = Field(min_length=1)
-    description: str
-    logic: str
-    r_input_expression: str
-    sas_input_statement: str
-    review_notes: list[str] = Field(default_factory=list)
-
-
 class SDTMRuleAugmentation(BaseModel):
     rule_id: str
     target_domain: str
     target_variable: str
-    source_dependencies: list[str] = Field(default_factory=list)
     description: str
     logic: str
     r_expression: str
@@ -126,7 +175,6 @@ class SDTMRuleAugmentation(BaseModel):
 class SDTMRuleAugmentationPlan(BaseModel):
     study_name: str
     standard: str = "SDTMIG 3.4"
-    domain_rule_augmentations: list[SDTMDomainRuleAugmentation] = Field(min_length=1)
     rule_augmentations: list[SDTMRuleAugmentation] = Field(min_length=1)
     assumptions: list[str] = Field(default_factory=list)
     unresolved_mappings: list[str] = Field(default_factory=list)
@@ -135,5 +183,4 @@ class SDTMRuleAugmentationPlan(BaseModel):
 class SDTMPlan(SDTMVariableMappingPlan):
     domain_mappings: list[SDTMDomainMapping] = Field(min_length=1)
     unmapped_datasets: list[SDTMUnmappedDataset] = Field(default_factory=list)
-    domain_rule_augmentations: list[SDTMDomainRuleAugmentation] = Field(min_length=1)
     rule_augmentations: list[SDTMRuleAugmentation] = Field(min_length=1)

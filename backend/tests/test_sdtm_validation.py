@@ -6,7 +6,8 @@ import zipfile
 from openpyxl import Workbook
 
 from app.csdrg import build_csdrg, render_csdrg
-from app.schemas import SDTMDataset, SDTMDomainMapping, SDTMDomainRuleAugmentation, SDTMPlan, SDTMRuleAugmentation, SDTMVariable
+from app.schemas import SDTMDataset, SDTMDomainMapping, SDTMPlan, SDTMRuleAugmentation, SDTMVariable
+from tests.sdtm_helpers import read_plan, source
 from app.sdtm_validation import Pinnacle21CLIProvider, import_pinnacle21_report, save_validation
 from app.sdtm_workbench import initialize_state
 from app.sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
@@ -16,8 +17,7 @@ def _plan() -> SDTMPlan:
     return SDTMPlan(
         study_name="SYN-VAL",
         domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic")],
-        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="USUBJID", label="Subject", source_dataset="RAW_DM", source_field="USUBJID")])],
-        domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Read", logic="Direct", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", record_plan=read_plan("DM", "RAW_DM"), variables=[SDTMVariable(name="USUBJID", label="Subject", sources=[source("RAW_DM", "USUBJID")])])],
         rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-USUBJID", target_domain="DM", target_variable="USUBJID", description="Direct", logic="Direct", r_expression='.data[["USUBJID"]]', sas_expression="USUBJID")],
     )
 

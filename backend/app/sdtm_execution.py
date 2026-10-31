@@ -281,25 +281,31 @@ def propose_repair(attempt: ExecutionAttempt, plan: SDTMPlan, inventory: list[Ra
         return None
     for dataset in plan.datasets:
         for variable in dataset.variables:
-            if not variable.source_dataset or not variable.source_field:
-                continue
-            if variable.source_field.casefold() != unknown.casefold() and unknown.casefold() not in next((rule.r_expression.casefold() for rule in plan.rule_augmentations if rule.target_domain == dataset.domain and rule.target_variable == variable.name), ""):
-                continue
-            source_inventory = next((item for item in inventory if item.logical_name == variable.source_dataset.upper()), None)
-            if source_inventory is None:
-                continue
-            available = [column.name for column in source_inventory.columns]
-            matches = difflib.get_close_matches(unknown, available, n=1, cutoff=0.55)
-            if not matches:
-                continue
-            replacement = matches[0]
-            change = RepairChange(domain=dataset.domain, target_variable=variable.name, from_source_field=variable.source_field, to_source_field=replacement)
-            return RepairProposal(
-                proposal_id=f"repair-{uuid4().hex[:12]}",
-                rationale=f"The runner reported missing source column {unknown!r}; {replacement!r} is the closest reviewed column in {source_inventory.logical_name}.",
-                diff=f"{dataset.domain}.{variable.name}: source_field {variable.source_field!r} -> {replacement!r}",
-                change=change,
-            )
+            rule_expression = next((rule.r_expression.casefold() for rule in plan.rule_augmentations if rule.target_domain == dataset.domain and rule.target_variable == variable.name), "")
+            for source in variable.sources:
+                if source.variable.casefold() != unknown.casefold() and unknown.casefold() not in rule_expression:
+                    continue
+                source_inventory = next((item for item in inventory if item.logical_name == source.dataset.upper()), None)
+                if source_inventory is None:
+                    continue
+                available = [column.name for column in source_inventory.columns]
+                matches = difflib.get_close_matches(unknown, available, n=1, cutoff=0.55)
+                if not matches:
+                    continue
+                replacement = matches[0]
+                change = RepairChange(
+                    domain=dataset.domain,
+                    target_variable=variable.name,
+                    source_dataset=source.dataset,
+                    from_source_variable=source.variable,
+                    to_source_variable=replacement,
+                )
+                return RepairProposal(
+                    proposal_id=f"repair-{uuid4().hex[:12]}",
+                    rationale=f"The runner reported missing source column {unknown!r}; {replacement!r} is the closest reviewed column in {source_inventory.logical_name}.",
+                    diff=f"{dataset.domain}.{variable.name}: {source.dataset}.{source.variable} -> {source.dataset}.{replacement}",
+                    change=change,
+                )
     return None
 
 
@@ -308,15 +314,18 @@ def apply_typed_repair(plan: SDTMPlan, proposal: RepairProposal) -> SDTMPlan:
     change = proposal.change
     dataset = next((item for item in repaired.datasets if item.domain == change.domain), None)
     variable = next((item for item in dataset.variables if item.name == change.target_variable), None) if dataset else None
-    if variable is None or variable.source_field != change.from_source_field:
+    source = next((
+        item for item in variable.sources
+        if item.dataset == change.source_dataset and item.variable == change.from_source_variable
+    ), None) if variable else None
+    if variable is None or source is None:
         raise ValueError("The reviewed plan changed after this proposal.")
-    variable.source_field = change.to_source_field
-    variable.mapping_expression = f"Direct from {change.to_source_field} (approved repair)"
+    source.variable = change.to_source_variable
+    variable.mapping_expression = f"Approved repair uses {change.source_dataset}.{change.to_source_variable}."
     rule = next((item for item in repaired.rule_augmentations if item.target_domain == change.domain and item.target_variable == change.target_variable), None)
     if rule is None:
         raise ValueError("The typed variable rule for this proposal is unavailable.")
-    rule.source_dependencies = [f"{variable.source_dataset}.{change.to_source_field}"]
-    rule.r_expression = f'.data[["{change.to_source_field}"]]'
+    rule.r_expression = rule.r_expression.replace(change.from_source_variable, change.to_source_variable)
     reviewer = proposal.reviewer or "reviewer"
     rule.review_notes = [*rule.review_notes, f"Repair {proposal.proposal_id} approved by {reviewer}."]
     return repaired

@@ -301,8 +301,8 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
             "Variable",
             "Label",
             "Type",
-            "Source Dataset",
-            "Source Field",
+            "Mapping Type",
+            "Sources",
             "Origin",
             "Mapping",
             "Controlled Terms",
@@ -318,8 +318,8 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
                     variable.name,
                     variable.label,
                     variable.data_type,
-                    variable.source_dataset,
-                    variable.source_field,
+                    variable.mapping_type,
+                    _source_reference_text(variable.sources),
                     variable.origin,
                     variable.mapping_expression,
                     "; ".join(variable.controlled_terms),
@@ -337,6 +337,7 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
             "Type",
             "Origin",
             "Mapping",
+            "Sources",
             "Controlled Terms",
         ]
     )
@@ -352,36 +353,31 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
                         metadata.data_type,
                         metadata.origin,
                         metadata.mapping_expression,
+                        _source_reference_text(metadata.sources),
                         "; ".join(metadata.controlled_terms),
                     ]
                 )
 
-    domain_rules = workbook.create_sheet("Domain Rule Augmentation")
-    domain_rules.append(
-        [
-            "Rule ID",
-            "Target Domain",
-            "Source Datasets",
-            "Description",
-            "Logic",
-            "R Input Expression",
-            "SAS Input Statement",
-            "Review Notes",
-        ]
-    )
-    for rule in result.domain_rule_augmentations:
-        domain_rules.append(
-            [
-                rule.rule_id,
-                rule.target_domain,
-                "; ".join(rule.source_datasets),
-                rule.description,
-                rule.logic,
-                rule.r_input_expression,
-                rule.sas_input_statement,
-                "; ".join(rule.review_notes),
-            ]
-        )
+    record_steps = workbook.create_sheet("Record Construction")
+    record_steps.append(["Domain", "Step ID", "Operation", "Inputs", "Output", "Description", "Configuration", "Review Notes"])
+    for dataset in result.datasets:
+        for step in dataset.record_plan.steps:
+            configuration = step.model_dump(
+                mode="json",
+                exclude={"step_id", "operation", "inputs", "output", "description", "review_notes"},
+                exclude_none=True,
+                exclude_defaults=True,
+            )
+            record_steps.append([
+                dataset.domain,
+                step.step_id,
+                step.operation,
+                "; ".join(step.inputs),
+                step.output,
+                step.description,
+                json.dumps(configuration, ensure_ascii=False),
+                "; ".join(step.review_notes),
+            ])
 
     rules = workbook.create_sheet("Variable Rule Augmentation")
     rules.append(
@@ -389,7 +385,6 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
             "Rule ID",
             "Target Domain",
             "Target Variable",
-            "Source Dependencies",
             "Description",
             "Logic",
             "R Expression",
@@ -403,7 +398,6 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
                 rule.rule_id,
                 rule.target_domain,
                 rule.target_variable,
-                "; ".join(rule.source_dependencies),
                 rule.description,
                 rule.logic,
                 rule.r_expression,
@@ -416,7 +410,7 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
     assumptions.append([DISCLAIMER])
     for item in [*result.assumptions, *result.unresolved_mappings]:
         assumptions.append([item])
-    for current in (sheet, variables, value_level, domain_rules, rules):
+    for current in (sheet, variables, value_level, record_steps, rules):
         current.freeze_panes = "A2"
         current.auto_filter.ref = current.dimensions
     workbook.save(path)
@@ -474,7 +468,10 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
             origin = etree.SubElement(item, f"{{{def_ns}}}Origin", Type=variable.origin)
             origin_description = etree.SubElement(origin, f"{{{odm_ns}}}Description")
             origin_description.append(
-                _translated_text(odm_ns, variable.source_field or variable.mapping_expression)
+                _translated_text(
+                    odm_ns,
+                    _source_reference_text(variable.sources) or variable.mapping_expression,
+                )
             )
             annotation = annotations.get((dataset.domain.upper(), variable.name.upper()))
             if annotation and annotation.get("page"):
@@ -593,7 +590,10 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
     for dataset in result.datasets:
         for variable in dataset.variables:
             matches: list[tuple[fitz.Page, fitz.Rect]] = []
-            needle = (variable.crf_source_label or variable.source_field or "").strip()
+            needle = (
+                variable.crf_source_label
+                or (variable.sources[0].variable if len(variable.sources) == 1 else "")
+            ).strip()
             if needle and len(needle) >= 2:
                 for page in document:
                     for rect in page.search_for(needle):
@@ -642,9 +642,6 @@ def sdtm_program_filename(domain: str, language: str) -> str:
 
 
 def _render_r_sdtm(result: SDTMPlan, dataset: SDTMDataset, path: Path) -> Path:
-    domain_rules = {
-        rule.target_domain.upper(): rule for rule in result.domain_rule_augmentations
-    }
     rules = {
         (rule.target_domain.upper(), rule.target_variable.upper()): rule
         for rule in result.rule_augmentations
@@ -656,6 +653,7 @@ def _render_r_sdtm(result: SDTMPlan, dataset: SDTMDataset, path: Path) -> Path:
         "library(dplyr)",
         "library(readr)",
         "library(haven)",
+        "library(tidyr)",
         "input_dir <- Sys.getenv(\"SDTM_INPUT_DIR\")",
         "output_dir <- Sys.getenv(\"SDTM_OUTPUT_DIR\")",
         "if (!nzchar(input_dir) || !nzchar(output_dir)) stop(\"Runner input/output directories are required\")",
@@ -671,19 +669,9 @@ def _render_r_sdtm(result: SDTMPlan, dataset: SDTMDataset, path: Path) -> Path:
         "}",
         "",
     ]
-    domain_rule = domain_rules[dataset.domain.upper()]
-    source_name = domain_rule.source_datasets[0]
-    source_symbol = re.sub(r"[^A-Za-z0-9_.]", "_", source_name.lower())
-    lines.extend(
-        [
-            f"# {dataset.domain}: {dataset.description}",
-            f"# {domain_rule.rule_id}: {_one_line(domain_rule.description)}",
-            f"# Source datasets: {', '.join(domain_rule.source_datasets)}",
-            f"{source_symbol} <- read_source({_r_string(source_name)})",
-            f"{dataset.domain.lower()} <- {source_symbol} %>%",
-            "  transmute(",
-        ]
-    )
+    record_lines, final_source = _compile_r_record_plan(dataset)
+    lines.extend([f"# {dataset.domain}: {dataset.description}", *record_lines, ""])
+    lines.extend([f"{dataset.domain.lower()} <- {final_source} %>%", "  transmute("])
     for index, variable in enumerate(dataset.variables):
         rule = rules[(dataset.domain.upper(), variable.name.upper())]
         delimiter = "," if index < len(dataset.variables) - 1 else ""
@@ -699,9 +687,6 @@ def _render_r_sdtm(result: SDTMPlan, dataset: SDTMDataset, path: Path) -> Path:
 
 
 def _render_sas_sdtm(result: SDTMPlan, dataset: SDTMDataset, path: Path) -> Path:
-    domain_rules = {
-        rule.target_domain.upper(): rule for rule in result.domain_rule_augmentations
-    }
     rules = {
         (rule.target_domain.upper(), rule.target_variable.upper()): rule
         for rule in result.rule_augmentations
@@ -712,16 +697,8 @@ def _render_sas_sdtm(result: SDTMPlan, dataset: SDTMDataset, path: Path) -> Path
         "/* EXECUTION STATUS: NOT RUN. This export-only SAS scaffold has not been tested against raw datasets. */",
         "",
     ]
-    domain_rule = domain_rules[dataset.domain.upper()]
-    lines.extend(
-        [
-            f"/* {dataset.domain}: {dataset.description} */",
-            f"/* {domain_rule.rule_id}: {_one_line(domain_rule.description)} */",
-            f"/* Source datasets: {', '.join(domain_rule.source_datasets)} */",
-            f"data sdtm.{dataset.domain.lower()};",
-        ]
-    )
-    lines.extend(f"  {line}" for line in domain_rule.sas_input_statement.splitlines())
+    record_lines, final_source = _compile_sas_record_plan(dataset)
+    lines.extend([f"/* {dataset.domain}: {dataset.description} */", *record_lines, f"data sdtm.{dataset.domain.lower()};", f"  set {final_source};"])
     for variable in dataset.variables:
         rule = rules[(dataset.domain.upper(), variable.name.upper())]
         lines.extend(
@@ -733,6 +710,207 @@ def _render_sas_sdtm(result: SDTMPlan, dataset: SDTMDataset, path: Path) -> Path
     lines.extend(["run;", ""])
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
+
+
+def _compile_r_record_plan(dataset: SDTMDataset) -> tuple[list[str], str]:
+    lines: list[str] = []
+    symbols: dict[str, str] = {}
+    for step in dataset.record_plan.steps:
+        symbol = _program_symbol(step.output)
+        symbols[step.step_id.casefold()] = symbol
+        lines.append(f"# {step.step_id} [{step.operation}]: {_one_line(step.description)}")
+        if step.operation == "read":
+            lines.append(f"{symbol} <- read_source({_r_string(step.source_dataset or '')})")
+        elif step.operation == "stack":
+            inputs = [symbols[item.casefold()] for item in step.inputs]
+            if step.column_alignment:
+                rendered_inputs = []
+                for reference, input_symbol in zip(step.inputs, inputs):
+                    assignments = []
+                    for column in step.column_alignment:
+                        source = next((item for item in column.sources if item.input.casefold() == reference.casefold()), None)
+                        expression = f'.data[[{_r_string(source.variable)}]]' if source else "NA"
+                        assignments.append(f"{_r_name(column.target)} = {expression}")
+                    rendered_inputs.append(f"dplyr::transmute({input_symbol}, {', '.join(assignments)})")
+                lines.append(f"{symbol} <- dplyr::bind_rows({', '.join(rendered_inputs)})")
+            else:
+                lines.append(f"{symbol} <- dplyr::bind_rows({', '.join(inputs)})")
+        elif step.operation == "join":
+            left = symbols[(step.left or "").casefold()]
+            right = symbols[(step.right or "").casefold()]
+            by = ", ".join(f"{_r_string(item.left)} = {_r_string(item.right)}" for item in step.join_keys)
+            lines.append(
+                f"{symbol} <- dplyr::{step.join_type}_join({left}, {right}, by = c({by}), suffix = c(\".left\", \".right\"))"
+            )
+            lines.append(f"# Reviewed cardinality: {step.cardinality}")
+        elif step.operation == "transpose":
+            source = symbols[step.inputs[0].casefold()]
+            columns = ", ".join(_r_string(item) for item in step.value_variables)
+            expression = (
+                f"tidyr::pivot_longer({source}, cols = c({columns}), "
+                f"names_to = {_r_string(step.name_variable or 'SOURCE_VARIABLE')}, "
+                f"values_to = {_r_string(step.value_variable or 'SOURCE_VALUE')})"
+            )
+            if step.transpose_values:
+                mappings = ", ".join(
+                    f"{_r_string(item.source_variable)} = {_r_string(item.name_value)}"
+                    for item in step.transpose_values
+                )
+                expression += (
+                    " %>% dplyr::mutate("
+                    f"{_r_name(step.name_variable or 'SOURCE_VARIABLE')} = dplyr::recode("
+                    f".data[[{_r_string(step.name_variable or 'SOURCE_VARIABLE')}]], {mappings}))"
+                )
+            lines.append(f"{symbol} <- {expression}")
+        elif step.operation == "filter":
+            source = symbols[step.inputs[0].casefold()]
+            lines.append(f"{symbol} <- dplyr::filter({source}, {_safe_r_expression(step.condition or 'FALSE')})")
+        elif step.operation == "deduplicate":
+            source = symbols[step.inputs[0].casefold()]
+            ordering = step.order_by or step.keys
+            order_args = ", ".join(
+                f"dplyr::desc(.data[[{_r_string(item)}]])" if step.keep == "last" else f".data[[{_r_string(item)}]]"
+                for item in ordering
+            )
+            keys = ", ".join(f".data[[{_r_string(item)}]]" for item in step.keys)
+            lines.append(f"{symbol} <- {source} %>% dplyr::arrange({order_args}) %>% dplyr::distinct({keys}, .keep_all = TRUE)")
+        elif step.operation == "aggregate":
+            source = symbols[step.inputs[0].casefold()]
+            groups = ", ".join(f".data[[{_r_string(item)}]]" for item in step.group_by)
+            aggregations = ", ".join(_r_aggregation(item) for item in step.aggregations)
+            lines.append(f"{symbol} <- {source} %>% dplyr::group_by({groups}) %>% dplyr::summarise({aggregations}, .groups = \"drop\")")
+    return lines, symbols[dataset.record_plan.output_step.casefold()]
+
+
+def _compile_sas_record_plan(dataset: SDTMDataset) -> tuple[list[str], str]:
+    lines: list[str] = []
+    symbols: dict[str, str] = {}
+    for step in dataset.record_plan.steps:
+        symbol = f"work.{_program_symbol(step.output)}"
+        symbols[step.step_id.casefold()] = symbol
+        lines.append(f"/* {step.step_id} [{step.operation}]: {_one_line(step.description)} */")
+        if step.operation == "read":
+            lines.extend([f"data {symbol};", f"  set raw.{_sas_name(step.source_dataset or '')};", "run;"])
+        elif step.operation == "stack":
+            inputs: list[str] = []
+            for input_index, reference in enumerate(step.inputs, 1):
+                input_symbol = symbols[reference.casefold()]
+                if not step.column_alignment:
+                    inputs.append(input_symbol)
+                    continue
+                aligned_symbol = f"{symbol}_aligned_{input_index}"
+                assignments: list[str] = []
+                keep: list[str] = []
+                for column in step.column_alignment:
+                    source = next(
+                        (item for item in column.sources if item.input.casefold() == reference.casefold()),
+                        None,
+                    )
+                    target = _sas_name(column.target)
+                    keep.append(target)
+                    assignments.append(
+                        f"  {target} = {_sas_name(source.variable)};" if source else f"  {target} = .;"
+                    )
+                lines.extend([
+                    f"data {aligned_symbol};",
+                    f"  set {input_symbol};",
+                    *assignments,
+                    f"  keep {' '.join(keep)};",
+                    "run;",
+                ])
+                inputs.append(aligned_symbol)
+            lines.extend([f"data {symbol};", f"  set {' '.join(inputs)};", "run;"])
+        elif step.operation == "join":
+            left = symbols[(step.left or "").casefold()]
+            right = symbols[(step.right or "").casefold()]
+            join = "full join" if step.join_type == "full" else f"{step.join_type} join"
+            conditions = " and ".join(f"a.{_sas_name(item.left)} = b.{_sas_name(item.right)}" for item in step.join_keys)
+            lines.extend(["proc sql;", f"  create table {symbol} as", f"  select a.*, b.* from {left} as a {join} {right} as b on {conditions};", "quit;", f"/* Reviewed cardinality: {step.cardinality} */"])
+        elif step.operation == "transpose":
+            source = symbols[step.inputs[0].casefold()]
+            transpose_input = source
+            if step.id_variables:
+                transpose_input = f"{symbol}_sorted"
+                lines.extend([
+                    f"proc sort data={source} out={transpose_input};",
+                    f"  by {' '.join(_sas_name(item) for item in step.id_variables)};",
+                    "run;",
+                ])
+            transpose_output = f"{symbol}_wide" if step.transpose_values else symbol
+            lines.append(
+                f"proc transpose data={transpose_input} out={transpose_output}"
+                f"(rename=(_NAME_={_sas_name(step.name_variable or 'SOURCE_VARIABLE')} "
+                f"COL1={_sas_name(step.value_variable or 'SOURCE_VALUE')}));"
+            )
+            if step.id_variables:
+                lines.append(f"  by {' '.join(_sas_name(item) for item in step.id_variables)};")
+            lines.extend([f"  var {' '.join(_sas_name(item) for item in step.value_variables)};", "run;"])
+            if step.transpose_values:
+                name_variable = _sas_name(step.name_variable or "SOURCE_VARIABLE")
+                lines.extend([f"data {symbol};", f"  set {transpose_output};", f"  select (upcase({name_variable}));"])
+                for item in step.transpose_values:
+                    lines.append(
+                        f'    when ({json.dumps(item.source_variable.upper())}) '
+                        f'{name_variable} = {json.dumps(item.name_value)};'
+                    )
+                lines.extend(["    otherwise;", "  end;", "run;"])
+        elif step.operation == "filter":
+            source = symbols[step.inputs[0].casefold()]
+            lines.extend([f"data {symbol};", f"  set {source};", f"  if {step.sas_condition};", "run;"])
+        elif step.operation == "deduplicate":
+            source = symbols[step.inputs[0].casefold()]
+            lines.extend([f"proc sort data={source} out={symbol} nodupkey;", f"  by {' '.join(_sas_name(item) for item in step.keys)};", "run;"])
+        elif step.operation == "aggregate":
+            source = symbols[step.inputs[0].casefold()]
+            selects = [*_sas_group_columns(step.group_by), *[_sas_aggregation(item) for item in step.aggregations]]
+            lines.extend(["proc sql;", f"  create table {symbol} as", f"  select {', '.join(selects)} from {source}", f"  group by {', '.join(_sas_name(item) for item in step.group_by)};", "quit;"])
+    return lines, symbols[dataset.record_plan.output_step.casefold()]
+
+
+def _r_aggregation(item: object) -> str:
+    output = _r_name(getattr(item, "output_variable"))
+    operation = getattr(item, "operation")
+    source = getattr(item, "source_variable")
+    if operation == "count":
+        return f"{output} = dplyr::n()"
+    if operation in {"first", "last"}:
+        return f"{output} = dplyr::{operation}(.data[[{_r_string(source or '')}]])"
+    function = {"sum": "sum", "min": "min", "max": "max", "mean": "mean"}[operation]
+    return f"{output} = {function}(.data[[{_r_string(source or '')}]], na.rm = TRUE)"
+
+
+def _sas_aggregation(item: object) -> str:
+    operation = getattr(item, "operation")
+    output = _sas_name(getattr(item, "output_variable"))
+    source = "*" if operation == "count" else _sas_name(getattr(item, "source_variable") or "")
+    function = "count" if operation == "count" else operation
+    return f"{function}({source}) as {output}"
+
+
+def _sas_group_columns(values: list[str]) -> list[str]:
+    return [_sas_name(item) for item in values]
+
+
+def _program_symbol(value: str) -> str:
+    symbol = re.sub(r"[^A-Za-z0-9_]", "_", value.strip().lower())
+    if not symbol or symbol[0].isdigit():
+        symbol = f"step_{symbol}"
+    return symbol
+
+
+def _r_name(value: str) -> str:
+    return f"`{value.replace('`', '')}`"
+
+
+def _sas_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]", "_", value.strip())
+
+
+def _source_reference_text(references: list[object]) -> str:
+    return "; ".join(
+        f"{getattr(item, 'dataset')}.{getattr(item, 'variable')} ({getattr(item, 'role')})"
+        for item in references
+    )
 
 
 def _one_line(value: str) -> str:

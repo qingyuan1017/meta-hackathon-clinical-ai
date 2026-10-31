@@ -287,11 +287,12 @@ class SDTMUseCase(ClinicalUseCase):
                 objective=(
                     f"Stage 2 of 3, complete-data batch for target {target_domain}: preserve the supplied "
                     "approved domain relationships and return exactly one target dataset for this domain. "
-                    "Determine its complete variable and value-level mapping. For assigned constants or derived "
-                    "variables without one direct raw field, set both source_dataset and source_field to null, "
-                    "use an Assigned, Derived, Protocol, or System origin, and document the value or derivation "
-                    "in mapping_expression. Never use an origin such as Assigned as a dataset name. When no blank "
-                    "CRF is supplied, leave crf_source_label null. Do not generate code."
+                    "Determine its complete typed record-construction plan plus variable and value-level mapping. "
+                    "Represent every read, stack, join, transpose, filter, deduplication, or aggregation as an "
+                    "ordered record_plan step. Give every variable and VLM cell all of its approved raw source "
+                    "references with explicit roles. Assigned constants have no sources; derived variables retain "
+                    "every contributing source. When no blank CRF is supplied, leave crf_source_label null. Do not "
+                    "generate R or SAS code."
                 ),
                 source=self._variable_mapping_source(
                     target_domain=target_domain,
@@ -517,7 +518,6 @@ class SDTMUseCase(ClinicalUseCase):
             datasets=variable_mapping.datasets,
             domain_mappings=domain_mapping.domain_mappings,
             unmapped_datasets=domain_mapping.unmapped_datasets,
-            domain_rule_augmentations=rule_plan.domain_rule_augmentations,
             rule_augmentations=rule_plan.rule_augmentations,
             assumptions=list(
                 dict.fromkeys(
@@ -556,7 +556,6 @@ class SDTMUseCase(ClinicalUseCase):
         domain_mapping: SDTMDomainMappingPlan,
         variable_mapping: SDTMVariableMappingPlan,
     ) -> tuple[SDTMRuleAugmentationPlan, list[str]]:
-        domain_rules = []
         variable_rules = []
         assumptions: list[str] = []
         unresolved: list[str] = []
@@ -580,9 +579,9 @@ class SDTMUseCase(ClinicalUseCase):
                 progress_path=context.agent_progress_path,
             ).run(
                 objective=(
-                    f"Stage 3 of 3, target {target_domain}: add exactly one source-preparation rule for this "
-                    "target domain and exactly one implementation rule for every supplied target variable. "
-                    "Do not restate or change the approved mappings."
+                    f"Stage 3 of 3, target {target_domain}: add exactly one implementation rule for every "
+                    "supplied target variable. The approved typed record plan is compiled deterministically, so "
+                    "do not restate source dependencies or generate source preparation code."
                 ),
                 source=self._rule_mapping_source(
                     target_domain=target_domain,
@@ -598,11 +597,6 @@ class SDTMUseCase(ClinicalUseCase):
             )
             batch_plan = cast(SDTMRuleAugmentationPlan, outcome.value)
             problems = verify_result("sdtm-rule-augmentation", batch_plan)
-            domain_targets = [item.target_domain.upper() for item in batch_plan.domain_rule_augmentations]
-            if domain_targets != [target_domain]:
-                problems.append(
-                    f"Rule-augmentation batch {target_domain} must return exactly one domain rule for that target."
-                )
             expected_variables = {item.name.upper() for item in dataset.variables}
             actual_variables = {
                 item.target_variable.upper()
@@ -632,7 +626,6 @@ class SDTMUseCase(ClinicalUseCase):
                 )
             if problems:
                 raise ValueError(" ".join(problems))
-            domain_rules.extend(batch_plan.domain_rule_augmentations)
             variable_rules.extend(batch_plan.rule_augmentations)
             assumptions.extend(batch_plan.assumptions)
             unresolved.extend(batch_plan.unresolved_mappings)
@@ -643,7 +636,6 @@ class SDTMUseCase(ClinicalUseCase):
             SDTMRuleAugmentationPlan(
                 study_name=variable_mapping.study_name,
                 standard=variable_mapping.standard,
-                domain_rule_augmentations=domain_rules,
                 rule_augmentations=variable_rules,
                 assumptions=list(dict.fromkeys(assumptions)),
                 unresolved_mappings=list(dict.fromkeys(unresolved)),
@@ -767,19 +759,18 @@ class SDTMUseCase(ClinicalUseCase):
             problems.append(f"Every approved target domain needs variable mapping; missing: {', '.join(missing)}.")
         if extra:
             problems.append(f"Variable mapping contains unapproved target domains: {', '.join(extra)}.")
-        known_sources = {dataset.name.upper() for dataset in source_spec.datasets}
+        known_sources = {
+            dataset.name.upper(): {variable.name.upper() for variable in dataset.variables}
+            for dataset in source_spec.datasets
+        }
         for dataset in mapping.datasets:
             allowed_sources = mapped_sources.get(dataset.domain.upper(), set())
+            SDTMUseCase._validate_record_plan(dataset.domain, dataset.record_plan, allowed_sources, problems)
             for variable in dataset.variables:
-                source_dataset = (variable.source_dataset or "").strip()
-                source_field = (variable.source_field or "").strip()
-                if bool(source_dataset) != bool(source_field):
-                    problems.append(
-                        f"{dataset.domain}.{variable.name} must provide both source_dataset and source_field, "
-                        "or leave both null for an assigned or derived value."
-                    )
-                    continue
-                if not source_dataset:
+                SDTMUseCase._validate_source_references(
+                    f"{dataset.domain}.{variable.name}", variable.sources, allowed_sources, known_sources, problems
+                )
+                if not variable.sources:
                     if not SDTMUseCase._allows_sourceless_variable(variable.origin):
                         problems.append(
                             f"{dataset.domain}.{variable.name} has no raw source and needs an Assigned, Derived, "
@@ -790,18 +781,101 @@ class SDTMUseCase(ClinicalUseCase):
                             f"{dataset.domain}.{variable.name} has no raw source and needs an explicit assignment "
                             "or derivation in mapping_expression."
                         )
-                    continue
-                source_name = source_dataset.upper()
-                if source_name not in known_sources:
-                    problems.append(
-                        f"{dataset.domain}.{variable.name} references unknown source dataset {source_dataset}."
-                    )
-                elif source_name not in allowed_sources:
-                    problems.append(
-                        f"{dataset.domain}.{variable.name} source {source_dataset} is not approved for {dataset.domain}."
+                if variable.mapping_type == "assigned" and variable.sources:
+                    problems.append(f"{dataset.domain}.{variable.name} is assigned and cannot have source references.")
+                if variable.mapping_type == "direct" and len(variable.sources) != 1:
+                    problems.append(f"{dataset.domain}.{variable.name} direct mapping requires exactly one source reference.")
+                for index, metadata in enumerate(variable.value_level_metadata, 1):
+                    SDTMUseCase._validate_source_references(
+                        f"{dataset.domain}.{variable.name} VLM {index}", metadata.sources,
+                        allowed_sources, known_sources, problems,
                     )
         if problems:
             raise ValueError(" ".join(problems))
+
+    @staticmethod
+    def _validate_source_references(
+        label: str,
+        references: list[Any],
+        allowed_sources: set[str],
+        known_sources: dict[str, set[str]],
+        problems: list[str],
+    ) -> None:
+        seen: set[tuple[str, str, str]] = set()
+        for reference in references:
+            source_name = reference.dataset.upper()
+            variable_name = reference.variable.upper()
+            identity = (source_name, variable_name, reference.role)
+            if identity in seen:
+                problems.append(f"{label} has duplicate source reference {reference.dataset}.{reference.variable} ({reference.role}).")
+            seen.add(identity)
+            if source_name not in known_sources:
+                problems.append(f"{label} references unknown source dataset {reference.dataset}.")
+            elif variable_name not in known_sources[source_name]:
+                problems.append(f"{label} references unknown source variable {reference.dataset}.{reference.variable}.")
+            if source_name not in allowed_sources:
+                problems.append(f"{label} source {reference.dataset} is not approved for this target domain.")
+
+    @staticmethod
+    def _validate_record_plan(domain: str, plan: Any, allowed_sources: set[str], problems: list[str]) -> None:
+        step_ids = [step.step_id for step in plan.steps]
+        normalized_ids = {item.casefold() for item in step_ids}
+        if len(step_ids) != len(normalized_ids):
+            problems.append(f"{domain} record-plan step identifiers must be unique.")
+        if plan.output_step.casefold() not in normalized_ids:
+            problems.append(f"{domain} record-plan output_step must reference a step identifier.")
+        available: set[str] = set()
+        read_sources: set[str] = set()
+        for step in plan.steps:
+            label = f"{domain} record step {step.step_id}"
+            operation = step.operation
+            if not step.step_id.strip() or not step.output.strip():
+                problems.append(f"{label} needs non-empty step_id and output values.")
+            if operation == "read":
+                source = (step.source_dataset or "").upper()
+                if not source:
+                    problems.append(f"{label} read operation needs source_dataset.")
+                elif source not in allowed_sources:
+                    problems.append(f"{label} reads source {step.source_dataset} not approved for {domain}.")
+                read_sources.add(source)
+            elif operation == "stack" and len(step.inputs) < 2:
+                problems.append(f"{label} stack operation needs at least two prior step inputs.")
+            elif operation == "join" and (
+                not step.left or not step.right or not step.join_type or not step.cardinality or not step.join_keys
+            ):
+                problems.append(f"{label} join operation needs left/right inputs, join type, cardinality, and keys.")
+            elif operation == "transpose" and (
+                len(step.inputs) != 1 or not step.value_variables or not step.name_variable or not step.value_variable
+            ):
+                problems.append(f"{label} transpose operation needs one input, value variables, name variable, and value variable.")
+            elif operation == "filter" and (
+                len(step.inputs) != 1 or not step.condition or not step.sas_condition
+            ):
+                problems.append(f"{label} filter operation needs one input plus reviewed R and SAS conditions.")
+            elif operation == "deduplicate" and (len(step.inputs) != 1 or not step.keys):
+                problems.append(f"{label} deduplicate operation needs one input and keys.")
+            elif operation == "aggregate" and (
+                len(step.inputs) != 1 or not step.group_by or not step.aggregations
+            ):
+                problems.append(f"{label} aggregate operation needs one input, grouping variables, and aggregations.")
+            references = [
+                *step.inputs,
+                *([step.left] if step.left else []),
+                *([step.right] if step.right else []),
+            ]
+            for reference in references:
+                if reference.casefold() not in available:
+                    problems.append(f"{label} references unavailable or later step {reference}.")
+            available.add(step.step_id.casefold())
+        if read_sources != allowed_sources:
+            missing = sorted(allowed_sources - read_sources)
+            extra = sorted(read_sources - allowed_sources)
+            details = []
+            if missing:
+                details.append(f"missing {', '.join(missing)}")
+            if extra:
+                details.append(f"extra {', '.join(extra)}")
+            problems.append(f"{domain} record plan must read every approved source ({'; '.join(details)}).")
 
     @staticmethod
     def _allows_sourceless_variable(origin: str) -> bool:

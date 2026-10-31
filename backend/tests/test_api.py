@@ -18,6 +18,24 @@ from app.review_patches import build_patch_record, new_patch_request, public_pat
 from app.schemas.reviews import ReviewScope
 
 
+def _record_plan(domain: str, source_dataset: str) -> dict:
+    step_id = f"read-{source_dataset.lower()}"
+    return {
+        "steps": [{
+            "step_id": step_id,
+            "operation": "read",
+            "description": f"Read {source_dataset} for {domain}.",
+            "output": f"{domain.lower()}_source",
+            "source_dataset": source_dataset,
+        }],
+        "output_step": step_id,
+    }
+
+
+def _source(dataset: str, variable: str, role: str = "value") -> dict:
+    return {"dataset": dataset, "variable": variable, "role": role}
+
+
 def test_health_does_not_expose_secret() -> None:
     with TestClient(app) as client:
         response = client.get("/api/v1/health")
@@ -150,26 +168,15 @@ def test_retry_recovers_complete_sdtm_plan_without_model_call(monkeypatch) -> No
             {
                 "domain": "DM",
                 "description": "Demographics",
+                "record_plan": _record_plan("DM", "RAW_DM"),
                 "variables": [
                     {
                         "name": "AGE",
                         "label": "Age",
                         "data_type": "Num",
-                        "source_dataset": "RAW_DM",
-                        "source_field": "AGE",
+                        "sources": [_source("RAW_DM", "AGE")],
                     }
                 ],
-            }
-        ],
-        "domain_rule_augmentations": [
-            {
-                "rule_id": "DM-SOURCE",
-                "target_domain": "DM",
-                "source_datasets": ["RAW_DM"],
-                "description": "Prepare demographics",
-                "logic": "Read mounted source",
-                "r_input_expression": "raw_dm",
-                "sas_input_statement": "set raw.raw_dm;",
             }
         ],
         "rule_augmentations": [
@@ -177,7 +184,6 @@ def test_retry_recovers_complete_sdtm_plan_without_model_call(monkeypatch) -> No
                 "rule_id": "DM-AGE",
                 "target_domain": "DM",
                 "target_variable": "AGE",
-                "source_dependencies": ["RAW_DM.AGE"],
                 "description": "Copy age",
                 "logic": "Direct assignment",
                 "r_expression": 'dplyr::if_else(is.na(AGE), NA_real_, AGE) /* review only */',
@@ -304,7 +310,7 @@ def test_use_case_registry_is_exposed() -> None:
         "Variable & value-level mapping",
         "Rule augmentation",
     ]
-    assert "domain_rule_augmentations" in sdtm["result_schema"]["properties"]
+    assert "rule_augmentations" in sdtm["result_schema"]["properties"]
     tlf = next(item for item in definitions if item["id"] == "tlf")
     assert tlf["stages"] == [
         "Output inventory",
@@ -571,13 +577,13 @@ def test_reviewed_domain_and_variable_mappings_resume_each_sdtm_gate(monkeypatch
             {
                 "domain": "DM",
                 "description": "Demographics",
+                "record_plan": _record_plan("DM", "RAW_DM"),
                 "variables": [
                     {
                         "name": "AGE",
                         "label": "Age",
                         "data_type": "Num",
-                        "source_dataset": "RAW_DM",
-                        "source_field": "AGE",
+                        "sources": [_source("RAW_DM", "AGE")],
                     }
                 ],
             }
@@ -675,18 +681,20 @@ def test_variable_mapping_review_can_return_to_domain_gate_and_reconcile_changes
                 "domain": "DM",
                 "description": "Demographics",
                 "review_assumptions": ["Keep reviewed DM mapping"],
+                "record_plan": _record_plan("DM", "RAW_DM"),
                 "variables": [{
                     "name": "AGE", "label": "Age", "data_type": "Num",
-                    "source_dataset": "RAW_DM", "source_field": "AGE",
+                    "sources": [_source("RAW_DM", "AGE")],
                 }],
             },
             {
                 "domain": "AE",
                 "description": "Adverse Events",
                 "review_unresolved_mappings": ["Review AE mapping"],
+                "record_plan": _record_plan("AE", "RAW_AE"),
                 "variables": [{
                     "name": "AETERM", "label": "Reported Term", "data_type": "Char",
-                    "source_dataset": "RAW_AE", "source_field": "AETERM",
+                    "sources": [_source("RAW_AE", "AETERM")],
                 }],
             },
         ],

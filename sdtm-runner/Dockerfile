@@ -3,7 +3,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends r-base r-cran-dplyr r-cran-readr r-cran-haven \
+    && apt-get install -y --no-install-recommends r-base r-cran-dplyr r-cran-readr r-cran-haven r-cran-tidyr \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

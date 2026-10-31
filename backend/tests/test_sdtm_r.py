@@ -47,17 +47,6 @@ def test_rule_augmentation_validation_names_the_unsafe_rule() -> None:
     plan = SDTMRuleAugmentationPlan.model_validate(
         {
             "study_name": "SYN-101",
-            "domain_rule_augmentations": [
-                {
-                    "rule_id": "DM-SOURCE",
-                    "target_domain": "DM",
-                    "source_datasets": ["RAW_DM"],
-                    "description": "Prepare source",
-                    "logic": "Read the mounted source",
-                    "r_input_expression": "raw_dm",
-                    "sas_input_statement": "set raw.raw_dm;",
-                }
-            ],
             "rule_augmentations": [
                 {
                     "rule_id": "DM-AGE",

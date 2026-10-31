@@ -886,15 +886,33 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
             variables = [variable.name.upper() for variable in dataset.variables]
             if len(variables) != len(set(variables)):
                 problems.append(f"Domain {dataset.domain} has duplicate variable names.")
+            step_ids = [step.step_id.casefold() for step in dataset.record_plan.steps]
+            if len(step_ids) != len(set(step_ids)):
+                problems.append(f"Domain {dataset.domain} record-plan step identifiers must be unique.")
+            if dataset.record_plan.output_step.casefold() not in set(step_ids):
+                problems.append(f"Domain {dataset.domain} record-plan output_step does not reference a step.")
+            available_steps: set[str] = set()
+            for step in dataset.record_plan.steps:
+                references = [
+                    *step.inputs,
+                    *([step.left] if step.left else []),
+                    *([step.right] if step.right else []),
+                ]
+                if any(reference.casefold() not in available_steps for reference in references):
+                    problems.append(f"Domain {dataset.domain} step {step.step_id} references a later or unknown step.")
+                available_steps.add(step.step_id.casefold())
             for variable in dataset.variables:
-                source_dataset = (variable.source_dataset or "").strip()
-                source_field = (variable.source_field or "").strip()
-                if bool(source_dataset) != bool(source_field):
-                    problems.append(
-                        f"Variable {dataset.domain}.{variable.name} must provide both source_dataset and "
-                        "source_field, or leave both null."
-                    )
-                if not source_dataset:
+                identities = [
+                    (source.dataset.casefold(), source.variable.casefold(), source.role)
+                    for source in variable.sources
+                ]
+                if len(identities) != len(set(identities)):
+                    problems.append(f"Variable {dataset.domain}.{variable.name} has duplicate source references.")
+                if variable.mapping_type == "direct" and len(variable.sources) != 1:
+                    problems.append(f"Variable {dataset.domain}.{variable.name} direct mapping needs one source.")
+                if variable.mapping_type == "assigned" and variable.sources:
+                    problems.append(f"Variable {dataset.domain}.{variable.name} assigned mapping cannot have sources.")
+                if not variable.sources:
                     origin = variable.origin.strip().casefold()
                     if not any(token in origin for token in ("assigned", "derived", "protocol", "system", "sponsor")):
                         problems.append(
@@ -920,34 +938,12 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
                     if mapping.target_domain.upper() == dataset.domain.upper()
                 }
                 for variable in dataset.variables:
-                    if variable.source_dataset and variable.source_dataset.casefold() not in mapped_sources:
-                        problems.append(
-                            f"Variable {dataset.domain}.{variable.name} references source dataset "
-                            f"{variable.source_dataset} without a domain mapping."
-                        )
-            domain_rule_ids = [rule.rule_id.casefold() for rule in value.domain_rule_augmentations]
-            if len(domain_rule_ids) != len(set(domain_rule_ids)):
-                problems.append("SDTM domain-rule identifiers must be unique.")
-            domain_rule_targets = [
-                rule.target_domain.upper() for rule in value.domain_rule_augmentations
-            ]
-            if len(domain_rule_targets) != len(set(domain_rule_targets)):
-                problems.append("Each SDTM domain must have exactly one augmented domain rule.")
-            for domain in set(domain_rule_targets) - known_domains:
-                problems.append(f"Domain rule target {domain} does not exist in variable mappings.")
-            for domain in known_domains - set(domain_rule_targets):
-                problems.append(f"Domain {domain} is missing an augmented domain rule.")
-            for rule in value.domain_rule_augmentations:
-                expected_sources = {
-                    mapping.source_dataset.casefold()
-                    for mapping in value.domain_mappings
-                    if mapping.target_domain.upper() == rule.target_domain.upper()
-                }
-                actual_sources = {source.casefold() for source in rule.source_datasets}
-                if actual_sources != expected_sources:
-                    problems.append(
-                        f"Domain rule {rule.rule_id} source datasets must exactly match the domain mapping."
-                    )
+                    for source in [*variable.sources, *(item for vlm in variable.value_level_metadata for item in vlm.sources)]:
+                        if source.dataset.casefold() not in mapped_sources:
+                            problems.append(
+                                f"Variable {dataset.domain}.{variable.name} references source dataset "
+                                f"{source.dataset} without a domain mapping."
+                            )
             rule_ids = [rule.rule_id.casefold() for rule in value.rule_augmentations]
             if len(rule_ids) != len(set(rule_ids)):
                 problems.append("SDTM rule identifiers must be unique.")
@@ -974,14 +970,6 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
                         f"Rule {rule.rule_id} for {rule.target_domain}.{rule.target_variable} has an invalid R expression: {exc}"
                     )
     elif workflow == "sdtm-rule-augmentation":
-        domain_rule_ids = [rule.rule_id.casefold() for rule in value.domain_rule_augmentations]
-        if len(domain_rule_ids) != len(set(domain_rule_ids)):
-            problems.append("SDTM domain-rule identifiers must be unique.")
-        domain_rule_targets = [
-            rule.target_domain.upper() for rule in value.domain_rule_augmentations
-        ]
-        if len(domain_rule_targets) != len(set(domain_rule_targets)):
-            problems.append("Each SDTM domain must have exactly one augmented domain rule.")
         rule_ids = [rule.rule_id.casefold() for rule in value.rule_augmentations]
         if len(rule_ids) != len(set(rule_ids)):
             problems.append("SDTM rule identifiers must be unique.")

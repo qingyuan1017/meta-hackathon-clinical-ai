@@ -9,11 +9,11 @@ import pytest
 from app.schemas import (
     SDTMDataset,
     SDTMDomainMapping,
-    SDTMDomainRuleAugmentation,
     SDTMPlan,
     SDTMRuleAugmentation,
     SDTMVariable,
 )
+from tests.sdtm_helpers import read_plan, source
 from app.sdtm_execution import ProviderResult, RExecutionProvider, SDTMExecutionService, apply_typed_repair, ensure_repair_allowed, inspect_outputs, repair_depth
 from app.sdtm_workbench import initialize_state, inventory_raw_dataset
 
@@ -32,8 +32,7 @@ def _plan() -> SDTMPlan:
     return SDTMPlan(
         study_name="SYN-101",
         domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic source")],
-        datasets=[SDTMDataset(domain="DM", description="Demographics", key_variables=["USUBJID"], variables=[SDTMVariable(name="USUBJID", label="Unique subject", source_dataset="RAW_DM", source_field="USUBJID"), SDTMVariable(name="AGE", label="Age", data_type="Num", source_dataset="RAW_DM", source_field="AGE")])],
-        domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Read DM", logic="Direct", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", key_variables=["USUBJID"], record_plan=read_plan("DM", "RAW_DM"), variables=[SDTMVariable(name="USUBJID", label="Unique subject", sources=[source("RAW_DM", "USUBJID")]), SDTMVariable(name="AGE", label="Age", data_type="Num", sources=[source("RAW_DM", "AGE")])])],
         rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-USUBJID", target_domain="DM", target_variable="USUBJID", description="Direct", logic="Direct", r_expression='.data[["USUBJID"]]', sas_expression="USUBJID"), SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", description="Direct", logic="Direct", r_expression='.data[["AGE"]]', sas_expression="AGE")],
     )
 
@@ -98,7 +97,7 @@ def test_malformed_xpt_and_missing_columns_fail_post_run_checks(tmp_path) -> Non
 def test_missing_column_proposes_typed_repair_and_preserves_parent_history(tmp_path) -> None:
     plan = _plan()
     age = next(item for item in plan.datasets[0].variables if item.name == "AGE")
-    age.source_field = "AGEE"
+    age.sources[0].variable = "AGEE"
     age_rule = next(item for item in plan.rule_augmentations if item.target_variable == "AGE")
     age_rule.r_expression = '.data[["AGEE"]]'
     provider = FakeProvider(ProviderResult(status="failed", exit_code=1, stdout="", stderr="Caused by error in `.data[[\"AGEE\"]]`: Column `AGEE` not found in `.data`."))
@@ -111,7 +110,7 @@ def test_missing_column_proposes_typed_repair_and_preserves_parent_history(tmp_p
     first.repair_proposal.status = "approved"
     first.repair_proposal.reviewer = "Jane Reviewer"
     repaired = apply_typed_repair(plan, first.repair_proposal)
-    assert next(item for item in repaired.datasets[0].variables if item.name == "AGE").source_field == "AGE"
+    assert next(item for item in repaired.datasets[0].variables if item.name == "AGE").sources[0].variable == "AGE"
     assert next(item for item in repaired.rule_augmentations if item.target_variable == "AGE").r_expression == '.data[["AGE"]]'
 
     second = SDTMExecutionService(provider).execute(job_dir, plan, parent_attempt_id=first.attempt_id)

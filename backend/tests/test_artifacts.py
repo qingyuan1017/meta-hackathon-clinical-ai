@@ -9,7 +9,8 @@ from reportlab.pdfgen import canvas
 
 from app.artifacts import add_manifest_and_bundle, diagnose_define, render_clinical_document, render_edc, render_protocol, render_sdtm, render_tlf
 from app.core_conformance import CoreConformanceError, CoreConformanceResult
-from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMDomainMapping, SDTMDomainRuleAugmentation, SDTMPlan, SDTMRuleAugmentation, SDTMUnmappedDataset, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFFigureSpec, TLFPlan, TLFProgramSpec, TLFRow, TLFSourceVariable, TLFSpec
+from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMDomainMapping, SDTMPlan, SDTMRuleAugmentation, SDTMUnmappedDataset, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFFigureSpec, TLFPlan, TLFProgramSpec, TLFRow, TLFSourceVariable, TLFSpec
+from tests.sdtm_helpers import read_plan, source
 from app.usdm import USDM_VERSION, validate_usdm
 
 
@@ -113,16 +114,14 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
         study_name="SYN-101",
         domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Demographics source")],
         unmapped_datasets=[SDTMUnmappedDataset(source_dataset="AUDIT_LOG", rationale="Operational metadata")],
-        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", source_dataset="RAW_DM", source_field="AGE", crf_source_label="Age", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGEU = 'YEARS'", label="Age in years", data_type="Num", mapping_expression="Direct")])])],
-        domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Use demographics source", logic="Read the raw demographics dataset", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
-        rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", source_dependencies=["RAW_DM.AGE"], description="Copy collected age", logic="Direct assignment", r_expression='.data[["AGE"]]', sas_expression="AGE")],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", record_plan=read_plan("DM", "RAW_DM"), variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", sources=[source("RAW_DM", "AGE")], crf_source_label="Age", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGEU = 'YEARS'", label="Age in years", data_type="Num", mapping_expression="Direct", sources=[source("RAW_DM", "AGE")])])])],
+        rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", description="Copy collected age", logic="Direct assignment", r_expression='.data[["AGE"]]', sas_expression="AGE")],
     )
     sdtm.datasets[0].variables.append(
         SDTMVariable(
             name="STUDYID",
             label="Study Identifier",
-            source_dataset=None,
-            source_field=None,
+            mapping_type="assigned",
             origin="Assigned",
             mapping_expression="Assign the approved study identifier SYN-101.",
         )
@@ -132,7 +131,6 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
             rule_id="DM-STUDYID",
             target_domain="DM",
             target_variable="STUDYID",
-            source_dependencies=[],
             description="Assign study identifier",
             logic="Assign the approved constant SYN-101",
             r_expression='"SYN-101"',
@@ -145,9 +143,9 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
     assert tree.getroot().tag.endswith("ODM")
     assert (tmp_path / "annotated-crf.pdf").stat().st_size > 0
     workbook = load_workbook(tmp_path / "sdtm-mapping.xlsx")
-    assert {"Domain Mappings", "Unmapped Sources", "Variable Mappings", "Value Level Metadata", "Domain Rule Augmentation", "Variable Rule Augmentation"} <= set(workbook.sheetnames)
+    assert {"Domain Mappings", "Unmapped Sources", "Variable Mappings", "Value Level Metadata", "Record Construction", "Variable Rule Augmentation"} <= set(workbook.sheetnames)
     assert workbook["Unmapped Sources"]["A2"].value == "AUDIT_LOG"
-    assert "dm <- raw_dm %>%" in (tmp_path / "build-dm.R").read_text(encoding="utf-8")
+    assert "dm <- dm_source %>%" in (tmp_path / "build-dm.R").read_text(encoding="utf-8")
     assert '.data[["AGE"]]' in (tmp_path / "build-dm.R").read_text(encoding="utf-8")
     assert "AGE = AGE;" in (tmp_path / "build-dm.sas").read_text(encoding="utf-8")
 
@@ -196,8 +194,7 @@ def test_acrf_coverage_and_define_review_diagnostics(tmp_path) -> None:
     plan = SDTMPlan(
         study_name="SYN-ACRF",
         domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic")],
-        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", source_dataset="RAW_DM", source_field="AGE", crf_source_label="Age", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGEU = 'YEARS'", label="Age in years", data_type="Num", mapping_expression="Direct")]), SDTMVariable(name="SEX", label="Sex", source_dataset="RAW_DM", source_field="SEX", crf_source_label="Sex")])],
-        domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Read", logic="Direct", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", record_plan=read_plan("DM", "RAW_DM"), variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", sources=[source("RAW_DM", "AGE")], crf_source_label="Age", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGEU = 'YEARS'", label="Age in years", data_type="Num", mapping_expression="Direct", sources=[source("RAW_DM", "AGE")])]), SDTMVariable(name="SEX", label="Sex", sources=[source("RAW_DM", "SEX")], crf_source_label="Sex")])],
         rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", description="Direct", logic="Direct", r_expression='.data[["AGE"]]', sas_expression="AGE"), SDTMRuleAugmentation(rule_id="DM-SEX", target_domain="DM", target_variable="SEX", description="Direct", logic="Direct", r_expression='.data[["SEX"]]', sas_expression="SEX")],
     )
     paths = render_sdtm(plan, crf, tmp_path, ["r"])
@@ -231,17 +228,15 @@ def test_sdtm_program_artifacts_are_isolated_by_domain(tmp_path) -> None:
             SDTMDataset(
                 domain="DM",
                 description="Demographics",
-                variables=[SDTMVariable(name="USUBJID", label="Unique subject", source_dataset="RAW_DM", source_field="USUBJID")],
+                record_plan=read_plan("DM", "RAW_DM"),
+                variables=[SDTMVariable(name="USUBJID", label="Unique subject", sources=[source("RAW_DM", "USUBJID")])],
             ),
             SDTMDataset(
                 domain="AE",
                 description="Adverse events",
-                variables=[SDTMVariable(name="AETERM", label="Reported term", source_dataset="RAW_AE", source_field="AETERM")],
+                record_plan=read_plan("AE", "RAW_AE"),
+                variables=[SDTMVariable(name="AETERM", label="Reported term", sources=[source("RAW_AE", "AETERM")])],
             ),
-        ],
-        domain_rule_augmentations=[
-            SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Read DM", logic="Direct", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;"),
-            SDTMDomainRuleAugmentation(rule_id="AE-SOURCE", target_domain="AE", source_datasets=["RAW_AE"], description="Read AE", logic="Direct", r_input_expression="raw_ae", sas_input_statement="set raw.raw_ae;"),
         ],
         rule_augmentations=[
             SDTMRuleAugmentation(rule_id="DM-USUBJID", target_domain="DM", target_variable="USUBJID", description="Direct", logic="Direct", r_expression='.data[["USUBJID"]]', sas_expression="USUBJID"),
@@ -263,6 +258,109 @@ def test_sdtm_program_artifacts_are_isolated_by_domain(tmp_path) -> None:
     assert "data sdtm.ae;" in ae_sas and "data sdtm.dm;" not in ae_sas
 
 
+def test_sdtm_record_plan_compiles_stack_join_and_transpose_for_r_and_sas(tmp_path) -> None:
+    dataset = SDTMDataset.model_validate(
+        {
+            "domain": "AE",
+            "description": "Adverse events from two collection streams with subject lookup data",
+            "record_plan": {
+                "steps": [
+                    {"step_id": "read_ae", "operation": "read", "description": "Read AE", "output": "ae_raw", "source_dataset": "RAW_AE"},
+                    {"step_id": "read_sae", "operation": "read", "description": "Read SAE", "output": "sae_raw", "source_dataset": "RAW_SAE"},
+                    {"step_id": "read_dm", "operation": "read", "description": "Read subject lookup", "output": "dm_raw", "source_dataset": "RAW_DM"},
+                    {
+                        "step_id": "stack_events",
+                        "operation": "stack",
+                        "description": "Align and stack event streams",
+                        "output": "events_stacked",
+                        "inputs": ["read_ae", "read_sae"],
+                        "column_alignment": [
+                            {"target": "SUBJID", "sources": [{"input": "read_ae", "variable": "SUBJID"}, {"input": "read_sae", "variable": "SUBJECT"}]},
+                            {"target": "AETERM", "sources": [{"input": "read_ae", "variable": "AETERM"}, {"input": "read_sae", "variable": "TERM"}]},
+                            {"target": "AEDECOD", "sources": [{"input": "read_ae", "variable": "AEDECOD"}, {"input": "read_sae", "variable": "PT"}]},
+                        ],
+                    },
+                    {
+                        "step_id": "join_subject",
+                        "operation": "join",
+                        "description": "Join unique subject identifier",
+                        "output": "events_with_subject",
+                        "left": "stack_events",
+                        "right": "read_dm",
+                        "join_type": "left",
+                        "join_keys": [{"left": "SUBJID", "right": "SUBJID"}],
+                        "cardinality": "many_to_one",
+                    },
+                    {
+                        "step_id": "transpose_terms",
+                        "operation": "transpose",
+                        "description": "Create reviewed value-level term rows",
+                        "output": "event_terms",
+                        "inputs": ["join_subject"],
+                        "id_variables": ["USUBJID"],
+                        "value_variables": ["AETERM", "AEDECOD"],
+                        "name_variable": "TERM_ROLE",
+                        "value_variable": "TERM_VALUE",
+                        "transpose_values": [
+                            {"source_variable": "AETERM", "name_value": "REPORTED"},
+                            {"source_variable": "AEDECOD", "name_value": "CODED"},
+                        ],
+                    },
+                ],
+                "output_step": "transpose_terms",
+            },
+            "variables": [
+                {
+                    "name": "USUBJID",
+                    "label": "Unique Subject Identifier",
+                    "mapping_type": "lookup",
+                    "sources": [
+                        {"dataset": "RAW_AE", "variable": "SUBJID", "role": "join_key"},
+                        {"dataset": "RAW_SAE", "variable": "SUBJECT", "role": "join_key"},
+                        {"dataset": "RAW_DM", "variable": "USUBJID", "role": "lookup"},
+                    ],
+                    "mapping_expression": "Look up USUBJID after stacking AE and SAE.",
+                },
+                {
+                    "name": "AETERM",
+                    "label": "Reported Term",
+                    "mapping_type": "transpose",
+                    "sources": [
+                        {"dataset": "RAW_AE", "variable": "AETERM"},
+                        {"dataset": "RAW_SAE", "variable": "TERM"},
+                    ],
+                    "mapping_expression": "Stack reported terms and transpose reviewed term roles.",
+                },
+            ],
+        }
+    )
+    plan = SDTMPlan(
+        study_name="SYN-LINEAGE",
+        domain_mappings=[
+            SDTMDomainMapping(source_dataset="RAW_AE", target_domain="AE", rationale="Collected AE"),
+            SDTMDomainMapping(source_dataset="RAW_SAE", target_domain="AE", rationale="Collected SAE"),
+            SDTMDomainMapping(source_dataset="RAW_DM", target_domain="AE", rationale="Subject lookup"),
+        ],
+        datasets=[dataset],
+        rule_augmentations=[
+            SDTMRuleAugmentation(rule_id="AE-USUBJID", target_domain="AE", target_variable="USUBJID", description="Use subject lookup", logic="Lookup after stack", r_expression='.data[["USUBJID"]]', sas_expression="USUBJID"),
+            SDTMRuleAugmentation(rule_id="AE-AETERM", target_domain="AE", target_variable="AETERM", description="Use transposed value", logic="Reviewed value-level transpose", r_expression='.data[["TERM_VALUE"]]', sas_expression="TERM_VALUE"),
+        ],
+    )
+
+    render_sdtm(plan, None, tmp_path, ["r", "sas"])
+    r_program = (tmp_path / "build-ae.R").read_text(encoding="utf-8")
+    sas_program = (tmp_path / "build-ae.sas").read_text(encoding="utf-8")
+    assert "dplyr::bind_rows(" in r_program
+    assert "dplyr::left_join(" in r_program
+    assert "tidyr::pivot_longer(" in r_program
+    assert '"AETERM" = "REPORTED"' in r_program
+    assert "events_stacked_aligned_1" in sas_program
+    assert "left join work.dm_raw" in sas_program
+    assert "proc transpose" in sas_program
+    assert 'when ("AETERM") TERM_ROLE = "REPORTED";' in sas_program
+
+
 def test_non_searchable_crf_reports_ocr_limitation(tmp_path) -> None:
     crf = tmp_path / "scan.pdf"
     pdf = canvas.Canvas(str(crf))
@@ -271,8 +369,7 @@ def test_non_searchable_crf_reports_ocr_limitation(tmp_path) -> None:
     plan = SDTMPlan(
         study_name="SYN-SCAN",
         domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic")],
-        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", source_dataset="RAW_DM", source_field="AGE")])],
-        domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Read", logic="Direct", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", record_plan=read_plan("DM", "RAW_DM"), variables=[SDTMVariable(name="AGE", label="Age", sources=[source("RAW_DM", "AGE")])])],
         rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", description="Direct", logic="Direct", r_expression='.data[["AGE"]]', sas_expression="AGE")],
     )
     paths = render_sdtm(plan, crf, tmp_path, ["r"])
