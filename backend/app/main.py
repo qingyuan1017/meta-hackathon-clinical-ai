@@ -43,6 +43,7 @@ from .schemas import (
     SDTMDomainMappingUpdate,
     ExecutionAttempt,
     ExecutionAttemptList,
+    RepairApproval,
     SDTMPlan,
     SDTMVariableMappingUpdate,
     TLFInventoryPlanUpdate,
@@ -59,6 +60,10 @@ from .sdtm_execution import (
     SDTMExecutionService,
     UnavailableRExecutionProvider,
     list_attempts,
+    load_attempt,
+    repair_depth,
+    save_attempt,
+    apply_typed_repair,
 )
 from .use_cases import USE_CASES, get_use_case
 from .use_cases.sdtm import SDTMUseCase
@@ -701,6 +706,87 @@ async def create_sdtm_execution(
             job.artifacts.append(Artifact(**artifact_record(path, job_dir)))
     db.commit()
     return attempt
+
+
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-executions/{{attempt_id}}/repair",
+    response_model=ExecutionAttempt,
+    status_code=status.HTTP_201_CREATED,
+)
+def review_and_run_sdtm_repair(
+    job_id: str,
+    attempt_id: str,
+    approval: RepairApproval,
+    db: Session = Depends(get_db),
+) -> ExecutionAttempt:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm" or job.status != "succeeded" or not job.result_json:
+        raise HTTPException(status_code=409, detail="An approved, completed SDTM plan is required before repair.")
+    job_dir = settings.jobs_dir / job_id
+    try:
+        failed_attempt = load_attempt(job_dir, attempt_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    proposal = failed_attempt.repair_proposal
+    if proposal is None or proposal.proposal_id != approval.proposal_id or proposal.status != "proposed":
+        raise HTTPException(status_code=409, detail="This attempt has no matching open repair proposal.")
+    proposal.reviewer = approval.reviewer
+    proposal.decided_at = datetime.now(timezone.utc)
+    if not approval.approved:
+        proposal.status = "rejected"
+        save_attempt(job_dir, failed_attempt)
+        return failed_attempt
+    if repair_depth(job_dir, failed_attempt) >= 3:
+        raise HTTPException(status_code=409, detail="The maximum of three approved repair attempts has been reached.")
+    proposal.status = "approved"
+    save_attempt(job_dir, failed_attempt)
+
+    try:
+        plan = apply_typed_repair(SDTMPlan.model_validate(json.loads(job.result_json)), proposal)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    inputs = [(job_dir / "input" / name).resolve() for name in json.loads(job.input_files_json)]
+    options = json.loads(job.options_json)
+    next_output = job_dir / f"output-next-{uuid4()}"
+    current_output = job_dir / "output"
+    backup_output = job_dir / f"output-backup-{uuid4()}"
+    try:
+        rendered = WorkflowService().render_revision("sdtm", result=plan.model_dump(mode="json"), inputs=inputs, options=options, output_dir=next_output)
+        if current_output.exists():
+            current_output.rename(backup_output)
+        next_output.rename(current_output)
+        for artifact in list(job.artifacts):
+            if artifact.relative_path.startswith("output/"):
+                job.artifacts.remove(artifact)
+        db.flush()
+        for old_path in rendered.paths:
+            final_path = current_output / old_path.relative_to(next_output)
+            job.artifacts.append(Artifact(**artifact_record(final_path, job_dir)))
+        job.result_json = json.dumps(rendered.result, ensure_ascii=False)
+        job.warnings_json = json.dumps([DISCLAIMER, f"Typed repair {proposal.proposal_id} was approved by {approval.reviewer}; artifacts were regenerated before rerun.", *rendered.warnings], ensure_ascii=False)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        if current_output.exists() and backup_output.exists():
+            shutil.rmtree(current_output, ignore_errors=True)
+        if backup_output.exists():
+            backup_output.rename(current_output)
+        shutil.rmtree(next_output, ignore_errors=True)
+        raise HTTPException(status_code=422, detail="The approved typed repair could not be regenerated safely.") from exc
+    finally:
+        shutil.rmtree(next_output, ignore_errors=True)
+        shutil.rmtree(backup_output, ignore_errors=True)
+
+    provider = RemoteRExecutionProvider(settings.sdtm_runner_url) if settings.sdtm_runner_url.strip() else UnavailableRExecutionProvider()
+    repaired = SDTMExecutionService(provider, settings.sdtm_runner_timeout_seconds).execute(job_dir, SDTMPlan.model_validate(rendered.result), parent_attempt_id=attempt_id)
+    repaired_dir = job_dir / "sdtm" / "executions" / repaired.attempt_id
+    for path in [repaired_dir / "program.R", repaired_dir / "attempt.json", *(repaired_dir / "output").glob("*.xpt")]:
+        job.artifacts.append(Artifact(**artifact_record(path, job_dir)))
+    db.commit()
+    return repaired
 
 
 @app.put(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import difflib
 import json
 import re
 from abc import ABC, abstractmethod
@@ -18,6 +19,8 @@ from .schemas.sdtm_workbench import (
     ExecutionAttempt,
     ExecutionCheck,
     ExecutionOutput,
+    RepairChange,
+    RepairProposal,
     RawDatasetInventory,
 )
 from .sdtm_workbench import read_state, write_state
@@ -163,6 +166,7 @@ class SDTMExecutionService:
         attempt.checks = checks
         if final_status != "passed":
             attempt.failure_classification = classify_failure(attempt)
+            attempt.repair_proposal = propose_repair(attempt, plan, state.inputs.raw_datasets)
         _write_attempt(attempt_dir, attempt)
 
         state = read_state(job_dir)
@@ -220,6 +224,84 @@ def list_attempts(job_dir: Path) -> list[ExecutionAttempt]:
     return sorted(attempts, key=lambda item: item.created_at)
 
 
+def load_attempt(job_dir: Path, attempt_id: str) -> ExecutionAttempt:
+    if not re.fullmatch(r"attempt-[a-f0-9]{12}", attempt_id):
+        raise ValueError("Invalid execution attempt identifier.")
+    path = job_dir / "sdtm" / "executions" / attempt_id / "attempt.json"
+    if not path.is_file():
+        raise ValueError("Execution attempt was not found.")
+    return ExecutionAttempt.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def save_attempt(job_dir: Path, attempt: ExecutionAttempt) -> None:
+    _write_attempt(job_dir / "sdtm" / "executions" / attempt.attempt_id, attempt)
+
+
+def repair_depth(job_dir: Path, attempt: ExecutionAttempt) -> int:
+    by_id = {item.attempt_id: item for item in list_attempts(job_dir)}
+    depth = 0
+    current = attempt
+    seen: set[str] = set()
+    while current.parent_attempt_id:
+        if current.attempt_id in seen:
+            raise ValueError("Execution attempt history contains a cycle.")
+        seen.add(current.attempt_id)
+        depth += 1
+        current = by_id.get(current.parent_attempt_id)  # type: ignore[assignment]
+        if current is None:
+            break
+    return depth
+
+
+def propose_repair(attempt: ExecutionAttempt, plan: SDTMPlan, inventory: list[RawDatasetInventory]) -> RepairProposal | None:
+    if attempt.failure_classification != "missing_source_column":
+        return None
+    text = f"{attempt.stderr}\n{attempt.stdout}"
+    patterns = [r"(?i)(?:object|column)\s+['`\"]([^'`\"]+)['`\"]\s+(?:not found|does not exist|doesn't exist)", r"(?i)unknown columns?:?\s*([^\s,]+)"]
+    unknown = next((match.group(1) for pattern in patterns if (match := re.search(pattern, text))), None)
+    if not unknown:
+        return None
+    for dataset in plan.datasets:
+        for variable in dataset.variables:
+            if variable.source_field.casefold() != unknown.casefold() and unknown.casefold() not in next((rule.r_expression.casefold() for rule in plan.rule_augmentations if rule.target_domain == dataset.domain and rule.target_variable == variable.name), ""):
+                continue
+            source_inventory = next((item for item in inventory if item.logical_name == variable.source_dataset.upper()), None)
+            if source_inventory is None:
+                continue
+            available = [column.name for column in source_inventory.columns]
+            matches = difflib.get_close_matches(unknown, available, n=1, cutoff=0.55)
+            if not matches:
+                continue
+            replacement = matches[0]
+            change = RepairChange(domain=dataset.domain, target_variable=variable.name, from_source_field=variable.source_field, to_source_field=replacement)
+            return RepairProposal(
+                proposal_id=f"repair-{uuid4().hex[:12]}",
+                rationale=f"The runner reported missing source column {unknown!r}; {replacement!r} is the closest reviewed column in {source_inventory.logical_name}.",
+                diff=f"{dataset.domain}.{variable.name}: source_field {variable.source_field!r} -> {replacement!r}",
+                change=change,
+            )
+    return None
+
+
+def apply_typed_repair(plan: SDTMPlan, proposal: RepairProposal) -> SDTMPlan:
+    repaired = plan.model_copy(deep=True)
+    change = proposal.change
+    dataset = next((item for item in repaired.datasets if item.domain == change.domain), None)
+    variable = next((item for item in dataset.variables if item.name == change.target_variable), None) if dataset else None
+    if variable is None or variable.source_field != change.from_source_field:
+        raise ValueError("The reviewed plan changed after this proposal.")
+    variable.source_field = change.to_source_field
+    variable.mapping_expression = f"Direct from {change.to_source_field} (approved repair)"
+    rule = next((item for item in repaired.rule_augmentations if item.target_domain == change.domain and item.target_variable == change.target_variable), None)
+    if rule is None:
+        raise ValueError("The typed variable rule for this proposal is unavailable.")
+    rule.source_dependencies = [f"{variable.source_dataset}.{change.to_source_field}"]
+    rule.r_expression = f'.data[["{change.to_source_field}"]]'
+    reviewer = proposal.reviewer or "reviewer"
+    rule.review_notes = [*rule.review_notes, f"Repair {proposal.proposal_id} approved by {reviewer}."]
+    return repaired
+
+
 def _write_attempt(attempt_dir: Path, attempt: ExecutionAttempt) -> None:
     path = attempt_dir / "attempt.json"
     temp = path.with_suffix(".tmp")
@@ -238,7 +320,7 @@ def classify_failure(attempt: ExecutionAttempt) -> str:
         return "timeout"
     if attempt.status == "unavailable":
         return "runner_unavailable"
-    if "object" in text and "not found" in text or "unknown columns" in text:
+    if ("object" in text and "not found" in text) or "unknown columns" in text or ("column" in text and "doesn't exist" in text):
         return "missing_source_column"
     if any(item.check_id == "expected-variables" and item.status == "failed" for item in attempt.checks):
         return "missing_output_variable"

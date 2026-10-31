@@ -14,7 +14,7 @@ from app.schemas import (
     SDTMRuleAugmentation,
     SDTMVariable,
 )
-from app.sdtm_execution import ProviderResult, RExecutionProvider, SDTMExecutionService, inspect_outputs
+from app.sdtm_execution import ProviderResult, RExecutionProvider, SDTMExecutionService, apply_typed_repair, inspect_outputs, repair_depth
 from app.sdtm_workbench import initialize_state, inventory_raw_dataset
 
 
@@ -93,4 +93,31 @@ def test_malformed_xpt_and_missing_columns_fail_post_run_checks(tmp_path) -> Non
     (output / "dm.xpt").write_bytes(_xpt_bytes(tmp_path, {"USUBJID": ["SYN-001"]}))
     checks, _ = inspect_outputs(output, _plan())
     assert any(check.check_id == "expected-variables" and check.status == "failed" for check in checks)
+
+
+def test_missing_column_proposes_typed_repair_and_preserves_parent_history(tmp_path) -> None:
+    plan = _plan()
+    age = next(item for item in plan.datasets[0].variables if item.name == "AGE")
+    age.source_field = "AGEE"
+    age_rule = next(item for item in plan.rule_augmentations if item.target_variable == "AGE")
+    age_rule.r_expression = '.data[["AGEE"]]'
+    provider = FakeProvider(ProviderResult(status="failed", exit_code=1, stdout="", stderr="Error: object 'AGEE' not found"))
+    job_dir = _job_dir(tmp_path)
+    first = SDTMExecutionService(provider).execute(job_dir, plan)
+    assert first.status == "failed"
+    assert first.failure_classification == "missing_source_column"
+    assert first.repair_proposal is not None
+    assert "AGEE" in first.repair_proposal.diff and "AGE" in first.repair_proposal.diff
+    first.repair_proposal.status = "approved"
+    first.repair_proposal.reviewer = "Jane Reviewer"
+    repaired = apply_typed_repair(plan, first.repair_proposal)
+    assert next(item for item in repaired.datasets[0].variables if item.name == "AGE").source_field == "AGE"
+    assert next(item for item in repaired.rule_augmentations if item.target_variable == "AGE").r_expression == '.data[["AGE"]]'
+
+    second = SDTMExecutionService(provider).execute(job_dir, plan, parent_attempt_id=first.attempt_id)
+    third = SDTMExecutionService(provider).execute(job_dir, plan, parent_attempt_id=second.attempt_id)
+    fourth = SDTMExecutionService(provider).execute(job_dir, plan, parent_attempt_id=third.attempt_id)
+    assert repair_depth(job_dir, first) == 0
+    assert repair_depth(job_dir, fourth) == 3
+    assert (job_dir / "sdtm" / "executions" / first.attempt_id / "attempt.json").is_file()
 

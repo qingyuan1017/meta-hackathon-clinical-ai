@@ -71,6 +71,29 @@ class ExecutionCheck(BaseModel):
     domain: str | None = None
 
 
+class RepairChange(BaseModel):
+    domain: str
+    target_variable: str
+    from_source_field: str
+    to_source_field: str
+
+
+class RepairProposal(BaseModel):
+    proposal_id: str
+    status: Literal["proposed", "approved", "rejected"] = "proposed"
+    rationale: str
+    diff: str
+    change: RepairChange
+    reviewer: str | None = None
+    decided_at: datetime | None = None
+
+
+class RepairApproval(BaseModel):
+    proposal_id: str
+    approved: bool
+    reviewer: str = Field(min_length=1, max_length=120)
+
+
 class ExecutionAttempt(BaseModel):
     attempt_id: str
     parent_attempt_id: str | None = None
@@ -88,6 +111,7 @@ class ExecutionAttempt(BaseModel):
     checks: list[ExecutionCheck] = Field(default_factory=list)
     failure_classification: str | None = None
     program_artifact: str
+    repair_proposal: RepairProposal | None = None
 
 
 class ExecutionAttemptList(BaseModel):

@@ -389,6 +389,13 @@ function ExecutionReview({ jobId, workbench }: { jobId?: string; workbench?: SDT
       client.invalidateQueries({ queryKey: ["job", jobId] });
     },
   });
+  const repairMutation = useMutation({
+    mutationFn: ({ attemptId, proposalId, approved }: { attemptId: string; proposalId: string; approved: boolean }) => api.reviewSdtmRepair(jobId!, attemptId, proposalId, approved),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["sdtm-executions", jobId] });
+      client.invalidateQueries({ queryKey: ["job", jobId] });
+    },
+  });
   const datasets = workbench?.inputs.raw_datasets ?? [];
   return <div className="space-y-4">
     <section className="rounded-xl border border-white/10 bg-[#141416] p-4">
@@ -409,6 +416,7 @@ function ExecutionReview({ jobId, workbench }: { jobId?: string; workbench?: SDT
       {query.data?.items.map((attempt) => <article key={attempt.attempt_id} className="rounded-xl border border-white/10 bg-[#141416] p-4">
         <div className="flex flex-wrap justify-between gap-2"><div><p className="font-mono text-xs font-bold text-violet-200">{attempt.attempt_id}</p><p className="mt-1 text-[11px] text-zinc-500">Program SHA-256 {attempt.program_hash} · exit {attempt.exit_code ?? "not available"}</p></div><span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${attempt.status === "passed" ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"}`}>{attempt.status.replaceAll("_", " ")}</span></div>
         {attempt.failure_classification && <p className="mt-3 text-xs text-amber-200">Failure classification: {attempt.failure_classification.replaceAll("_", " ")}</p>}
+        {attempt.repair_proposal && <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/[0.06] p-3"><p className="text-xs font-bold text-amber-100">Typed repair proposal · {attempt.repair_proposal.status}</p><p className="mt-1 text-xs text-zinc-300">{attempt.repair_proposal.rationale}</p><pre className="mt-2 overflow-auto rounded bg-black/30 p-2 text-[11px] text-cyan-100">{attempt.repair_proposal.diff}</pre>{attempt.repair_proposal.status === "proposed" && <div className="mt-3 flex gap-2"><Button type="button" variant="clinical" size="sm" disabled={repairMutation.isPending} onClick={() => repairMutation.mutate({ attemptId: attempt.attempt_id, proposalId: attempt.repair_proposal!.proposal_id, approved: true })}>Approve and rerun</Button><Button type="button" variant="outline" size="sm" disabled={repairMutation.isPending} onClick={() => repairMutation.mutate({ attemptId: attempt.attempt_id, proposalId: attempt.repair_proposal!.proposal_id, approved: false })}>Reject</Button></div>}</div>}
         <div className="mt-3 grid gap-2 md:grid-cols-2">{attempt.checks.map((check, index) => <div key={`${check.check_id}-${index}`} className="rounded-lg border border-white/[0.08] p-2 text-xs"><span className={check.status === "passed" ? "text-emerald-300" : check.status === "warning" ? "text-amber-300" : "text-rose-300"}>{check.status.toUpperCase()}</span><span className="ml-2 text-zinc-400">{check.message}</span></div>)}</div>
         {(attempt.stdout || attempt.stderr) && <details className="mt-3"><summary className="cursor-pointer text-xs font-bold text-zinc-400">Sanitized runner logs</summary><pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-black/30 p-3 text-[11px] text-zinc-400">{[attempt.stdout, attempt.stderr].filter(Boolean).join("\n")}</pre></details>}
       </article>)}

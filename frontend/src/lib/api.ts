@@ -107,6 +107,12 @@ export const api = {
     rawFiles.forEach((file) => data.append("raw_files", file));
     return request<ExecutionAttempt>(`/api/v1/jobs/${id}/sdtm-executions`, { method: "POST", body: data });
   },
+  reviewSdtmRepair: (id: string, attemptId: string, proposalId: string, approved: boolean, reviewer = "Workbench reviewer") =>
+    request<ExecutionAttempt>(`/api/v1/jobs/${id}/sdtm-executions/${attemptId}/repair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proposal_id: proposalId, approved, reviewer }),
+    }),
   deleteJob: (id: string) => request<void>(`/api/v1/jobs/${id}`, { method: "DELETE" }),
   artifactUrl: (path: string) => `${API_URL}${path}`,
   artifactPreviewUrl: (path: string) => `${API_URL}${path}?inline=true`,
