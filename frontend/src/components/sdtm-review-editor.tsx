@@ -6,9 +6,17 @@ import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCod
 import { api } from "@/lib/api";
 import type { Artifact, CDISCDataset, SDTMWorkbenchState, ValidationFinding } from "@/lib/types";
 import { Button } from "./ui/button";
+import {
+  RecordPlanEditor,
+  VariableMappingCards,
+  newSourceVariable,
+  normalizeRecordPlan,
+  normalizeVariable,
+  type SDTMRecordPlan,
+  type SDTMVariableDraft,
+} from "./sdtm-lineage-editor";
 
 type SourceType = "raw" | "sdtm";
-type DataType = "Char" | "Num";
 
 interface DomainMapping {
   source_dataset: string;
@@ -18,52 +26,21 @@ interface DomainMapping {
   rationale: string;
 }
 
-interface ValueLevelMetadata {
-  where_clause: string;
-  label: string;
-  data_type: DataType;
-  origin: string;
-  mapping_expression: string;
-  controlled_terms: string[];
-}
-
-interface SDTMVariable {
-  name: string;
-  label: string;
-  data_type: DataType;
-  source_dataset: string;
-  source_field: string;
-  origin: string;
-  mapping_expression: string;
-  controlled_terms: string[];
-  value_level_metadata: ValueLevelMetadata[];
-  crf_source_label: string | null;
-}
+type SDTMVariable = SDTMVariableDraft;
 
 interface SDTMDataset {
   domain: string;
   description: string;
   structure: string;
   key_variables: string[];
+  record_plan: SDTMRecordPlan;
   variables: SDTMVariable[];
-}
-
-interface DomainRule {
-  rule_id: string;
-  target_domain: string;
-  source_datasets: string[];
-  description: string;
-  logic: string;
-  r_input_expression: string;
-  sas_input_statement: string;
-  review_notes: string[];
 }
 
 interface VariableRule {
   rule_id: string;
   target_domain: string;
   target_variable: string;
-  source_dependencies: string[];
   description: string;
   logic: string;
   r_expression: string;
@@ -77,7 +54,6 @@ export interface SDTMPlanDraft extends Record<string, unknown> {
   define_standard: string;
   domain_mappings: DomainMapping[];
   datasets: SDTMDataset[];
-  domain_rule_augmentations: DomainRule[];
   rule_augmentations: VariableRule[];
   assumptions: string[];
   unresolved_mappings: string[];
@@ -112,12 +88,18 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
 
   const sourceInventory = useMemo(() => {
     const sources = new Map<string, SourceType>();
+    const variables = new Map<string, Set<string>>();
     plan.domain_mappings.forEach((mapping) => sources.set(mapping.source_dataset, mapping.source_type));
     plan.datasets.flatMap((dataset) => dataset.variables).forEach((variable) => {
-      if (variable.source_dataset) sources.set(variable.source_dataset, sources.get(variable.source_dataset) ?? "raw");
+      variable.sources.forEach((source) => {
+        sources.set(source.dataset, sources.get(source.dataset) ?? "raw");
+        const names = variables.get(source.dataset) ?? new Set<string>();
+        names.add(source.variable);
+        variables.set(source.dataset, names);
+      });
     });
     customSources.forEach((source) => sources.set(source.name, source.type));
-    return Array.from(sources, ([name, type]) => ({ name, type }));
+    return Array.from(sources, ([name, type]) => ({ name, type, variables: Array.from(variables.get(name) ?? [], (variable) => ({ name: variable })) }));
   }, [customSources, plan.datasets, plan.domain_mappings]);
 
   const activeDataset = plan.datasets.find((dataset) => dataset.domain === selectedDomain) ?? plan.datasets[0];
@@ -201,7 +183,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
     const dataset = next.datasets.find((item) => item.domain === domain);
     if (!dataset) return;
     const source = next.domain_mappings.find((mapping) => mapping.target_domain === domain)?.source_dataset ?? "";
-    dataset.variables.push(newVariable(`NEW${dataset.variables.length + 1}`, source));
+    dataset.variables.push(newSourceVariable(`NEW${dataset.variables.length + 1}`, source));
   });
 
   const addSuppQualifier = (domain: string) => update((next) => {
@@ -210,7 +192,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
     const source = next.domain_mappings.find((mapping) => mapping.target_domain === domain)?.source_dataset ?? "";
     let qval = dataset.variables.find((variable) => variable.name === "QVAL");
     if (!qval) {
-      qval = newVariable("QVAL", source);
+      qval = newSourceVariable("QVAL", source);
       qval.label = "Data Value";
       dataset.variables.push(qval);
     }
@@ -220,6 +202,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
       data_type: "Char",
       origin: "Assigned",
       mapping_expression: "TODO: define sponsor qualifier mapping",
+      sources: source ? [{ dataset: source, variable: "", role: "value" }] : [],
       controlled_terms: [],
     });
   });
@@ -295,42 +278,22 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
           {activeDataset ? (
             <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4">
-                <div><p className="text-sm font-bold text-zinc-100">{activeDataset.domain} · {activeDataset.description}</p><p className="mt-1 text-xs text-zinc-500">Each row is an SDTM variable. Value-level metadata is edited in the VLM column.</p></div>
+                <div><p className="text-sm font-bold text-zinc-100">{activeDataset.domain} · {activeDataset.description}</p><p className="mt-1 text-xs text-zinc-500">Review the record pipeline first, then each variable and value-level lineage card.</p></div>
                 <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" size="sm" onClick={() => addVariable(activeDataset.domain)}><Plus size={14} />Variable</Button><Button type="button" variant="outline" size="sm" onClick={() => addSuppQualifier(activeDataset.domain)}><Plus size={14} />SUPP/VLM qualifier</Button></div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="min-w-[1500px] w-full border-collapse text-left text-xs">
-                  <thead className="bg-white/[0.03] text-[10px] uppercase tracking-wider text-zinc-500"><tr>{["SDTM variable", "Label / type", "Source dataset", "Source field", "Mapping", "Origin / CT", "aCRF label", "VLM", ""].map((heading) => <th key={heading} className="border-b border-r border-white/10 px-3 py-2.5 font-black last:border-r-0">{heading}</th>)}</tr></thead>
-                  <tbody>{activeDataset.variables.map((variable, variableIndex) => (
-                    <VariableRow key={`${variable.name}-${variableIndex}`} variable={variable} onUpdate={(key, nextValue) => update((next) => {
-                      const target = next.datasets.find((dataset) => dataset.domain === activeDataset.domain)?.variables[variableIndex];
-                      if (!target) return;
-                      const previousName = target.name;
-                      const previousDependency = target.source_dataset && target.source_field ? `${target.source_dataset}.${target.source_field}` : "";
-                      (target as unknown as Record<string, unknown>)[key] = nextValue;
-                      const rule = next.rule_augmentations.find((item) => item.target_domain === activeDataset.domain && item.target_variable === previousName);
-                      if (!rule) return;
-                      if (key === "name") {
-                        rule.target_variable = String(nextValue);
-                        rule.rule_id = `${activeDataset.domain}-${String(nextValue)}`;
-                      }
-                      if (key === "source_dataset" || key === "source_field") {
-                        const dependency = target.source_dataset && target.source_field ? `${target.source_dataset}.${target.source_field}` : "";
-                        if (rule.source_dependencies.length <= 1 || rule.source_dependencies[0] === previousDependency) rule.source_dependencies = dependency ? [dependency] : [];
-                      }
-                    })} onUpdateVlm={(vlmIndex, key, nextValue) => update((next) => {
-                      const target = next.datasets.find((dataset) => dataset.domain === activeDataset.domain)?.variables[variableIndex]?.value_level_metadata[vlmIndex];
-                      if (target) (target as unknown as Record<string, unknown>)[key] = nextValue;
-                    })} onAddVlm={() => update((next) => {
-                      next.datasets.find((dataset) => dataset.domain === activeDataset.domain)?.variables[variableIndex]?.value_level_metadata.push({ where_clause: "", label: "", data_type: "Char", origin: "CRF", mapping_expression: "", controlled_terms: [] });
-                    })} onRemoveVlm={(vlmIndex) => update((next) => {
-                      const target = next.datasets.find((dataset) => dataset.domain === activeDataset.domain)?.variables[variableIndex];
-                      if (target) target.value_level_metadata.splice(vlmIndex, 1);
-                    })} onRemove={() => update((next) => {
-                      next.datasets.find((dataset) => dataset.domain === activeDataset.domain)?.variables.splice(variableIndex, 1);
-                    })} />
-                  ))}</tbody>
-                </table>
+              <div className="space-y-4 p-4">
+                <RecordPlanEditor value={activeDataset.record_plan} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} onChange={(record_plan) => update((next) => { const dataset = next.datasets.find((item) => item.domain === activeDataset.domain); if (dataset) dataset.record_plan = record_plan; })} />
+                <VariableMappingCards variables={activeDataset.variables} inventory={sourceInventory} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} onChange={(variables) => update((next) => {
+                  const dataset = next.datasets.find((item) => item.domain === activeDataset.domain);
+                  if (!dataset) return;
+                  variables.forEach((variable, index) => {
+                    const previous = dataset.variables[index];
+                    if (!previous || previous.name === variable.name) return;
+                    const rule = next.rule_augmentations.find((item) => item.target_domain === activeDataset.domain && item.target_variable === previous.name);
+                    if (rule) { rule.target_variable = variable.name; rule.rule_id = `${activeDataset.domain}-${variable.name}`; }
+                  });
+                  dataset.variables = variables;
+                })} />
               </div>
             </section>
           ) : <EmptyReview text="Import or add an SDTM domain before reviewing variables." />}
@@ -340,11 +303,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
       {stage === "rules" && (
         <div className="space-y-5">
           <section className="space-y-3">
-            <div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">Domain source preparation</p><p className="mt-1 text-xs text-zinc-600">Review the input/join logic that feeds each target-domain transformation.</p></div>
-            {plan.domain_rule_augmentations.map((rule, index) => <DomainRuleEditor key={rule.rule_id} rule={rule} onUpdate={(key, nextValue) => update((next) => { (next.domain_rule_augmentations[index] as unknown as Record<string, unknown>)[key] = nextValue; })} />)}
-          </section>
-          <section className="space-y-3">
-            <div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">Variable rule review</p><p className="mt-1 text-xs text-zinc-600">Expressions are draft code inputs. After approval, R may run only in the isolated runner when raw data is present; SAS remains export-only.</p></div>
+            <div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">Variable rule review</p><p className="mt-1 text-xs text-zinc-600">Record preparation is compiled from the approved pipelines on the Variable &amp; VLM tab. These expressions are target-variable right-hand sides only.</p></div>
             {plan.rule_augmentations.map((rule, index) => <VariableRuleEditor key={`${rule.target_domain}-${rule.target_variable}`} rule={rule} onUpdate={(key, nextValue) => update((next) => { (next.rule_augmentations[index] as unknown as Record<string, unknown>)[key] = nextValue; })} />)}
           </section>
         </div>
@@ -518,16 +477,8 @@ function DomainTabs({ datasets, selected, onSelect }: { datasets: SDTMDataset[];
   return <div className="flex flex-wrap gap-2">{datasets.map((dataset) => <button type="button" key={dataset.domain} onClick={() => onSelect(dataset.domain)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${selected === dataset.domain ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 bg-white/[0.02] text-zinc-500"}`}>{dataset.domain}</button>)}</div>;
 }
 
-function VariableRow({ variable, onUpdate, onUpdateVlm, onAddVlm, onRemoveVlm, onRemove }: { variable: SDTMVariable; onUpdate: (key: keyof SDTMVariable, value: unknown) => void; onUpdateVlm: (index: number, key: keyof ValueLevelMetadata, value: unknown) => void; onAddVlm: () => void; onRemoveVlm: (index: number) => void; onRemove: () => void }) {
-  return <tr className="align-top hover:bg-white/[0.015]"><td className="border-b border-r border-white/[0.07] p-2"><input value={variable.name} onChange={(event) => onUpdate("name", event.target.value.toUpperCase())} className={`${inputClass} font-mono font-bold text-violet-200`} /></td><td className="min-w-48 border-b border-r border-white/[0.07] p-2"><input value={variable.label} onChange={(event) => onUpdate("label", event.target.value)} className={inputClass} /><select value={variable.data_type} onChange={(event) => onUpdate("data_type", event.target.value)} className={`${inputClass} mt-1`}><option value="Char">Char</option><option value="Num">Num</option></select></td><td className="border-b border-r border-white/[0.07] p-2"><input value={variable.source_dataset} onChange={(event) => onUpdate("source_dataset", event.target.value)} className={inputClass} /></td><td className="border-b border-r border-white/[0.07] p-2"><input value={variable.source_field} onChange={(event) => onUpdate("source_field", event.target.value)} className={inputClass} /></td><td className="min-w-56 border-b border-r border-white/[0.07] p-2"><textarea rows={3} value={variable.mapping_expression} onChange={(event) => onUpdate("mapping_expression", event.target.value)} className={inputClass} /></td><td className="min-w-44 border-b border-r border-white/[0.07] p-2"><input value={variable.origin} onChange={(event) => onUpdate("origin", event.target.value)} className={inputClass} /><input value={variable.controlled_terms.join(", ")} onChange={(event) => onUpdate("controlled_terms", splitList(event.target.value))} placeholder="Controlled terms" className={`${inputClass} mt-1`} /></td><td className="border-b border-r border-white/[0.07] p-2"><input value={variable.crf_source_label ?? ""} onChange={(event) => onUpdate("crf_source_label", event.target.value || null)} className={inputClass} /></td><td className="min-w-[360px] border-b border-r border-white/[0.07] p-2"><div className="space-y-2">{variable.value_level_metadata.map((vlm, index) => <div key={index} className="rounded-lg border border-cyan-500/15 bg-cyan-500/[0.04] p-2"><div className="grid grid-cols-2 gap-1"><input value={vlm.where_clause} onChange={(event) => onUpdateVlm(index, "where_clause", event.target.value)} placeholder="Where clause" className={inputClass} /><input value={vlm.label} onChange={(event) => onUpdateVlm(index, "label", event.target.value)} placeholder="VLM label" className={inputClass} /></div><textarea rows={2} value={vlm.mapping_expression} onChange={(event) => onUpdateVlm(index, "mapping_expression", event.target.value)} placeholder="Mapping value / expression" className={`${inputClass} mt-1`} /><div className="mt-1 flex gap-1"><input value={vlm.controlled_terms.join(", ")} onChange={(event) => onUpdateVlm(index, "controlled_terms", splitList(event.target.value))} placeholder="Controlled terms" className={inputClass} /><button type="button" aria-label="Remove VLM" onClick={() => onRemoveVlm(index)} className="grid h-9 w-9 shrink-0 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={13} /></button></div></div>)}<button type="button" onClick={onAddVlm} className="flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-white/10 py-2 text-[10px] font-black uppercase tracking-wider text-zinc-500 hover:border-cyan-500/30 hover:text-cyan-300"><Plus size={12} />VLM mapping</button></div></td><td className="border-b border-white/[0.07] p-2"><button type="button" aria-label={`Remove ${variable.name}`} onClick={onRemove} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={14} /></button></td></tr>;
-}
-
-function DomainRuleEditor({ rule, onUpdate }: { rule: DomainRule; onUpdate: (key: keyof DomainRule, value: unknown) => void }) {
-  return <article className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]"><header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3"><div><span className="font-mono text-xs font-black text-violet-300">{rule.target_domain}</span><span className="ml-2 text-xs text-zinc-500">{rule.rule_id}</span></div><span className="rounded-full bg-blue-500/10 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-blue-300">Domain rule</span></header><div className="grid gap-4 p-4 lg:grid-cols-2"><label><EditorLabel>Logic review</EditorLabel><textarea value={rule.logic} onChange={(event) => onUpdate("logic", event.target.value)} className={codeClass} /></label><label><EditorLabel>Review notes</EditorLabel><textarea value={rule.review_notes.join("\n")} onChange={(event) => onUpdate("review_notes", splitLines(event.target.value))} placeholder="One review note per line" className={codeClass} /></label><label><EditorLabel>R input expression</EditorLabel><textarea value={rule.r_input_expression} onChange={(event) => onUpdate("r_input_expression", event.target.value)} className={codeClass} spellCheck={false} /></label><label><EditorLabel>SAS SET / MERGE statement</EditorLabel><textarea value={rule.sas_input_statement} onChange={(event) => onUpdate("sas_input_statement", event.target.value)} className={codeClass} spellCheck={false} /></label></div></article>;
-}
-
 function VariableRuleEditor({ rule, onUpdate }: { rule: VariableRule; onUpdate: (key: keyof VariableRule, value: unknown) => void }) {
-  return <article className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]"><header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3"><div><span className="font-mono text-xs font-black text-violet-300">{rule.target_domain}.{rule.target_variable}</span><span className="ml-2 text-xs text-zinc-500">{rule.rule_id}</span></div><input value={rule.source_dependencies.join(", ")} onChange={(event) => onUpdate("source_dependencies", splitList(event.target.value))} aria-label={`${rule.target_domain}.${rule.target_variable} source dependencies`} className={`${inputClass} max-w-md font-mono`} /></header><div className="grid gap-4 p-4 lg:grid-cols-2"><label className="lg:col-span-2"><EditorLabel>Language-neutral mapping logic</EditorLabel><textarea value={rule.logic} onChange={(event) => onUpdate("logic", event.target.value)} className={`${codeClass} min-h-20`} /></label><label><EditorLabel>R right-hand-side expression</EditorLabel><textarea value={rule.r_expression} onChange={(event) => onUpdate("r_expression", event.target.value)} className={codeClass} spellCheck={false} /></label><label><EditorLabel>SAS right-hand-side expression</EditorLabel><textarea value={rule.sas_expression} onChange={(event) => onUpdate("sas_expression", event.target.value)} className={codeClass} spellCheck={false} /></label><label className="lg:col-span-2"><EditorLabel>Review notes</EditorLabel><textarea value={rule.review_notes.join("\n")} onChange={(event) => onUpdate("review_notes", splitLines(event.target.value))} className={`${codeClass} min-h-20`} /></label></div></article>;
+  return <article className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]"><header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3"><div><span className="font-mono text-xs font-black text-violet-300">{rule.target_domain}.{rule.target_variable}</span><span className="ml-2 text-xs text-zinc-500">{rule.rule_id}</span></div><span className="rounded-full bg-violet-500/10 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-violet-300">Variable RHS</span></header><div className="grid gap-4 p-4 lg:grid-cols-2"><label className="lg:col-span-2"><EditorLabel>Language-neutral mapping logic</EditorLabel><textarea value={rule.logic} onChange={(event) => onUpdate("logic", event.target.value)} className={`${codeClass} min-h-20`} /></label><label><EditorLabel>R right-hand-side expression</EditorLabel><textarea value={rule.r_expression} onChange={(event) => onUpdate("r_expression", event.target.value)} className={codeClass} spellCheck={false} /></label><label><EditorLabel>SAS right-hand-side expression</EditorLabel><textarea value={rule.sas_expression} onChange={(event) => onUpdate("sas_expression", event.target.value)} className={codeClass} spellCheck={false} /></label><label className="lg:col-span-2"><EditorLabel>Review notes</EditorLabel><textarea value={rule.review_notes.join("\n")} onChange={(event) => onUpdate("review_notes", splitLines(event.target.value))} className={`${codeClass} min-h-20`} /></label></div></article>;
 }
 
 function EditorLabel({ children }: { children: ReactNode }) { return <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">{children}</span>; }
@@ -540,8 +491,7 @@ function normalizePlan(value: Record<string, unknown>): SDTMPlanDraft {
     standard: stringValue(value.standard, "SDTMIG 3.4"),
     define_standard: stringValue(value.define_standard, "Define-XML 2.1"),
     domain_mappings: arrayValue<DomainMapping>(value.domain_mappings),
-    datasets: arrayValue<SDTMDataset>(value.datasets).map((dataset) => ({ ...dataset, variables: arrayValue<SDTMVariable>(dataset.variables).map((variable) => ({ ...variable, source_dataset: stringValue(variable.source_dataset, ""), source_field: stringValue(variable.source_field, ""), controlled_terms: arrayValue<string>(variable.controlled_terms), value_level_metadata: arrayValue<ValueLevelMetadata>(variable.value_level_metadata) })) })),
-    domain_rule_augmentations: arrayValue<DomainRule>(value.domain_rule_augmentations),
+    datasets: arrayValue<SDTMDataset>(value.datasets).map((dataset) => ({ ...dataset, record_plan: normalizeRecordPlan(dataset.record_plan), variables: arrayValue<SDTMVariable>(dataset.variables).map(normalizeVariable) })),
     rule_augmentations: arrayValue<VariableRule>(value.rule_augmentations),
     assumptions: arrayValue<string>(value.assumptions),
     unresolved_mappings: arrayValue<string>(value.unresolved_mappings),
@@ -551,11 +501,6 @@ function normalizePlan(value: Record<string, unknown>): SDTMPlanDraft {
 function reconcilePlan(plan: SDTMPlanDraft): SDTMPlanDraft {
   const domains = new Set(plan.datasets.map((dataset) => dataset.domain));
   plan.domain_mappings = plan.domain_mappings.filter((mapping) => domains.has(mapping.target_domain));
-  plan.domain_rule_augmentations = plan.datasets.map((dataset) => {
-    const existing = plan.domain_rule_augmentations.find((rule) => rule.target_domain === dataset.domain) ?? newDomainRule(dataset.domain);
-    existing.source_datasets = Array.from(new Set(plan.domain_mappings.filter((mapping) => mapping.target_domain === dataset.domain).map((mapping) => mapping.source_dataset)));
-    return existing;
-  });
   const variableRules: VariableRule[] = [];
   plan.datasets.forEach((dataset) => {
     dataset.variables.forEach((variable) => {
@@ -574,14 +519,25 @@ function reviewIssues(plan: SDTMPlanDraft): string[] {
     const mappings = plan.domain_mappings.filter((mapping) => mapping.target_domain === dataset.domain);
     if (!mappings.length) issues.push(`${dataset.domain} needs at least one source dataset mapping.`);
     if (!dataset.variables.length) issues.push(`${dataset.domain} needs at least one variable.`);
+    const available = new Set<string>();
+    const reads = new Set<string>();
+    dataset.record_plan.steps.forEach((step) => {
+      if (!step.step_id.trim() || available.has(step.step_id)) issues.push(`${dataset.domain} record steps need unique IDs.`);
+      [...step.inputs, ...(step.left ? [step.left] : []), ...(step.right ? [step.right] : [])].forEach((reference) => { if (!available.has(reference)) issues.push(`${dataset.domain}.${step.step_id} references unavailable step ${reference}.`); });
+      if (step.operation === "read" && step.source_dataset) reads.add(step.source_dataset);
+      if (step.operation === "stack" && step.inputs.length < 2) issues.push(`${dataset.domain}.${step.step_id} stack needs at least two inputs.`);
+      if (step.operation === "join" && (!step.left || !step.right || !step.join_keys.length)) issues.push(`${dataset.domain}.${step.step_id} join needs both inputs and keys.`);
+      available.add(step.step_id);
+    });
+    mappings.forEach((mapping) => { if (!reads.has(mapping.source_dataset)) issues.push(`${dataset.domain} record plan must read ${mapping.source_dataset}.`); });
+    if (!available.has(dataset.record_plan.output_step)) issues.push(`${dataset.domain} needs a valid final record step.`);
     dataset.variables.forEach((variable) => {
       if (!variable.name.trim()) issues.push(`${dataset.domain} has a variable without a target name.`);
-      const hasDataset = Boolean(variable.source_dataset.trim());
-      const hasField = Boolean(variable.source_field.trim());
-      if (hasDataset !== hasField) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs both a source dataset and field, or neither.`);
-      if (hasDataset && !mappings.some((mapping) => mapping.source_dataset === variable.source_dataset)) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} uses an unmapped source dataset.`);
-      if (!hasDataset && !allowsSourcelessOrigin(variable.origin)) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs an assigned or derived origin without a raw source.`);
-      if (!hasDataset && (!variable.mapping_expression.trim() || variable.mapping_expression.trim().toLowerCase() === "direct")) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs explicit assignment or derivation logic.`);
+      variable.sources.forEach((source) => { if (!source.dataset.trim() || !source.variable.trim()) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} has an incomplete source reference.`); else if (!mappings.some((mapping) => mapping.source_dataset === source.dataset)) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} uses an unmapped source dataset.`); });
+      if (variable.mapping_type === "direct" && variable.sources.length !== 1) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} direct mapping needs exactly one source.`);
+      if (variable.mapping_type === "assigned" && variable.sources.length) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} assigned mapping cannot have sources.`);
+      if (!variable.sources.length && !allowsSourcelessOrigin(variable.origin)) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs an assigned or derived origin without a raw source.`);
+      if (!variable.sources.length && (!variable.mapping_expression.trim() || variable.mapping_expression.trim().toLowerCase() === "direct")) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs explicit assignment or derivation logic.`);
     });
   });
   return issues;
@@ -596,9 +552,10 @@ function datasetFromLibrary(response: CDISCDataset, plan: SDTMPlanDraft): SDTMDa
     description: findString(root, ["label", "description", "definition", "name"]) || `${response.domain} imported from ${response.standard.toUpperCase()} ${response.version}`,
     structure: findString(root, ["structure", "datasetStructure"]) || "TODO: review CDISC dataset structure",
     key_variables: stringList(findValue(root, ["keyVariables", "keys"])) || ["STUDYID", "USUBJID"],
+    record_plan: source ? { steps: [{ step_id: `read_${source.toLowerCase()}`, operation: "read", description: `Read ${source}`, output: `${response.domain.toLowerCase()}_source`, inputs: [], source_dataset: source, column_alignment: [], left: null, right: null, join_type: null, join_keys: [], cardinality: null, id_variables: [], value_variables: [], name_variable: null, value_variable: null, transpose_values: [], condition: null, sas_condition: null, keys: [], order_by: [], keep: "first", group_by: [], aggregations: [], review_notes: [] }], output_step: `read_${source.toLowerCase()}` } : { steps: [], output_step: "" },
     variables: records.map((record): SDTMVariable => {
       const name = findString(record, ["name", "variableName", "submissionValue", "code"]).toUpperCase();
-      const variable = newVariable(name, source);
+      const variable = newSourceVariable(name, source);
       variable.label = findString(record, ["label", "description", "definition"]) || name;
       variable.data_type = numericType(findString(record, ["dataType", "datatype", "type"])) ? "Num" : "Char";
       variable.origin = "CDISC Library reference";
@@ -607,9 +564,7 @@ function datasetFromLibrary(response: CDISCDataset, plan: SDTMPlanDraft): SDTMDa
   };
 }
 
-function newVariable(name: string, source: string): SDTMVariable { return { name, label: name, data_type: "Char", source_dataset: source, source_field: name, origin: "Assigned", mapping_expression: "TODO: review mapping", controlled_terms: [], value_level_metadata: [], crf_source_label: null }; }
-function newDomainRule(domain: string): DomainRule { return { rule_id: `${domain}-SOURCE`, target_domain: domain, source_datasets: [], description: `Prepare ${domain} source records`, logic: "TODO: review source preparation", r_input_expression: "TODO_SOURCE", sas_input_statement: "/* TODO: SET or MERGE source datasets; */", review_notes: ["User review required"] }; }
-function newVariableRule(domain: string, variable: SDTMVariable): VariableRule { return { rule_id: `${domain}-${variable.name || "NEW"}`, target_domain: domain, target_variable: variable.name, source_dependencies: variable.source_dataset && variable.source_field ? [`${variable.source_dataset}.${variable.source_field}`] : [], description: `Map ${domain}.${variable.name}`, logic: variable.mapping_expression || "TODO: review mapping logic", r_expression: "NA", sas_expression: ".", review_notes: ["User review required"] }; }
+function newVariableRule(domain: string, variable: SDTMVariable): VariableRule { return { rule_id: `${domain}-${variable.name || "NEW"}`, target_domain: domain, target_variable: variable.name, description: `Map ${domain}.${variable.name}`, logic: variable.mapping_expression || "TODO: review mapping logic", r_expression: "NA", sas_expression: ".", review_notes: ["User review required"] }; }
 
 function unwrapPayload(value: unknown): unknown { if (isRecord(value) && Object.keys(value).length === 1 && "result" in value) return unwrapPayload(value.result); return value; }
 function findVariableRecords(value: unknown): Record<string, unknown>[] { if (!isRecord(value) && !Array.isArray(value)) return []; if (isRecord(value)) { for (const key of ["variables", "datasetVariables", "dataset_variables", "items"]) { const candidate = value[key]; if (Array.isArray(candidate) && candidate.some((item) => isRecord(item) && Boolean(findString(item, ["name", "variableName", "submissionValue"])))) return candidate.filter(isRecord); } for (const candidate of Object.values(value)) { const found = findVariableRecords(candidate); if (found.length) return found; } } if (Array.isArray(value)) { for (const candidate of value) { const found = findVariableRecords(candidate); if (found.length) return found; } } return []; }
@@ -621,5 +576,4 @@ function isRecord(value: unknown): value is Record<string, unknown> { return Boo
 function stringValue(value: unknown, fallback: string): string { return typeof value === "string" ? value : fallback; }
 function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
 function allowsSourcelessOrigin(value: string): boolean { const normalized = value.trim().toLowerCase(); return ["assigned", "derived", "protocol", "system", "sponsor"].some((token) => normalized.includes(token)); }
-function splitList(value: string): string[] { return value.split(",").map((item) => item.trim()).filter(Boolean); }
 function splitLines(value: string): string[] { return value.split("\n").map((item) => item.trim()).filter(Boolean); }

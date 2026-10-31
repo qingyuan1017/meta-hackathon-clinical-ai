@@ -1119,10 +1119,12 @@ export interface components {
             domain: string;
             /** Target Variable */
             target_variable: string;
-            /** From Source Field */
-            from_source_field: string;
-            /** To Source Field */
-            to_source_field: string;
+            /** Source Dataset */
+            source_dataset: string;
+            /** From Source Variable */
+            from_source_variable: string;
+            /** To Source Variable */
+            to_source_variable: string;
         };
         /** RepairProposal */
         RepairProposal: {
@@ -1257,6 +1259,18 @@ export interface components {
             /** Fields */
             fields?: string[];
         };
+        /** SDTMAggregation */
+        SDTMAggregation: {
+            /** Output Variable */
+            output_variable: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "count" | "sum" | "min" | "max" | "mean" | "first" | "last";
+            /** Source Variable */
+            source_variable?: string | null;
+        };
         /** SDTMDataset */
         SDTMDataset: {
             /** Domain */
@@ -1280,6 +1294,7 @@ export interface components {
              * @default Tabulation
              */
             purpose: string;
+            record_plan: components["schemas"]["SDTMRecordPlan"];
             /** Variables */
             variables: components["schemas"]["SDTMVariable"][];
             /**
@@ -1357,6 +1372,13 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** SDTMJoinKey */
+        SDTMJoinKey: {
+            /** Left */
+            left: string;
+            /** Right */
+            right: string;
+        };
         /** SDTMLifecycle */
         SDTMLifecycle: {
             /**
@@ -1383,6 +1405,116 @@ export interface components {
              * @enum {string}
              */
             submission_readiness: "not_assessed" | "blocked" | "review_required" | "ready";
+        };
+        /** SDTMRecordPlan */
+        SDTMRecordPlan: {
+            /** Steps */
+            steps: components["schemas"]["SDTMRecordStep"][];
+            /** Output Step */
+            output_step: string;
+        };
+        /** SDTMRecordStep */
+        SDTMRecordStep: {
+            /** Step Id */
+            step_id: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "read" | "stack" | "join" | "transpose" | "filter" | "deduplicate" | "aggregate";
+            /** Description */
+            description: string;
+            /** Output */
+            output: string;
+            /** Inputs */
+            inputs?: string[];
+            /** Source Dataset */
+            source_dataset?: string | null;
+            /** Column Alignment */
+            column_alignment?: components["schemas"]["SDTMStackColumn"][];
+            /** Left */
+            left?: string | null;
+            /** Right */
+            right?: string | null;
+            /** Join Type */
+            join_type?: ("left" | "inner" | "full" | "right") | null;
+            /** Join Keys */
+            join_keys?: components["schemas"]["SDTMJoinKey"][];
+            /** Cardinality */
+            cardinality?: ("one_to_one" | "one_to_many" | "many_to_one" | "many_to_many") | null;
+            /** Id Variables */
+            id_variables?: string[];
+            /** Value Variables */
+            value_variables?: string[];
+            /** Name Variable */
+            name_variable?: string | null;
+            /** Value Variable */
+            value_variable?: string | null;
+            /** Transpose Values */
+            transpose_values?: components["schemas"]["SDTMTransposeValue"][];
+            /** Condition */
+            condition?: string | null;
+            /** Sas Condition */
+            sas_condition?: string | null;
+            /** Keys */
+            keys?: string[];
+            /** Order By */
+            order_by?: string[];
+            /**
+             * Keep
+             * @default first
+             * @enum {string}
+             */
+            keep: "first" | "last";
+            /** Group By */
+            group_by?: string[];
+            /** Aggregations */
+            aggregations?: components["schemas"]["SDTMAggregation"][];
+            /** Review Notes */
+            review_notes?: string[];
+        };
+        /** SDTMSourceReference */
+        SDTMSourceReference: {
+            /**
+             * Dataset
+             * @description Approved source dataset identifier
+             */
+            dataset: string;
+            /**
+             * Variable
+             * @description Approved source variable identifier
+             */
+            variable: string;
+            /**
+             * Role
+             * @default value
+             * @enum {string}
+             */
+            role: "value" | "join_key" | "lookup" | "filter" | "timing" | "grouping" | "sequence";
+        };
+        /** SDTMStackColumn */
+        SDTMStackColumn: {
+            /** Target */
+            target: string;
+            /** Sources */
+            sources: components["schemas"]["SDTMStackColumnSource"][];
+        };
+        /** SDTMStackColumnSource */
+        SDTMStackColumnSource: {
+            /**
+             * Input
+             * @description Source dataset or earlier step identifier
+             */
+            input: string;
+            /** Variable */
+            variable: string;
+        };
+        /** SDTMTransposeValue */
+        SDTMTransposeValue: {
+            /** Source Variable */
+            source_variable: string;
+            /** Name Value */
+            name_value: string;
         };
         /** SDTMUnmappedDataset */
         SDTMUnmappedDataset: {
@@ -1416,6 +1548,8 @@ export interface components {
             origin: string;
             /** Mapping Expression */
             mapping_expression: string;
+            /** Sources */
+            sources?: components["schemas"]["SDTMSourceReference"][];
             /** Controlled Terms */
             controlled_terms?: string[];
         };
@@ -1432,15 +1566,13 @@ export interface components {
              */
             data_type: "Char" | "Num";
             /**
-             * Source Dataset
-             * @description Approved source dataset when the target has a direct single-field source; null for assigned or derived values without one raw source
+             * Mapping Type
+             * @default direct
+             * @enum {string}
              */
-            source_dataset?: string | null;
-            /**
-             * Source Field
-             * @description Source field paired with source_dataset; null for assigned or derived values without one raw source
-             */
-            source_field?: string | null;
+            mapping_type: "direct" | "assigned" | "derived" | "coalesce" | "lookup" | "transpose" | "aggregate";
+            /** Sources */
+            sources?: components["schemas"]["SDTMSourceReference"][];
             /**
              * Origin
              * @default CRF

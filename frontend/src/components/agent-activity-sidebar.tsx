@@ -246,7 +246,7 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
   );
 }
 
-const variableFields = ["label", "data_type", "source_dataset", "source_field", "origin", "mapping_expression", "controlled_terms", "value_level_metadata", "crf_source_label"];
+const variableFields = ["label", "data_type", "mapping_type", "sources", "origin", "mapping_expression", "controlled_terms", "value_level_metadata", "crf_source_label"];
 
 function ScopePicker({ job, currentResult, scope, onChange }: { job: Job; currentResult: Record<string, unknown>; scope: ReviewScope; onChange: (value: ReviewScope) => void }) {
   if (job.workflow === "sdtm" && job.review_stage === "domain_mapping") {

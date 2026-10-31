@@ -48,7 +48,7 @@ export interface ExecutionAttempt {
   outputs: Array<{ name: string; sha256: string; size_bytes: number; row_count: number | null; columns: string[] }>;
   checks: Array<{ check_id: string; status: string; message: string; domain: string | null }>;
   failure_classification: string | null;
-  repair_proposal: { proposal_id: string; status: string; rationale: string; diff: string; change: { domain: string; target_variable: string; from_source_field: string; to_source_field: string }; reviewer: string | null; decided_at: string | null } | null;
+  repair_proposal: { proposal_id: string; status: string; rationale: string; diff: string; change: { domain: string; target_variable: string; source_dataset: string; from_source_variable: string; to_source_variable: string }; reviewer: string | null; decided_at: string | null } | null;
 }
 
 export interface ValidationFinding {

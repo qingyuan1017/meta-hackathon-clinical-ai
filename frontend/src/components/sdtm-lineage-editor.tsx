@@ -1,0 +1,222 @@
+"use client";
+
+import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { Button } from "./ui/button";
+
+export type SDTMDataType = "Char" | "Num";
+export type SDTMMappingType = "direct" | "assigned" | "derived" | "coalesce" | "lookup" | "transpose" | "aggregate";
+export type SDTMSourceRole = "value" | "join_key" | "lookup" | "filter" | "timing" | "grouping" | "sequence";
+export type SDTMRecordOperation = "read" | "stack" | "join" | "transpose" | "filter" | "deduplicate" | "aggregate";
+
+export interface SDTMSourceReference {
+  dataset: string;
+  variable: string;
+  role: SDTMSourceRole;
+}
+
+export interface SourceInventoryDataset {
+  name: string;
+  label?: string;
+  variables?: Array<{ name: string; label?: string }>;
+}
+
+export interface SDTMJoinKey { left: string; right: string; }
+export interface SDTMStackColumnSource { input: string; variable: string; }
+export interface SDTMStackColumn { target: string; sources: SDTMStackColumnSource[]; }
+export interface SDTMTransposeValue { source_variable: string; name_value: string; }
+export interface SDTMAggregation { output_variable: string; operation: "count" | "sum" | "min" | "max" | "mean" | "first" | "last"; source_variable: string | null; }
+
+export interface SDTMRecordStep {
+  step_id: string;
+  operation: SDTMRecordOperation;
+  description: string;
+  output: string;
+  inputs: string[];
+  source_dataset: string | null;
+  column_alignment: SDTMStackColumn[];
+  left: string | null;
+  right: string | null;
+  join_type: "left" | "inner" | "full" | "right" | null;
+  join_keys: SDTMJoinKey[];
+  cardinality: "one_to_one" | "one_to_many" | "many_to_one" | "many_to_many" | null;
+  id_variables: string[];
+  value_variables: string[];
+  name_variable: string | null;
+  value_variable: string | null;
+  transpose_values: SDTMTransposeValue[];
+  condition: string | null;
+  sas_condition: string | null;
+  keys: string[];
+  order_by: string[];
+  keep: "first" | "last";
+  group_by: string[];
+  aggregations: SDTMAggregation[];
+  review_notes: string[];
+}
+
+export interface SDTMRecordPlan { steps: SDTMRecordStep[]; output_step: string; }
+
+export interface SDTMValueLevelMetadataDraft {
+  where_clause: string;
+  label: string;
+  data_type: SDTMDataType;
+  origin: string;
+  mapping_expression: string;
+  sources: SDTMSourceReference[];
+  controlled_terms: string[];
+}
+
+export interface SDTMVariableDraft {
+  name: string;
+  label: string;
+  data_type: SDTMDataType;
+  mapping_type: SDTMMappingType;
+  sources: SDTMSourceReference[];
+  origin: string;
+  mapping_expression: string;
+  controlled_terms: string[];
+  value_level_metadata: SDTMValueLevelMetadataDraft[];
+  crf_source_label: string | null;
+  length?: number | null;
+  format?: string | null;
+  role?: string | null;
+  core?: "Req" | "Exp" | "Perm" | null;
+  comment?: string | null;
+}
+
+const inputClass = "focus-ring min-h-9 w-full rounded-md border border-white/10 bg-[#101012] px-2.5 py-2 text-xs text-zinc-200 placeholder:text-zinc-600";
+const roles: SDTMSourceRole[] = ["value", "join_key", "lookup", "filter", "timing", "grouping", "sequence"];
+const operations: SDTMRecordOperation[] = ["read", "stack", "join", "transpose", "filter", "deduplicate", "aggregate"];
+
+export function SourceReferencesEditor({ value, onChange, inventory, allowedDatasets, label = "Source lineage" }: {
+  value: SDTMSourceReference[];
+  onChange: (value: SDTMSourceReference[]) => void;
+  inventory: SourceInventoryDataset[];
+  allowedDatasets: string[];
+  label?: string;
+}) {
+  const datasets = allowedDatasets.length ? allowedDatasets : inventory.map((item) => item.name);
+  const update = (index: number, next: Partial<SDTMSourceReference>) => onChange(value.map((item, itemIndex) => itemIndex === index ? { ...item, ...next } : item));
+  const add = () => {
+    const dataset = datasets[0] ?? "";
+    const variable = inventory.find((item) => item.name === dataset)?.variables?.[0]?.name ?? "";
+    onChange([...value, { dataset, variable, role: "value" }]);
+  };
+  return <div className="space-y-2">
+    <div className="flex items-center justify-between gap-2"><EditorLabel>{label}</EditorLabel><button type="button" aria-label={`Add ${label}`} onClick={add} className="flex items-center gap-1 rounded-md border border-dashed border-violet-500/30 px-2 py-1 text-[10px] font-black uppercase tracking-wider text-violet-300"><Plus size={11} />Source</button></div>
+    {value.map((reference, index) => {
+      const sourceVariables = inventory.find((item) => item.name === reference.dataset)?.variables ?? [];
+      const listId = `source-fields-${reference.dataset}-${index}`.replace(/[^A-Za-z0-9_-]/g, "-");
+      return <div key={`${reference.dataset}-${reference.variable}-${index}`} className="grid gap-2 rounded-lg border border-violet-500/15 bg-violet-500/[0.04] p-2 md:grid-cols-[minmax(130px,0.9fr)_minmax(130px,1fr)_120px_36px]">
+        <select aria-label={`${label} ${index + 1} dataset`} value={reference.dataset} onChange={(event) => update(index, { dataset: event.target.value, variable: "" })} className={inputClass}><option value="">Choose dataset</option>{datasets.map((dataset) => <option key={dataset}>{dataset}</option>)}</select>
+        <div><input aria-label={`${label} ${index + 1} variable`} list={listId} value={reference.variable} onChange={(event) => update(index, { variable: event.target.value.toUpperCase() })} placeholder="Source variable" className={`${inputClass} font-mono`} /><datalist id={listId}>{sourceVariables.map((variable) => <option key={variable.name} value={variable.name}>{variable.label}</option>)}</datalist></div>
+        <select aria-label={`${label} ${index + 1} role`} value={reference.role} onChange={(event) => update(index, { role: event.target.value as SDTMSourceRole })} className={inputClass}>{roles.map((role) => <option key={role} value={role}>{role.replace("_", " ")}</option>)}</select>
+        <button type="button" aria-label={`Remove ${label} ${index + 1}`} onClick={() => onChange(value.filter((_, itemIndex) => itemIndex !== index))} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={13} /></button>
+      </div>;
+    })}
+    {!value.length && <p className="rounded-lg border border-dashed border-white/10 px-3 py-2 text-[11px] text-zinc-600">No raw source references. Use this only for reviewed assigned or derived values.</p>}
+  </div>;
+}
+
+export function RecordPlanEditor({ value, onChange, allowedDatasets }: {
+  value: SDTMRecordPlan;
+  onChange: (value: SDTMRecordPlan) => void;
+  allowedDatasets: string[];
+}) {
+  const [newOperation, setNewOperation] = useState<SDTMRecordOperation>("read");
+  const updateStep = (index: number, next: Partial<SDTMRecordStep>) => onChange({ ...value, steps: value.steps.map((item, itemIndex) => itemIndex === index ? { ...item, ...next } : item) });
+  const addStep = () => {
+    const index = value.steps.length + 1;
+    const step = newRecordStep(newOperation, index, allowedDatasets, value.steps);
+    onChange({ steps: [...value.steps, step], output_step: step.step_id });
+  };
+  const removeStep = (index: number) => {
+    const removed = value.steps[index];
+    const steps = value.steps.filter((_, itemIndex) => itemIndex !== index);
+    onChange({ steps, output_step: value.output_step === removed.step_id ? steps.at(-1)?.step_id ?? "" : value.output_step });
+  };
+  const move = (index: number, offset: number) => {
+    const target = index + offset;
+    if (target < 0 || target >= value.steps.length) return;
+    const steps = [...value.steps];
+    [steps[index], steps[target]] = [steps[target], steps[index]];
+    onChange({ ...value, steps });
+  };
+  return <section className="space-y-3 rounded-xl border border-cyan-500/15 bg-cyan-500/[0.025] p-4">
+    <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-[0.12em] text-cyan-200">Record construction pipeline</p><p className="mt-1 text-xs leading-5 text-zinc-500">Ordered, human-approved steps compile deterministically into each domain&apos;s R and SAS program.</p></div><label className="min-w-48"><EditorLabel>Final output step</EditorLabel><select aria-label="Final output step" value={value.output_step} onChange={(event) => onChange({ ...value, output_step: event.target.value })} className={inputClass}><option value="">Choose final step</option>{value.steps.map((step) => <option key={step.step_id} value={step.step_id}>{step.step_id}</option>)}</select></label></div>
+    {value.steps.map((step, index) => {
+      const priorSteps = value.steps.slice(0, index);
+      return <article key={`${step.step_id}-${index}`} className="rounded-xl border border-white/10 bg-[#121214] p-3">
+        <div className="grid gap-2 lg:grid-cols-[44px_minmax(120px,0.65fr)_140px_minmax(150px,0.7fr)_minmax(220px,1.5fr)_36px]">
+          <div className="flex gap-1"><button type="button" aria-label={`Move ${step.step_id} up`} disabled={index === 0} onClick={() => move(index, -1)} className="text-zinc-500 disabled:opacity-20"><ArrowUp size={14} /></button><button type="button" aria-label={`Move ${step.step_id} down`} disabled={index === value.steps.length - 1} onClick={() => move(index, 1)} className="text-zinc-500 disabled:opacity-20"><ArrowDown size={14} /></button></div>
+          <label><EditorLabel>Step ID</EditorLabel><input aria-label={`Step ${index + 1} ID`} value={step.step_id} onChange={(event) => { const stepId = event.target.value; onChange({ steps: value.steps.map((item, itemIndex) => itemIndex === index ? { ...item, step_id: stepId } : item), output_step: value.output_step === step.step_id ? stepId : value.output_step }); }} className={`${inputClass} font-mono`} /></label>
+          <label><EditorLabel>Operation</EditorLabel><select aria-label={`Step ${index + 1} operation`} value={step.operation} onChange={(event) => updateStep(index, { ...operationDefaults(event.target.value as SDTMRecordOperation), operation: event.target.value as SDTMRecordOperation })} className={inputClass}>{operations.map((operation) => <option key={operation}>{operation}</option>)}</select></label>
+          <label><EditorLabel>Output name</EditorLabel><input value={step.output} onChange={(event) => updateStep(index, { output: event.target.value })} className={`${inputClass} font-mono`} /></label>
+          <label><EditorLabel>Description</EditorLabel><input value={step.description} onChange={(event) => updateStep(index, { description: event.target.value })} className={inputClass} /></label>
+          <button type="button" aria-label={`Remove step ${step.step_id}`} onClick={() => removeStep(index)} className="mt-5 grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={14} /></button>
+        </div>
+        <div className="mt-3 border-t border-white/[0.07] pt-3"><RecordOperationFields step={step} priorSteps={priorSteps} allowedDatasets={allowedDatasets} onChange={(next) => updateStep(index, next)} /></div>
+      </article>;
+    })}
+    {!value.steps.length && <p className="rounded-lg border border-dashed border-amber-500/20 p-4 text-center text-xs text-amber-200">Add at least one read step.</p>}
+    <div className="flex justify-end gap-2"><select aria-label="New record operation" value={newOperation} onChange={(event) => setNewOperation(event.target.value as SDTMRecordOperation)} className={`${inputClass} max-w-40`}>{operations.map((operation) => <option key={operation}>{operation}</option>)}</select><Button type="button" variant="outline" size="sm" onClick={addStep}><Plus size={13} />Operation</Button></div>
+  </section>;
+}
+
+function RecordOperationFields({ step, priorSteps, allowedDatasets, onChange }: { step: SDTMRecordStep; priorSteps: SDTMRecordStep[]; allowedDatasets: string[]; onChange: (value: Partial<SDTMRecordStep>) => void }) {
+  const priorOptions = priorSteps.map((item) => item.step_id);
+  if (step.operation === "read") return <label><EditorLabel>Approved source dataset</EditorLabel><select aria-label={`${step.step_id} source dataset`} value={step.source_dataset ?? ""} onChange={(event) => onChange({ source_dataset: event.target.value || null })} className={`${inputClass} max-w-sm`}><option value="">Choose source</option>{allowedDatasets.map((source) => <option key={source}>{source}</option>)}</select></label>;
+  if (step.operation === "stack") return <div className="space-y-3"><StepInputs value={step.inputs} options={priorOptions} onChange={(inputs) => onChange({ inputs })} label="Steps to stack" /><div><div className="flex items-center justify-between"><EditorLabel>Column alignment</EditorLabel><button type="button" onClick={() => onChange({ column_alignment: [...step.column_alignment, { target: "", sources: step.inputs.map((input) => ({ input, variable: "" })) }] })} className="text-[10px] font-bold text-violet-300">+ aligned column</button></div>{step.column_alignment.map((column, index) => <div key={index} className="mt-2 grid gap-2 rounded-lg border border-white/[0.07] p-2 md:grid-cols-[140px_1fr_36px]"><input aria-label={`Stack target column ${index + 1}`} value={column.target} onChange={(event) => onChange({ column_alignment: replaceAt(step.column_alignment, index, { ...column, target: event.target.value.toUpperCase() }) })} placeholder="Target column" className={inputClass} /><div className="grid gap-2 sm:grid-cols-2">{step.inputs.map((input) => { const source = column.sources.find((item) => item.input === input); return <label key={input}><span className="mb-1 block font-mono text-[9px] text-zinc-600">{input}</span><input value={source?.variable ?? ""} onChange={(event) => { const sources = column.sources.filter((item) => item.input !== input); if (event.target.value) sources.push({ input, variable: event.target.value.toUpperCase() }); onChange({ column_alignment: replaceAt(step.column_alignment, index, { ...column, sources }) }); }} placeholder="Source variable" className={inputClass} /></label>; })}</div><RemoveButton label={`Remove stack column ${index + 1}`} onClick={() => onChange({ column_alignment: step.column_alignment.filter((_, itemIndex) => itemIndex !== index) })} /></div>)}</div></div>;
+  if (step.operation === "join") return <div className="space-y-3"><div className="grid gap-2 md:grid-cols-4"><StepSelect label="Left step" value={step.left} options={priorOptions} onChange={(left) => onChange({ left })} /><StepSelect label="Right step" value={step.right} options={priorOptions} onChange={(right) => onChange({ right })} /><label><EditorLabel>Join type</EditorLabel><select value={step.join_type ?? ""} onChange={(event) => onChange({ join_type: event.target.value as SDTMRecordStep["join_type"] })} className={inputClass}>{["left", "inner", "full", "right"].map((item) => <option key={item}>{item}</option>)}</select></label><label><EditorLabel>Cardinality</EditorLabel><select value={step.cardinality ?? ""} onChange={(event) => onChange({ cardinality: event.target.value as SDTMRecordStep["cardinality"] })} className={inputClass}>{["one_to_one", "one_to_many", "many_to_one", "many_to_many"].map((item) => <option key={item}>{item}</option>)}</select></label></div><PairList label="Join keys" leftLabel="Left variable" rightLabel="Right variable" values={step.join_keys} onChange={(join_keys) => onChange({ join_keys })} /></div>;
+  if (step.operation === "transpose") return <div className="grid gap-3 md:grid-cols-2"><StepSelect label="Input step" value={step.inputs[0] ?? null} options={priorOptions} onChange={(input) => onChange({ inputs: input ? [input] : [] })} /><ListInput label="ID variables" value={step.id_variables} onChange={(id_variables) => onChange({ id_variables })} /><ListInput label="Value variables" value={step.value_variables} onChange={(value_variables) => onChange({ value_variables })} /><label><EditorLabel>Name variable</EditorLabel><input value={step.name_variable ?? ""} onChange={(event) => onChange({ name_variable: event.target.value.toUpperCase() || null })} className={inputClass} /></label><label><EditorLabel>Value variable</EditorLabel><input value={step.value_variable ?? ""} onChange={(event) => onChange({ value_variable: event.target.value.toUpperCase() || null })} className={inputClass} /></label><div className="md:col-span-2"><PairList label="Value-level name mapping" leftLabel="Source variable" rightLabel="Name value" values={step.transpose_values.map((item) => ({ left: item.source_variable, right: item.name_value }))} onChange={(items) => onChange({ transpose_values: items.map((item) => ({ source_variable: item.left, name_value: item.right })) })} /></div></div>;
+  if (step.operation === "filter") return <div className="grid gap-3 md:grid-cols-2"><StepSelect label="Input step" value={step.inputs[0] ?? null} options={priorOptions} onChange={(input) => onChange({ inputs: input ? [input] : [] })} /><span /><label><EditorLabel>Reviewed R condition</EditorLabel><textarea value={step.condition ?? ""} onChange={(event) => onChange({ condition: event.target.value || null })} className={inputClass} /></label><label><EditorLabel>Reviewed SAS condition</EditorLabel><textarea value={step.sas_condition ?? ""} onChange={(event) => onChange({ sas_condition: event.target.value || null })} className={inputClass} /></label></div>;
+  if (step.operation === "deduplicate") return <div className="grid gap-3 md:grid-cols-4"><StepSelect label="Input step" value={step.inputs[0] ?? null} options={priorOptions} onChange={(input) => onChange({ inputs: input ? [input] : [] })} /><ListInput label="Keys" value={step.keys} onChange={(keys) => onChange({ keys })} /><ListInput label="Order by" value={step.order_by} onChange={(order_by) => onChange({ order_by })} /><label><EditorLabel>Keep</EditorLabel><select value={step.keep} onChange={(event) => onChange({ keep: event.target.value as "first" | "last" })} className={inputClass}><option>first</option><option>last</option></select></label></div>;
+  return <div className="space-y-3"><div className="grid gap-3 md:grid-cols-2"><StepSelect label="Input step" value={step.inputs[0] ?? null} options={priorOptions} onChange={(input) => onChange({ inputs: input ? [input] : [] })} /><ListInput label="Group by" value={step.group_by} onChange={(group_by) => onChange({ group_by })} /></div><div className="flex items-center justify-between"><EditorLabel>Aggregations</EditorLabel><button type="button" onClick={() => onChange({ aggregations: [...step.aggregations, { output_variable: "", operation: "count", source_variable: null }] })} className="text-[10px] font-bold text-violet-300">+ aggregation</button></div>{step.aggregations.map((item, index) => <div key={index} className="grid gap-2 md:grid-cols-[1fr_140px_1fr_36px]"><input value={item.output_variable} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, output_variable: event.target.value.toUpperCase() }) })} placeholder="Output variable" className={inputClass} /><select value={item.operation} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, operation: event.target.value as SDTMAggregation["operation"] }) })} className={inputClass}>{["count", "sum", "min", "max", "mean", "first", "last"].map((operation) => <option key={operation}>{operation}</option>)}</select><input disabled={item.operation === "count"} value={item.source_variable ?? ""} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, source_variable: event.target.value.toUpperCase() || null }) })} placeholder="Source variable" className={inputClass} /><RemoveButton label={`Remove aggregation ${index + 1}`} onClick={() => onChange({ aggregations: step.aggregations.filter((_, itemIndex) => itemIndex !== index) })} /></div>)}</div>;
+}
+
+export function VariableMappingCards({ variables, onChange, inventory, allowedDatasets }: {
+  variables: SDTMVariableDraft[];
+  onChange: (variables: SDTMVariableDraft[]) => void;
+  inventory: SourceInventoryDataset[];
+  allowedDatasets: string[];
+}) {
+  const update = (index: number, next: SDTMVariableDraft) => onChange(replaceAt(variables, index, next));
+  return <div className="space-y-3">{variables.map((variable, index) => <article key={`${variable.name}-${index}`} className="rounded-xl border border-white/10 bg-[#141416] p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-sm font-black text-violet-200">{variable.name || "[unnamed]"}</p><p className="mt-1 text-xs text-zinc-600">{variable.sources.length} source reference{variable.sources.length === 1 ? "" : "s"} · {variable.mapping_type}</p></div><RemoveButton label={`Remove ${variable.name || `variable ${index + 1}`}`} onClick={() => onChange(variables.filter((_, itemIndex) => itemIndex !== index))} /></div>
+    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label><EditorLabel>SDTM variable</EditorLabel><input value={variable.name} onChange={(event) => update(index, { ...variable, name: event.target.value.toUpperCase() })} className={`${inputClass} font-mono font-bold`} /></label><label><EditorLabel>Label</EditorLabel><input value={variable.label} onChange={(event) => update(index, { ...variable, label: event.target.value })} className={inputClass} /></label><label><EditorLabel>Data type</EditorLabel><select value={variable.data_type} onChange={(event) => update(index, { ...variable, data_type: event.target.value as SDTMDataType })} className={inputClass}><option>Char</option><option>Num</option></select></label><label><EditorLabel>Mapping type</EditorLabel><select aria-label={`${variable.name} mapping type`} value={variable.mapping_type} onChange={(event) => update(index, { ...variable, mapping_type: event.target.value as SDTMMappingType })} className={inputClass}>{["direct", "assigned", "derived", "coalesce", "lookup", "transpose", "aggregate"].map((item) => <option key={item}>{item}</option>)}</select></label></div>
+    <div className="mt-3"><SourceReferencesEditor value={variable.sources} onChange={(sources) => update(index, { ...variable, sources })} inventory={inventory} allowedDatasets={allowedDatasets} label={`${variable.name || `Variable ${index + 1}`} sources`} /></div>
+    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="md:col-span-2"><EditorLabel>Mapping logic</EditorLabel><textarea rows={3} value={variable.mapping_expression} onChange={(event) => update(index, { ...variable, mapping_expression: event.target.value })} className={inputClass} /></label><label><EditorLabel>Origin</EditorLabel><input value={variable.origin} onChange={(event) => update(index, { ...variable, origin: event.target.value })} className={inputClass} /></label><label><EditorLabel>Controlled terms</EditorLabel><input value={variable.controlled_terms.join(", ")} onChange={(event) => update(index, { ...variable, controlled_terms: splitList(event.target.value) })} className={inputClass} /></label><label><EditorLabel>aCRF source label</EditorLabel><input value={variable.crf_source_label ?? ""} onChange={(event) => update(index, { ...variable, crf_source_label: event.target.value || null })} className={inputClass} /></label></div>
+    <div className="mt-4 border-t border-white/[0.07] pt-3"><div className="flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.12em] text-cyan-300">Value-level metadata</p><p className="mt-1 text-[11px] text-zinc-600">Each value-level row owns its own source lineage.</p></div><button type="button" onClick={() => update(index, { ...variable, value_level_metadata: [...variable.value_level_metadata, newVlm()] })} className="flex items-center gap-1 text-[10px] font-bold text-cyan-300"><Plus size={11} />VLM row</button></div>{variable.value_level_metadata.map((vlm, vlmIndex) => <div key={vlmIndex} className="mt-3 rounded-lg border border-cyan-500/15 bg-cyan-500/[0.03] p-3"><div className="grid gap-2 md:grid-cols-[1fr_1fr_100px_36px]"><input aria-label={`${variable.name} VLM ${vlmIndex + 1} where clause`} value={vlm.where_clause} onChange={(event) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, where_clause: event.target.value }) })} placeholder="Where clause" className={inputClass} /><input value={vlm.label} onChange={(event) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, label: event.target.value }) })} placeholder="Label" className={inputClass} /><select value={vlm.data_type} onChange={(event) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, data_type: event.target.value as SDTMDataType }) })} className={inputClass}><option>Char</option><option>Num</option></select><RemoveButton label={`Remove VLM ${vlmIndex + 1}`} onClick={() => update(index, { ...variable, value_level_metadata: variable.value_level_metadata.filter((_, itemIndex) => itemIndex !== vlmIndex) })} /></div><textarea rows={2} value={vlm.mapping_expression} onChange={(event) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, mapping_expression: event.target.value }) })} placeholder="Value-level mapping logic" className={`${inputClass} mt-2`} /><div className="mt-2"><SourceReferencesEditor value={vlm.sources} onChange={(sources) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, sources }) })} inventory={inventory} allowedDatasets={allowedDatasets} label={`${variable.name} VLM ${vlmIndex + 1} sources`} /></div></div>)}</div>
+  </article>)}</div>;
+}
+
+export function newSourceVariable(name = "NEWVAR", source = ""): SDTMVariableDraft {
+  return { name, label: "New SDTM variable", data_type: "Char", mapping_type: source ? "direct" : "assigned", sources: source ? [{ dataset: source, variable: "", role: "value" }] : [], origin: source ? "CRF" : "Assigned", mapping_expression: source ? "Direct" : "TODO: review assigned value", controlled_terms: [], value_level_metadata: [], crf_source_label: null };
+}
+
+export function normalizeRecordPlan(value: unknown): SDTMRecordPlan {
+  const record = isRecord(value) ? value : {};
+  return { steps: arrayValue<SDTMRecordStep>(record.steps).map(normalizeStep), output_step: stringValue(record.output_step, "") };
+}
+
+export function normalizeVariable(value: SDTMVariableDraft): SDTMVariableDraft {
+  return { ...value, mapping_type: validMappingType(value.mapping_type) ? value.mapping_type : "direct", sources: arrayValue<SDTMSourceReference>(value.sources).map((item) => ({ dataset: stringValue(item.dataset, ""), variable: stringValue(item.variable, ""), role: roles.includes(item.role) ? item.role : "value" })), controlled_terms: arrayValue<string>(value.controlled_terms), value_level_metadata: arrayValue<SDTMValueLevelMetadataDraft>(value.value_level_metadata).map((item) => ({ ...item, data_type: item.data_type === "Num" ? "Num" : "Char", sources: arrayValue<SDTMSourceReference>(item.sources), controlled_terms: arrayValue<string>(item.controlled_terms) })) };
+}
+
+function normalizeStep(step: SDTMRecordStep): SDTMRecordStep { return { ...operationDefaults(step.operation), ...step, operation: operations.includes(step.operation) ? step.operation : "read", inputs: arrayValue<string>(step.inputs), column_alignment: arrayValue<SDTMStackColumn>(step.column_alignment), join_keys: arrayValue<SDTMJoinKey>(step.join_keys), id_variables: arrayValue<string>(step.id_variables), value_variables: arrayValue<string>(step.value_variables), transpose_values: arrayValue<SDTMTransposeValue>(step.transpose_values), keys: arrayValue<string>(step.keys), order_by: arrayValue<string>(step.order_by), group_by: arrayValue<string>(step.group_by), aggregations: arrayValue<SDTMAggregation>(step.aggregations), review_notes: arrayValue<string>(step.review_notes) }; }
+function newVlm(): SDTMValueLevelMetadataDraft { return { where_clause: "", label: "", data_type: "Char", origin: "CRF", mapping_expression: "", sources: [], controlled_terms: [] }; }
+function newRecordStep(operation: SDTMRecordOperation, index: number, allowed: string[], prior: SDTMRecordStep[]): SDTMRecordStep { const stepId = `${operation}_${index}`; const defaults = operationDefaults(operation); return { ...defaults, step_id: stepId, operation, description: `Review ${operation} operation`, output: stepId, source_dataset: operation === "read" ? allowed.find((source) => !prior.some((item) => item.source_dataset === source)) ?? allowed[0] ?? null : null, inputs: operation !== "read" && prior.length ? [prior.at(-1)!.step_id] : [] }; }
+function operationDefaults(operation: SDTMRecordOperation): SDTMRecordStep { return { step_id: "", operation, description: "", output: "", inputs: [], source_dataset: null, column_alignment: [], left: null, right: null, join_type: operation === "join" ? "left" : null, join_keys: [], cardinality: operation === "join" ? "many_to_one" : null, id_variables: [], value_variables: [], name_variable: null, value_variable: null, transpose_values: [], condition: null, sas_condition: null, keys: [], order_by: [], keep: "first", group_by: [], aggregations: [], review_notes: [] }; }
+function StepInputs({ value, options, onChange, label }: { value: string[]; options: string[]; onChange: (value: string[]) => void; label: string }) { return <div><EditorLabel>{label}</EditorLabel><div className="flex flex-wrap gap-2">{options.map((option) => <label key={option} className={`rounded-md border px-2 py-1.5 text-xs ${value.includes(option) ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 text-zinc-500"}`}><input type="checkbox" checked={value.includes(option)} onChange={(event) => onChange(event.target.checked ? [...value, option] : value.filter((item) => item !== option))} className="mr-2" />{option}</label>)}</div></div>; }
+function StepSelect({ label, value, options, onChange }: { label: string; value: string | null; options: string[]; onChange: (value: string | null) => void }) { return <label><EditorLabel>{label}</EditorLabel><select value={value ?? ""} onChange={(event) => onChange(event.target.value || null)} className={inputClass}><option value="">Choose prior step</option>{options.map((option) => <option key={option}>{option}</option>)}</select></label>; }
+function ListInput({ label, value, onChange }: { label: string; value: string[]; onChange: (value: string[]) => void }) { return <label><EditorLabel>{label}</EditorLabel><input value={value.join(", ")} onChange={(event) => onChange(splitList(event.target.value).map((item) => item.toUpperCase()))} placeholder="Comma-separated" className={inputClass} /></label>; }
+function PairList({ label, leftLabel, rightLabel, values, onChange }: { label: string; leftLabel: string; rightLabel: string; values: SDTMJoinKey[]; onChange: (value: SDTMJoinKey[]) => void }) { return <div><div className="flex items-center justify-between"><EditorLabel>{label}</EditorLabel><button type="button" onClick={() => onChange([...values, { left: "", right: "" }])} className="text-[10px] font-bold text-violet-300">+ row</button></div>{values.map((item, index) => <div key={index} className="mt-2 grid gap-2 md:grid-cols-[1fr_1fr_36px]"><input aria-label={`${leftLabel} ${index + 1}`} value={item.left} onChange={(event) => onChange(replaceAt(values, index, { ...item, left: event.target.value.toUpperCase() }))} placeholder={leftLabel} className={inputClass} /><input aria-label={`${rightLabel} ${index + 1}`} value={item.right} onChange={(event) => onChange(replaceAt(values, index, { ...item, right: event.target.value.toUpperCase() }))} placeholder={rightLabel} className={inputClass} /><RemoveButton label={`Remove ${label} ${index + 1}`} onClick={() => onChange(values.filter((_, itemIndex) => itemIndex !== index))} /></div>)}</div>; }
+function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) { return <button type="button" aria-label={label} onClick={onClick} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={13} /></button>; }
+function EditorLabel({ children }: { children: ReactNode }) { return <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">{children}</span>; }
+function replaceAt<T>(value: T[], index: number, next: T): T[] { return value.map((item, itemIndex) => itemIndex === index ? next : item); }
+function splitList(value: string): string[] { return value.split(",").map((item) => item.trim()).filter(Boolean); }
+function stringValue(value: unknown, fallback: string): string { return typeof value === "string" ? value : fallback; }
+function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
+function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+function validMappingType(value: unknown): value is SDTMMappingType { return typeof value === "string" && ["direct", "assigned", "derived", "coalesce", "lookup", "transpose", "aggregate"].includes(value); }

@@ -7,9 +7,8 @@ import { api } from "@/lib/api";
 const plan = {
   study_name: "SYN-101", standard: "SDTMIG 3.4", define_standard: "Define-XML 2.1",
   domain_mappings: [{ source_dataset: "RAW_DM", source_type: "raw", target_domain: "DM", relationship: "direct", rationale: "Synthetic" }],
-  datasets: [{ domain: "DM", description: "Demographics", structure: "One record per subject", key_variables: ["USUBJID"], variables: [{ name: "USUBJID", label: "Subject", data_type: "Char", source_dataset: "RAW_DM", source_field: "USUBJID", origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] }],
-  domain_rule_augmentations: [{ rule_id: "DM-SOURCE", target_domain: "DM", source_datasets: ["RAW_DM"], description: "Read", logic: "Direct", r_input_expression: "raw_dm", sas_input_statement: "set raw.raw_dm;", review_notes: [] }],
-  rule_augmentations: [{ rule_id: "DM-USUBJID", target_domain: "DM", target_variable: "USUBJID", source_dependencies: ["RAW_DM.USUBJID"], description: "Direct", logic: "Direct", r_expression: '.data[["USUBJID"]]', sas_expression: "USUBJID", review_notes: [] }], assumptions: [], unresolved_mappings: [],
+  datasets: [{ domain: "DM", description: "Demographics", structure: "One record per subject", key_variables: ["USUBJID"], record_plan: { steps: [{ step_id: "read_dm", operation: "read", description: "Read", output: "dm_source", inputs: [], source_dataset: "RAW_DM" }], output_step: "read_dm" }, variables: [{ name: "USUBJID", label: "Subject", data_type: "Char", mapping_type: "direct", sources: [{ dataset: "RAW_DM", variable: "USUBJID", role: "value" }], origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] }],
+  rule_augmentations: [{ rule_id: "DM-USUBJID", target_domain: "DM", target_variable: "USUBJID", description: "Direct", logic: "Direct", r_expression: '.data[["USUBJID"]]', sas_expression: "USUBJID", review_notes: [] }], assumptions: [], unresolved_mappings: [],
 };
 
 const artifact = (id: string, name: string) => ({ id, name, media_type: "application/json", size_bytes: 10, sha256: "a".repeat(64), download_url: `/artifact/${id}` });
