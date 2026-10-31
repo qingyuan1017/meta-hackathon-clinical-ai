@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     transcription_timeout_seconds: int = 300
     agent_max_turns: int = 20
     agent_max_remote_tool_calls: int = 6
+    sdtm_domain_agent_concurrency: int = 4
     cdisc_mcp_enabled: bool = True
     cdisc_mcp_url: str = "http://127.0.0.1:8001/mcp"
     clinicalgov_mcp_enabled: bool = True

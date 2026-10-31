@@ -12,8 +12,8 @@ Before SDTM mapping, an intake agent normalizes the deterministically extracted 
 After intake approval, the SDTM workflow runs three ordered stages:
 
 1. Domain mapping determines each raw or existing SDTM source-dataset to target-SDTM-domain relationship.
-2. Variable mapping determines an ordered typed record-construction plan plus complete multi-source traceability for variables and value-level metadata; when a blank CRF is supplied, its CRF source labels drive the aCRF annotations.
-3. Rule augmentation adds one implementation rule per target variable. Record preparation is not free-form model code: the backend compiles the approved read/stack/join/transpose/filter/deduplicate/aggregate plan deterministically into each domain program.
+2. Variable mapping runs isolated, bounded-parallel agents per target domain to determine ordered typed record-construction plans plus complete multi-source traceability for variables and value-level metadata; their deterministically ordered combined result requires one human approval. When a blank CRF is supplied, its CRF source labels drive the aCRF annotations.
+3. Rule augmentation likewise runs bounded-parallel agents per target domain and adds one implementation rule per target variable before one combined approval. Record preparation is not free-form model code: the backend compiles the approved read/stack/join/transpose/filter/deduplicate/aggregate plan deterministically into each domain program.
 
 After the ordered specialists finish, the registered SDTM lead rereads the user-approved EDC source specification and any supplied blank CRF and reconciles all three drafts under `backend/app/agents/sdtm/mapping_policy.md`. Treat stage drafts as fallible observations; only the lead's complete, cross-stage-validated `SDTMPlan` proceeds to deterministic rendering.
 

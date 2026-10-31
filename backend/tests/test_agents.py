@@ -1033,41 +1033,50 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
         }
     )
     calls: list[dict] = []
+    variable_active = 0
+    variable_peak = 0
 
     class FakeVariableRunner:
-        def __init__(self, **_):
-            pass
+        def __init__(self, *, progress_path, **_):
+            self.progress_path = progress_path
 
         async def run(self, *, objective, source, prior_events=None, **_):
+            nonlocal variable_active, variable_peak
             target = "DM" if "target DM" in objective else "AE"
             source_dataset = "RAW_DM" if target == "DM" else "RAW_AE"
             source_field = "AGE" if target == "DM" else "AETERM"
-            calls.append({"target": target, "source": source})
-            return AgentOutcome(
-                value=SDTMVariableMappingPlan.model_validate(
-                    {
-                        "study_name": "SYN-BATCH",
-                        "datasets": [
-                            {
-                                "domain": target,
-                                "description": target,
-                                "record_plan": read_plan(target, source_dataset).model_dump(mode="json"),
-                                "variables": [
-                                    {
-                                        "name": source_field,
-                                        "label": source_field,
-                                        "sources": [{"dataset": source_dataset, "variable": source_field}],
-                                    }
-                                ],
-                            }
-                        ],
-                        "assumptions": [f"{target} batch assumption"],
-                        "unresolved_mappings": [f"{target} batch decision"],
-                    }
-                ),
-                warnings=[],
-                events=[*(prior_events or []), {"turn": len(calls), "stage": "variable"}],
-            )
+            calls.append({"target": target, "source": source, "progress_path": self.progress_path})
+            variable_active += 1
+            variable_peak = max(variable_peak, variable_active)
+            try:
+                await asyncio.sleep(0.02)
+                return AgentOutcome(
+                    value=SDTMVariableMappingPlan.model_validate(
+                        {
+                            "study_name": "SYN-BATCH",
+                            "datasets": [
+                                {
+                                    "domain": target,
+                                    "description": target,
+                                    "record_plan": read_plan(target, source_dataset).model_dump(mode="json"),
+                                    "variables": [
+                                        {
+                                            "name": source_field,
+                                            "label": source_field,
+                                            "sources": [{"dataset": source_dataset, "variable": source_field}],
+                                        }
+                                    ],
+                                }
+                            ],
+                            "assumptions": [f"{target} batch assumption"],
+                            "unresolved_mappings": [f"{target} batch decision"],
+                        }
+                    ),
+                    warnings=[],
+                    events=[*(prior_events or []), {"turn": len(calls), "stage": "variable"}],
+                )
+            finally:
+                variable_active -= 1
 
     monkeypatch.setattr("app.use_cases.sdtm.ClinicalAgentRunner", FakeVariableRunner)
     use_case = SDTMUseCase()
@@ -1076,7 +1085,7 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
             inputs=[],
             options={},
             ai=SimpleNamespace(),
-            settings=agent_settings(),
+            settings=agent_settings(sdtm_domain_agent_concurrency=2),
             agent_progress_path=tmp_path / "progress.json",
         ),
         source_spec=source_spec,
@@ -1090,41 +1099,52 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     assert [dataset.domain for dataset in variable_mapping.datasets] == ["DM", "AE"]
     assert variable_mapping.datasets[0].review_assumptions == ["DM batch assumption"]
     assert variable_mapping.datasets[1].review_unresolved_mappings == ["AE batch decision"]
-    assert [call["target"] for call in calls] == ["DM", "AE"]
-    assert '"name":"RAW_AE"' not in calls[0]["source"]
-    assert '"name":"RAW_DM"' not in calls[1]["source"]
+    assert variable_peak == 2
+    assert {call["target"] for call in calls} == {"DM", "AE"}
+    assert len({call["progress_path"] for call in calls}) == 2
+    calls_by_target = {call["target"]: call for call in calls}
+    assert '"name":"RAW_AE"' not in calls_by_target["DM"]["source"]
+    assert '"name":"RAW_DM"' not in calls_by_target["AE"]["source"]
 
     rule_calls: list[dict] = []
+    rule_active = 0
+    rule_peak = 0
 
     class FakeRuleRunner:
-        def __init__(self, **_):
-            pass
+        def __init__(self, *, progress_path, **_):
+            self.progress_path = progress_path
 
         async def run(self, *, objective, source, prior_events=None, **_):
+            nonlocal rule_active, rule_peak
             target = "DM" if "target DM" in objective else "AE"
-            source_dataset = "RAW_DM" if target == "DM" else "RAW_AE"
             variable = "AGE" if target == "DM" else "AETERM"
-            rule_calls.append({"target": target, "source": source})
-            return AgentOutcome(
-                value=SDTMRuleAugmentationPlan.model_validate(
-                    {
-                        "study_name": "SYN-BATCH",
-                        "rule_augmentations": [
-                            {
-                                "rule_id": f"{target}-{variable}",
-                                "target_domain": target,
-                                "target_variable": variable,
-                                "description": "Direct",
-                                "logic": "Direct",
-                                "r_expression": f'.data[["{variable}"]] ',
-                                "sas_expression": variable,
-                            }
-                        ],
-                    }
-                ),
-                warnings=[],
-                events=[*(prior_events or []), {"turn": len(rule_calls), "stage": "rule"}],
-            )
+            rule_calls.append({"target": target, "source": source, "progress_path": self.progress_path})
+            rule_active += 1
+            rule_peak = max(rule_peak, rule_active)
+            try:
+                await asyncio.sleep(0.02)
+                return AgentOutcome(
+                    value=SDTMRuleAugmentationPlan.model_validate(
+                        {
+                            "study_name": "SYN-BATCH",
+                            "rule_augmentations": [
+                                {
+                                    "rule_id": f"{target}-{variable}",
+                                    "target_domain": target,
+                                    "target_variable": variable,
+                                    "description": "Direct",
+                                    "logic": "Direct",
+                                    "r_expression": f'.data[["{variable}"]] ',
+                                    "sas_expression": variable,
+                                }
+                            ],
+                        }
+                    ),
+                    warnings=[],
+                    events=[*(prior_events or []), {"turn": len(rule_calls), "stage": "rule"}],
+                )
+            finally:
+                rule_active -= 1
 
     monkeypatch.setattr("app.use_cases.sdtm.ClinicalAgentRunner", FakeRuleRunner)
     rule_plan, _ = await use_case._generate_rule_batches(
@@ -1132,7 +1152,7 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
             inputs=[],
             options={},
             ai=SimpleNamespace(),
-            settings=agent_settings(),
+            settings=agent_settings(sdtm_domain_agent_concurrency=2),
             agent_progress_path=tmp_path / "progress.json",
         ),
         domain_mapping=domain_mapping,
@@ -1140,9 +1160,79 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     )
 
     assert [rule.target_domain for rule in rule_plan.rule_augmentations] == ["DM", "AE"]
-    assert [call["target"] for call in rule_calls] == ["DM", "AE"]
-    assert '"domain":"AE"' not in rule_calls[0]["source"]
-    assert '"domain":"DM"' not in rule_calls[1]["source"]
+    assert rule_peak == 2
+    assert {call["target"] for call in rule_calls} == {"DM", "AE"}
+    assert len({call["progress_path"] for call in rule_calls}) == 2
+    rule_calls_by_target = {call["target"]: call for call in rule_calls}
+    assert '"domain":"AE"' not in rule_calls_by_target["DM"]["source"]
+    assert '"domain":"DM"' not in rule_calls_by_target["AE"]["source"]
+
+
+def test_sdtm_parallel_domain_progress_merges_isolated_traces(tmp_path) -> None:
+    progress_path = tmp_path / "agent" / "progress.json"
+    domain_directory = progress_path.parent / "domains" / "variable-value-level-mapping"
+    domain_directory.mkdir(parents=True)
+    domain_paths = {
+        "DM": domain_directory / "001-dm.json",
+        "AE": domain_directory / "002-ae.json",
+    }
+    for domain, occurred_at in (
+        ("DM", "2026-10-31T12:00:02+00:00"),
+        ("AE", "2026-10-31T12:00:01+00:00"),
+    ):
+        domain_paths[domain].write_text(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "turn": 3,
+                    "total_source_chunks": 2,
+                    "read_source_chunks": [1, 2],
+                    "started_at": "2026-10-31T12:00:00+00:00",
+                    "updated_at": occurred_at,
+                    "events": [
+                        {
+                            "turn": 3,
+                            "type": "tool",
+                            "name": "submit_result",
+                            "summary": "Submitted mapping",
+                            "occurred_at": occurred_at,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    SDTMUseCase._merge_domain_progress(
+        progress_path,
+        baseline={
+            "turn": 5,
+            "max_turns": 20,
+            "events": [{"turn": 5, "type": "tool", "summary": "Approved domain mapping"}],
+        },
+        target_domains=["DM", "AE"],
+        domain_paths=domain_paths,
+        stage="Variable & value-level mapping",
+        stage_index=2,
+        stage_count=3,
+        completed_stages=["Domain mapping"],
+        model="test-model",
+        max_turns_per_domain=8,
+        status="completed",
+    )
+
+    merged = json.loads(progress_path.read_text(encoding="utf-8"))
+    assert merged["status"] == "completed"
+    assert merged["completed_stages"] == ["Domain mapping", "Variable & value-level mapping"]
+    assert merged["total_source_chunks"] == 4
+    assert merged["read_source_chunks"] == [1, 2, 3, 4]
+    assert [event["turn"] for event in merged["events"]] == [5, 6, 7]
+    assert [event["summary"] for event in merged["events"][1:]] == [
+        "AE: Submitted mapping",
+        "DM: Submitted mapping",
+    ]
+    assert [event["input_details"]["Target domain"] for event in merged["events"][1:]] == ["AE", "DM"]
+    assert {item["domain"] for item in merged["domain_agents"]} == {"DM", "AE"}
 
 
 async def test_tlf_use_case_pauses_after_inventory_shell_and_programming(tmp_path) -> None:

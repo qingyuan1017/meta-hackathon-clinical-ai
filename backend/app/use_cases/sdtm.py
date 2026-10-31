@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Awaitable, Callable, cast
 
 from pydantic import BaseModel
 
-from ..agents import ClinicalAgentRunner
+from ..agents import AgentOutcome, ClinicalAgentRunner
 from ..agents.runtime import verify_result
 from ..agents.sdtm import SOURCE_NORMALIZATION_AGENT, STAGE_AGENTS
 from ..artifacts import render_sdtm
@@ -241,9 +242,11 @@ class SDTMUseCase(ClinicalUseCase):
         warnings: list[str] = []
         standard: str | None = None
         define_standard: str | None = None
-        prior_events: list[dict[str, Any]] | None = None
 
-        for target_domain in target_domains:
+        async def generate_domain(
+            target_domain: str,
+            domain_progress_path: Path | None,
+        ) -> AgentOutcome:
             batch_mappings = [
                 item
                 for item in domain_mapping.domain_mappings
@@ -282,7 +285,7 @@ class SDTMUseCase(ClinicalUseCase):
                 result_model=SDTMVariableMappingPlan,
                 ai=context.ai,
                 settings=context.settings,
-                progress_path=context.agent_progress_path,
+                progress_path=domain_progress_path,
                 result_validator=lambda value: self.validate_variable_mapping(
                     batch_spec,
                     batch_domain_mapping,
@@ -311,9 +314,40 @@ class SDTMUseCase(ClinicalUseCase):
                 stage_index=2,
                 stage_count=stage_count,
                 completed_stages=[self.descriptor.stages[0]],
-                prior_events=prior_events,
             )
+            return outcome
+
+        outcomes = await self._run_parallel_domain_agents(
+            context,
+            target_domains=target_domains,
+            stage=self.descriptor.stages[1],
+            stage_index=2,
+            stage_count=stage_count,
+            completed_stages=[self.descriptor.stages[0]],
+            generate=generate_domain,
+        )
+
+        for target_domain, outcome in zip(target_domains, outcomes, strict=True):
             batch_plan = cast(SDTMVariableMappingPlan, outcome.value)
+            batch_mappings = [
+                item
+                for item in domain_mapping.domain_mappings
+                if item.target_domain.upper() == target_domain
+            ]
+            batch_spec = EDCSourceSpecification(
+                study_name=source_spec.study_name,
+                datasets=[source_by_name[item.source_dataset.casefold()] for item in batch_mappings],
+                codelists=source_spec.codelists,
+                assumptions=source_spec.assumptions,
+                unresolved_items=source_spec.unresolved_items,
+            )
+            batch_domain_mapping = SDTMDomainMappingPlan(
+                study_name=domain_mapping.study_name,
+                standard=domain_mapping.standard,
+                domain_mappings=batch_mappings,
+                assumptions=domain_mapping.assumptions,
+                unresolved_mappings=domain_mapping.unresolved_mappings,
+            )
             self.validate_variable_mapping(batch_spec, batch_domain_mapping, batch_plan)
             if [item.domain.upper() for item in batch_plan.datasets] != [target_domain]:
                 raise ValueError(
@@ -333,7 +367,6 @@ class SDTMUseCase(ClinicalUseCase):
             assumptions.extend(batch_plan.assumptions)
             unresolved.extend(batch_plan.unresolved_mappings)
             warnings.extend(outcome.warnings)
-            prior_events = outcome.events
 
         return (
             SDTMVariableMappingPlan(
@@ -346,6 +379,211 @@ class SDTMUseCase(ClinicalUseCase):
             ),
             list(dict.fromkeys(warnings)),
         )
+
+    async def _run_parallel_domain_agents(
+        self,
+        context: UseCaseContext,
+        *,
+        target_domains: list[str],
+        stage: str,
+        stage_index: int,
+        stage_count: int,
+        completed_stages: list[str],
+        generate: Callable[[str, Path | None], Awaitable[AgentOutcome]],
+    ) -> list[AgentOutcome]:
+        concurrency = max(
+            1,
+            min(context.settings.sdtm_domain_agent_concurrency, len(target_domains) or 1),
+        )
+        semaphore = asyncio.Semaphore(concurrency)
+        progress_path = context.agent_progress_path
+        baseline = self._read_agent_progress(progress_path)
+        stage_directory: Path | None = None
+        domain_paths: dict[str, Path] = {}
+        if progress_path is not None:
+            stage_slug = "".join(character.lower() if character.isalnum() else "-" for character in stage)
+            stage_slug = "-".join(part for part in stage_slug.split("-") if part)
+            stage_directory = progress_path.parent / "domains" / stage_slug
+            stage_directory.mkdir(parents=True, exist_ok=True)
+            for old_trace in stage_directory.glob("*.json"):
+                old_trace.unlink(missing_ok=True)
+            for index, domain in enumerate(target_domains, start=1):
+                domain_slug = "".join(character.lower() if character.isalnum() else "-" for character in domain)
+                domain_paths[domain] = stage_directory / f"{index:03d}-{domain_slug}.json"
+
+        async def run_domain(target_domain: str) -> AgentOutcome:
+            async with semaphore:
+                return await generate(target_domain, domain_paths.get(target_domain))
+
+        stop_monitor = asyncio.Event()
+
+        async def monitor_progress() -> None:
+            if progress_path is None:
+                return
+            while not stop_monitor.is_set():
+                self._merge_domain_progress(
+                    progress_path,
+                    baseline=baseline,
+                    target_domains=target_domains,
+                    domain_paths=domain_paths,
+                    stage=stage,
+                    stage_index=stage_index,
+                    stage_count=stage_count,
+                    completed_stages=completed_stages,
+                    model=context.settings.meta_model,
+                    max_turns_per_domain=context.settings.agent_max_turns,
+                    status="running",
+                )
+                try:
+                    await asyncio.wait_for(stop_monitor.wait(), timeout=0.25)
+                except TimeoutError:
+                    pass
+
+        monitor = asyncio.create_task(monitor_progress(), name=f"sdtm-{stage_index}-progress")
+        tasks = [
+            asyncio.create_task(run_domain(domain), name=f"sdtm-{stage_index}-{domain}")
+            for domain in target_domains
+        ]
+        final_status = "completed"
+        try:
+            outcomes = await asyncio.gather(*tasks)
+        except BaseException:
+            final_status = "failed"
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
+        finally:
+            stop_monitor.set()
+            await monitor
+            if progress_path is not None:
+                self._merge_domain_progress(
+                    progress_path,
+                    baseline=baseline,
+                    target_domains=target_domains,
+                    domain_paths=domain_paths,
+                    stage=stage,
+                    stage_index=stage_index,
+                    stage_count=stage_count,
+                    completed_stages=completed_stages,
+                    model=context.settings.meta_model,
+                    max_turns_per_domain=context.settings.agent_max_turns,
+                    status=final_status,
+                )
+        return outcomes
+
+    @staticmethod
+    def _read_agent_progress(path: Path | None) -> dict[str, Any]:
+        if path is None or not path.is_file():
+            return {}
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @classmethod
+    def _merge_domain_progress(
+        cls,
+        progress_path: Path,
+        *,
+        baseline: dict[str, Any],
+        target_domains: list[str],
+        domain_paths: dict[str, Path],
+        stage: str,
+        stage_index: int,
+        stage_count: int,
+        completed_stages: list[str],
+        model: str,
+        max_turns_per_domain: int,
+        status: str,
+    ) -> None:
+        baseline_events = [
+            dict(event)
+            for event in baseline.get("events", [])
+            if isinstance(event, dict)
+        ]
+        traces: list[tuple[int, str, dict[str, Any]]] = []
+        for domain_index, domain in enumerate(target_domains):
+            trace = cls._read_agent_progress(domain_paths.get(domain))
+            if trace:
+                traces.append((domain_index, domain, trace))
+
+        domain_events: list[tuple[str, int, int, dict[str, Any]]] = []
+        total_chunks = 0
+        read_chunks = 0
+        started_values: list[str] = []
+        updated_values: list[str] = []
+        for domain_index, domain, trace in traces:
+            total_chunks += int(trace.get("total_source_chunks", 0))
+            read_chunks += len(trace.get("read_source_chunks", []))
+            if trace.get("started_at"):
+                started_values.append(str(trace["started_at"]))
+            if trace.get("updated_at"):
+                updated_values.append(str(trace["updated_at"]))
+            for event_index, event in enumerate(trace.get("events", [])):
+                if not isinstance(event, dict):
+                    continue
+                item = dict(event)
+                summary = str(item.get("summary", "")).strip()
+                item["summary"] = f"{domain}: {summary}" if summary else f"{domain} domain agent event"
+                details = dict(item.get("input_details", {})) if isinstance(item.get("input_details"), dict) else {}
+                details.setdefault("Target domain", domain)
+                item["input_details"] = details
+                occurred_at = str(item.get("occurred_at", ""))
+                domain_events.append((occurred_at, domain_index, event_index, item))
+        domain_events.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        turn = max(
+            [int(baseline.get("turn", 0)), *[int(event.get("turn", 0)) for event in baseline_events]],
+            default=0,
+        )
+        merged_events = baseline_events
+        for _occurred_at, _domain_index, _event_index, event in domain_events:
+            turn += 1
+            event["turn"] = turn
+            merged_events.append(event)
+
+        now = datetime.now(timezone.utc).isoformat()
+        completed = list(dict.fromkeys(completed_stages))
+        if status == "completed" and stage not in completed:
+            completed.append(stage)
+        aggregate = {
+            "agent_id": _STAGE_AGENTS["variable-mapping"].id if stage_index == 2 else _STAGE_AGENTS["rule-augmentation"].id,
+            "workflow": "sdtm",
+            "model": model,
+            "status": status,
+            "turn": turn,
+            "max_turns": max(
+                int(baseline.get("max_turns", 0)),
+                turn + max_turns_per_domain * len(target_domains),
+            ),
+            "stage": stage,
+            "stage_index": stage_index,
+            "stage_count": stage_count,
+            "completed_stages": completed,
+            "total_source_chunks": total_chunks,
+            "read_source_chunks": list(range(1, read_chunks + 1)),
+            "started_at": min(started_values) if started_values else baseline.get("started_at", now),
+            "updated_at": max(updated_values) if updated_values else now,
+            "completed_at": now if status == "completed" else None,
+            "messages": [],
+            "events": merged_events,
+            "domain_agents": [
+                {
+                    "domain": domain,
+                    "status": trace.get("status", "queued"),
+                    "turn": int(trace.get("turn", 0)),
+                    "updated_at": trace.get("updated_at"),
+                }
+                for _domain_index, domain, trace in traces
+            ],
+        }
+        progress_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = progress_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(aggregate, indent=2, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(progress_path)
 
     @staticmethod
     def build_variable_mapping_reconciliation(
@@ -565,11 +803,17 @@ class SDTMUseCase(ClinicalUseCase):
         assumptions: list[str] = []
         unresolved: list[str] = []
         warnings: list[str] = []
-        prior_events: list[dict[str, Any]] | None = None
         agent_options = self._agent_options(context.options)
         stage_count = len(self.descriptor.stages)
 
-        for dataset in variable_mapping.datasets:
+        datasets_by_domain = {dataset.domain.upper(): dataset for dataset in variable_mapping.datasets}
+        target_domains = list(datasets_by_domain)
+
+        async def generate_domain(
+            target_domain: str,
+            domain_progress_path: Path | None,
+        ) -> AgentOutcome:
+            dataset = datasets_by_domain[target_domain]
             target_domain = dataset.domain.upper()
             batch_mappings = [
                 item
@@ -581,7 +825,12 @@ class SDTMUseCase(ClinicalUseCase):
                 result_model=SDTMRuleAugmentationPlan,
                 ai=context.ai,
                 settings=context.settings,
-                progress_path=context.agent_progress_path,
+                progress_path=domain_progress_path,
+                result_validator=lambda value: self._validate_rule_batch(
+                    target_domain,
+                    dataset,
+                    cast(SDTMRuleAugmentationPlan, value),
+                ),
             ).run(
                 objective=(
                     f"Stage 3 of 3, target {target_domain}: add exactly one implementation rule for every "
@@ -598,44 +847,27 @@ class SDTMUseCase(ClinicalUseCase):
                 stage_index=3,
                 stage_count=stage_count,
                 completed_stages=list(self.descriptor.stages[:2]),
-                prior_events=prior_events,
             )
+            return outcome
+
+        outcomes = await self._run_parallel_domain_agents(
+            context,
+            target_domains=target_domains,
+            stage=self.descriptor.stages[2],
+            stage_index=3,
+            stage_count=stage_count,
+            completed_stages=list(self.descriptor.stages[:2]),
+            generate=generate_domain,
+        )
+
+        for target_domain, outcome in zip(target_domains, outcomes, strict=True):
+            dataset = datasets_by_domain[target_domain]
             batch_plan = cast(SDTMRuleAugmentationPlan, outcome.value)
-            problems = verify_result("sdtm-rule-augmentation", batch_plan)
-            expected_variables = {item.name.upper() for item in dataset.variables}
-            actual_variables = {
-                item.target_variable.upper()
-                for item in batch_plan.rule_augmentations
-                if item.target_domain.upper() == target_domain
-            }
-            foreign_targets = sorted(
-                {
-                    item.target_domain.upper()
-                    for item in batch_plan.rule_augmentations
-                    if item.target_domain.upper() != target_domain
-                }
-            )
-            if foreign_targets:
-                problems.append(
-                    f"Rule-augmentation batch {target_domain} returned other targets: {', '.join(foreign_targets)}."
-                )
-            missing = sorted(expected_variables - actual_variables)
-            extra = sorted(actual_variables - expected_variables)
-            if missing:
-                problems.append(
-                    f"Rule-augmentation batch {target_domain} is missing variables: {', '.join(missing)}."
-                )
-            if extra:
-                problems.append(
-                    f"Rule-augmentation batch {target_domain} returned unknown variables: {', '.join(extra)}."
-                )
-            if problems:
-                raise ValueError(" ".join(problems))
+            self._validate_rule_batch(target_domain, dataset, batch_plan)
             variable_rules.extend(batch_plan.rule_augmentations)
             assumptions.extend(batch_plan.assumptions)
             unresolved.extend(batch_plan.unresolved_mappings)
             warnings.extend(outcome.warnings)
-            prior_events = outcome.events
 
         return (
             SDTMRuleAugmentationPlan(
@@ -647,6 +879,43 @@ class SDTMUseCase(ClinicalUseCase):
             ),
             list(dict.fromkeys(warnings)),
         )
+
+    @staticmethod
+    def _validate_rule_batch(
+        target_domain: str,
+        dataset: Any,
+        batch_plan: SDTMRuleAugmentationPlan,
+    ) -> None:
+        problems = verify_result("sdtm-rule-augmentation", batch_plan)
+        expected_variables = {item.name.upper() for item in dataset.variables}
+        actual_variables = {
+            item.target_variable.upper()
+            for item in batch_plan.rule_augmentations
+            if item.target_domain.upper() == target_domain
+        }
+        foreign_targets = sorted(
+            {
+                item.target_domain.upper()
+                for item in batch_plan.rule_augmentations
+                if item.target_domain.upper() != target_domain
+            }
+        )
+        if foreign_targets:
+            problems.append(
+                f"Rule-augmentation batch {target_domain} returned other targets: {', '.join(foreign_targets)}."
+            )
+        missing = sorted(expected_variables - actual_variables)
+        extra = sorted(actual_variables - expected_variables)
+        if missing:
+            problems.append(
+                f"Rule-augmentation batch {target_domain} is missing variables: {', '.join(missing)}."
+            )
+        if extra:
+            problems.append(
+                f"Rule-augmentation batch {target_domain} returned unknown variables: {', '.join(extra)}."
+            )
+        if problems:
+            raise ValueError(" ".join(problems))
 
     def render(self, result: BaseModel, *, inputs: list[Path], options: dict[str, Any], output_dir: Path) -> list[Path]:
         crf, _ = self._workflow_inputs(inputs)
