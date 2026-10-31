@@ -92,6 +92,18 @@ npm run dev
 
 The frontend defaults to `http://localhost:8000`; override it with `NEXT_PUBLIC_API_URL`.
 
+### Native mobile app
+
+The `mobile/` Expo/React Native app provides a native iOS and Android agent inbox, sanitized execution history, artifact access, and review-gate messaging. Set `EXPO_PUBLIC_API_URL` to an address the phone can reach, or configure the backend address inside the app:
+
+```powershell
+cd mobile
+npm install
+npm start
+```
+
+See [`mobile/README.md`](mobile/README.md) for physical-device networking and native build instructions.
+
 ## Meta configuration
 
 | Variable | Purpose |

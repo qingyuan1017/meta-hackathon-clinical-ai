@@ -1,0 +1,9 @@
+.expo/
+dist-*/
+node_modules/
+.env
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision

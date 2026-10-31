@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "Clinical AI Agent",
+    "slug": "clinical-ai-agent",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "scheme": "clinicalai",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.edetek.clinicalaiagent",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true,
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "package": "com.edetek.clinicalaiagent",
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ]
+  }
+}
