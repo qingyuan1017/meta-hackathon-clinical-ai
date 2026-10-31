@@ -46,6 +46,8 @@ MEDIA_TYPES = {
     ".pdf": "application/pdf",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ".xml": "application/xml",
+    ".xsl": "application/xml",
+    ".html": "text/html",
     ".r": "text/x-r-source",
     ".sas": "text/x-sas",
     ".xpt": "application/x-sas-transport",
@@ -241,9 +243,19 @@ def render_sdtm(result: SDTMPlan, crf_path: Path | None, output_dir: Path, langu
     json_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     paths.append(json_path)
     paths.append(_render_sdtm_xlsx(result, output_dir / "sdtm-mapping.xlsx"))
-    paths.append(_render_define_xml(result, output_dir / "define.xml"))
+    define_path = _render_define_xml(result, output_dir / "define.xml")
+    paths.append(define_path)
+    stylesheet_path = _render_define_stylesheet(output_dir / "define.xsl")
+    paths.append(stylesheet_path)
+    paths.append(_render_define_html(define_path, stylesheet_path, output_dir / "define.html"))
+    diagnostics_path = output_dir / "define-diagnostics.json"
+    diagnostics_path.write_text(json.dumps(diagnose_define(define_path), indent=2), encoding="utf-8")
+    paths.append(diagnostics_path)
     if crf_path is not None:
-        paths.append(_annotate_crf(result, crf_path, output_dir / "annotated-crf.pdf"))
+        annotated, coverage = _annotate_crf(result, crf_path, output_dir / "annotated-crf.pdf", output_dir / "acrf-annotations.json")
+        if annotated is not None:
+            paths.append(annotated)
+        paths.append(coverage)
     if "r" in languages:
         paths.append(_render_r_sdtm(result, output_dir / "build-sdtm.R"))
     if "sas" in languages:
@@ -400,26 +412,93 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
 def _render_define_xml(result: SDTMPlan, path: Path) -> Path:
     odm_ns = "http://www.cdisc.org/ns/odm/v1.3"
     def_ns = "http://www.cdisc.org/ns/def/v2.1"
-    root = etree.Element(f"{{{odm_ns}}}ODM", nsmap={None: odm_ns, "def": def_ns}, FileOID="WORKBENCH.DEFINE", ODMVersion="1.3.2", FileType="Snapshot")
+    xlink_ns = "http://www.w3.org/1999/xlink"
+    root = etree.Element(f"{{{odm_ns}}}ODM", nsmap={None: odm_ns, "def": def_ns, "xlink": xlink_ns}, FileOID="WORKBENCH.DEFINE", ODMVersion="1.3.2", FileType="Snapshot")
     root.addprevious(etree.Comment(DISCLAIMER))
     study = etree.SubElement(root, f"{{{odm_ns}}}Study", OID="STUDY.1")
     etree.SubElement(study, f"{{{odm_ns}}}GlobalVariables")
     metadata = etree.SubElement(study, f"{{{odm_ns}}}MetaDataVersion", OID="MDV.1", Name=result.study_name, Description=DISCLAIMER)
+    metadata.set(f"{{{def_ns}}}DefineVersion", result.define_standard.replace("Define-XML ", ""))
+    metadata.set(f"{{{def_ns}}}StandardName", "SDTM-IG")
+    metadata.set(f"{{{def_ns}}}StandardVersion", result.standard.replace("SDTMIG ", ""))
+    methods = {(rule.target_domain.upper(), rule.target_variable.upper()): rule for rule in result.rule_augmentations}
     for dataset in result.datasets:
-        group = etree.SubElement(metadata, f"{{{odm_ns}}}ItemGroupDef", OID=f"IG.{dataset.domain}", Name=dataset.domain, Repeating="Yes", IsReferenceData="No", Purpose="Tabulation")
+        group = etree.SubElement(metadata, f"{{{odm_ns}}}ItemGroupDef", OID=f"IG.{dataset.domain}", Name=dataset.domain, Repeating="Yes", IsReferenceData="No", Purpose=dataset.purpose)
+        group.set(f"{{{def_ns}}}Class", dataset.dataset_class)
+        group.set(f"{{{def_ns}}}Structure", dataset.structure)
+        group.set(f"{{{def_ns}}}ArchiveLocationID", f"LF.{dataset.domain}")
         etree.SubElement(group, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, dataset.description))
         for order, variable in enumerate(dataset.variables, 1):
-            etree.SubElement(group, f"{{{odm_ns}}}ItemRef", ItemOID=f"IT.{dataset.domain}.{variable.name}", OrderNumber=str(order), Mandatory="No")
-            item = etree.SubElement(metadata, f"{{{odm_ns}}}ItemDef", OID=f"IT.{dataset.domain}.{variable.name}", Name=variable.name, DataType="text" if variable.data_type == "Char" else "float", Length="200" if variable.data_type == "Char" else "8")
+            reference = etree.SubElement(group, f"{{{odm_ns}}}ItemRef", ItemOID=f"IT.{dataset.domain}.{variable.name}", OrderNumber=str(order), Mandatory="Yes" if variable.core == "Req" else "No")
+            if variable.role:
+                reference.set(f"{{{def_ns}}}Role", variable.role)
+            item = etree.SubElement(metadata, f"{{{odm_ns}}}ItemDef", OID=f"IT.{dataset.domain}.{variable.name}", Name=variable.name, DataType="text" if variable.data_type == "Char" else "float", Length=str(variable.length or (200 if variable.data_type == "Char" else 8)))
+            if variable.core:
+                item.set(f"{{{def_ns}}}Core", variable.core)
+            if variable.format:
+                item.set("DisplayFormat", variable.format)
             description = etree.SubElement(item, f"{{{odm_ns}}}Description")
             description.append(_translated_text(odm_ns, variable.label))
             origin = etree.SubElement(item, f"{{{def_ns}}}Origin", Type=variable.origin)
             origin_description = etree.SubElement(origin, f"{{{odm_ns}}}Description")
             origin_description.append(_translated_text(odm_ns, variable.source_field))
+            rule = methods.get((dataset.domain.upper(), variable.name.upper()))
+            if rule:
+                item.set(f"{{{def_ns}}}MethodOID", f"MT.{dataset.domain}.{variable.name}")
+            if variable.controlled_terms:
+                etree.SubElement(item, f"{{{odm_ns}}}CodeListRef", CodeListOID=f"CL.{dataset.domain}.{variable.name}")
+            if variable.comment:
+                comment = etree.SubElement(item, f"{{{def_ns}}}CommentDef", OID=f"COM.{dataset.domain}.{variable.name}")
+                etree.SubElement(comment, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, variable.comment))
+        leaf = etree.SubElement(group, f"{{{def_ns}}}leaf", ID=f"LF.{dataset.domain}")
+        leaf.set(f"{{{xlink_ns}}}href", f"{dataset.domain.lower()}.xpt")
+        etree.SubElement(leaf, f"{{{def_ns}}}title").text = f"{dataset.domain.lower()}.xpt"
+    for dataset in result.datasets:
+        for variable in dataset.variables:
+            rule = methods.get((dataset.domain.upper(), variable.name.upper()))
+            if rule:
+                method = etree.SubElement(metadata, f"{{{def_ns}}}MethodDef", OID=f"MT.{dataset.domain}.{variable.name}", Name=rule.description, Type="Computation")
+                etree.SubElement(method, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, rule.logic))
+            if variable.controlled_terms:
+                codelist = etree.SubElement(metadata, f"{{{odm_ns}}}CodeList", OID=f"CL.{dataset.domain}.{variable.name}", Name=f"{dataset.domain}.{variable.name}", DataType="text")
+                for term in variable.controlled_terms:
+                    coded = etree.SubElement(codelist, f"{{{odm_ns}}}CodeListItem", CodedValue=term)
+                    etree.SubElement(coded, f"{{{odm_ns}}}Decode").append(_translated_text(odm_ns, term))
     tree = etree.ElementTree(root)
     tree.write(str(path), encoding="UTF-8", xml_declaration=True, pretty_print=True)
     etree.parse(str(path))
     return path
+
+
+def _render_define_stylesheet(path: Path) -> Path:
+    path.write_text("""<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:odm="http://www.cdisc.org/ns/odm/v1.3">
+<xsl:output method="html" encoding="UTF-8"/><xsl:template match="/"><html><head><meta charset="utf-8"/><title>Define-XML review</title><style>body{font-family:system-ui;margin:2rem;color:#20242b}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{border:1px solid #ccd2da;padding:.5rem;text-align:left}th{background:#eef1f5}.notice{padding:1rem;background:#fff4ce;border:1px solid #e4b849}</style></head><body><h1>Define-XML review</h1><p class="notice">Draft review rendering. This view is not XSD or standards validation.</p><xsl:for-each select="//odm:ItemGroupDef"><h2><xsl:value-of select="@Name"/> — <xsl:value-of select="odm:Description/odm:TranslatedText"/></h2><table><tr><th>Variable</th><th>Order</th><th>Mandatory</th></tr><xsl:for-each select="odm:ItemRef"><tr><td><xsl:value-of select="@ItemOID"/></td><td><xsl:value-of select="@OrderNumber"/></td><td><xsl:value-of select="@Mandatory"/></td></tr></xsl:for-each></table></xsl:for-each></body></html></xsl:template></xsl:stylesheet>""", encoding="utf-8")
+    return path
+
+
+def _render_define_html(xml_path: Path, stylesheet_path: Path, path: Path) -> Path:
+    transform = etree.XSLT(etree.parse(str(stylesheet_path)))
+    rendered = transform(etree.parse(str(xml_path)))
+    path.write_bytes(etree.tostring(rendered, method="html", encoding="UTF-8", pretty_print=True))
+    return path
+
+
+def diagnose_define(path: Path) -> dict:
+    diagnostics = {"well_formed": False, "internal_references_valid": False, "missing_references": [], "xsd_validation": "not_run", "standards_validation": "not_run", "limitations": ["No Define-XML 2.1 XSD package is bundled; full schema and standards validation were not run."]}
+    try:
+        tree = etree.parse(str(path))
+    except etree.XMLSyntaxError as exc:
+        diagnostics["parse_error"] = str(exc)
+        return diagnostics
+    diagnostics["well_formed"] = True
+    identifiers = {value for element in tree.iter() for key, value in element.attrib.items() if key.endswith("OID") and key.split("}")[-1] == "OID"}
+    reference_names = {"ItemOID", "MethodOID", "CodeListOID", "WhereClauseOID", "ItemGroupOID", "ValueListOID"}
+    references = [value for element in tree.iter() for key, value in element.attrib.items() if key.split("}")[-1] in reference_names]
+    missing = sorted(set(references) - identifiers)
+    diagnostics["missing_references"] = missing
+    diagnostics["internal_references_valid"] = not missing
+    return diagnostics
 
 
 def _translated_text(namespace: str, text: str) -> etree._Element:
@@ -428,19 +507,27 @@ def _translated_text(namespace: str, text: str) -> etree._Element:
     return node
 
 
-def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path) -> Path:
+def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: Path) -> tuple[Path | None, Path]:
     document = fitz.open(crf_path)
-    unmatched: list[str] = []
+    searchable = any(page.get_text("text").strip() for page in document)
+    coverage: list[dict] = []
+    if not searchable:
+        coverage_path.write_text(json.dumps({"status": "ocr_required", "searchable": False, "message": "The supplied CRF has no searchable text. OCR is not supported in this iteration; annotation was not performed.", "annotations": []}, indent=2), encoding="utf-8")
+        document.close()
+        return None, coverage_path
     for dataset in result.datasets:
         for variable in dataset.variables:
             matches: list[tuple[fitz.Page, fitz.Rect]] = []
             needle = (variable.crf_source_label or variable.source_field).strip()
             if needle and len(needle) >= 2:
                 for page in document:
-                    for rect in page.search_for(needle)[:1]:
+                    for rect in page.search_for(needle):
                         matches.append((page, rect))
             if matches:
                 page, rect = matches[0]
+                highlight = page.add_highlight_annot(rect)
+                highlight.set_info(title=f"{dataset.domain}.{variable.name}")
+                highlight.update()
                 point = fitz.Point(min(rect.x1 + 8, page.rect.width - 24), max(rect.y0, 24))
                 value_level = "\n".join(
                     f"VLM: {item.where_clause} — {item.mapping_expression}"
@@ -452,15 +539,17 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path) -> Path:
                 annotation = page.add_text_annot(point, text)
                 annotation.set_info(title="Clinical AI Workbench — DRAFT")
                 annotation.update()
-            else:
-                unmatched.append(f"{dataset.domain}.{variable.name} ← {needle or '[no CRF label]'}")
+            status = "unmatched" if not matches else "ambiguous" if len(matches) > 1 else "matched"
+            coverage.append({"domain": dataset.domain, "variable": variable.name, "origin": variable.origin, "mapping": variable.mapping_expression, "label": needle, "status": status, "page": matches[0][0].number + 1 if matches else None, "match_count": len(matches)})
     appendix = document.new_page()
     appendix.insert_textbox(fitz.Rect(48, 48, appendix.rect.width - 48, 110), "Draft aCRF annotation appendix", fontsize=16, color=(0.1, 0.2, 0.35))
     appendix.insert_textbox(fitz.Rect(48, 100, appendix.rect.width - 48, 155), DISCLAIMER, fontsize=9, color=(0.65, 0.05, 0.15))
-    appendix.insert_textbox(fitz.Rect(48, 165, appendix.rect.width - 48, appendix.rect.height - 48), "Mappings not positioned on a source label:\n\n" + "\n".join(unmatched or ["None"]), fontsize=9)
+    issues = [f"{item['status'].upper()}: {item['domain']}.{item['variable']} ← {item['label'] or '[no CRF label]'}" for item in coverage if item["status"] != "matched"]
+    appendix.insert_textbox(fitz.Rect(48, 165, appendix.rect.width - 48, appendix.rect.height - 48), "Ambiguous and unmatched mappings:\n\n" + "\n".join(issues or ["None"]), fontsize=9)
     document.save(path)
     document.close()
-    return path
+    coverage_path.write_text(json.dumps({"status": "review_required" if issues else "completed", "searchable": True, "annotations": coverage, "summary": {state: sum(1 for item in coverage if item["status"] == state) for state in ("matched", "ambiguous", "unmatched")}}, indent=2), encoding="utf-8")
+    return path, coverage_path
 
 
 def _render_r_sdtm(result: SDTMPlan, path: Path) -> Path:

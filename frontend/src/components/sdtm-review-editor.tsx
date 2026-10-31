@@ -122,7 +122,10 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
 
   const activeDataset = plan.datasets.find((dataset) => dataset.domain === selectedDomain) ?? plan.datasets[0];
   const acrfArtifact = artifacts.find((artifact) => artifact.name === "annotated-crf.pdf");
+  const acrfDiagnostics = artifacts.find((artifact) => artifact.name === "acrf-annotations.json");
   const defineArtifact = artifacts.find((artifact) => artifact.name === "define.xml");
+  const defineHtmlArtifact = artifacts.find((artifact) => artifact.name === "define.html");
+  const defineDiagnostics = artifacts.find((artifact) => artifact.name === "define-diagnostics.json");
   const issues = reviewIssues(plan);
 
   const update = (mutate: (next: SDTMPlanDraft) => void) => {
@@ -348,10 +351,10 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
         <DerivedArtifactReview
           title="Annotated CRF review"
           description="This draft is generated from the aCRF labels in Variable & VLM. Change those labels, save the reviewed mappings, and return here to inspect the rebuilt PDF."
-          artifact={acrfArtifact}
+          artifact={acrfArtifact ?? acrfDiagnostics}
           missingMessage="No aCRF was generated because this job did not include a blank CRF PDF. Start a new generation with a blank CRF to enable annotation review."
         >
-          {acrfArtifact ? <iframe title="Annotated CRF review" src={api.artifactPreviewUrl(acrfArtifact.download_url)} className="h-[48rem] w-full rounded-lg border border-white/10 bg-white" /> : null}
+          <ACRFArtifactReview pdf={acrfArtifact} diagnostics={acrfDiagnostics} />
         </DerivedArtifactReview>
       )}
 
@@ -361,7 +364,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
           description="This draft is generated from the reviewed domains, variables, origins, controlled terms, and value-level metadata. Update those mapping tabs and save to rebuild the XML."
           artifact={defineArtifact}
         >
-          <XMLArtifactPreview artifact={defineArtifact} />
+          <DefineArtifactPreview xml={defineArtifact} html={defineHtmlArtifact} diagnostics={defineDiagnostics} />
         </DerivedArtifactReview>
       )}
 
@@ -433,16 +436,24 @@ function DerivedArtifactReview({ title, description, artifact, missingMessage, c
   return <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]"><header className="flex flex-wrap items-start justify-between gap-4 border-b border-white/10 p-4"><div><p className="text-sm font-extrabold text-zinc-100">{title}</p><p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">{description}</p></div>{artifact && <Button asChild type="button" variant="outline" size="sm"><a href={api.artifactUrl(artifact.download_url)}><Download size={14} />Download {artifact.name}</a></Button>}</header><div className="p-4">{artifact ? children : <EmptyReview text={missingMessage ?? `${title} will appear after the SDTM artifacts are generated.`} />}</div></section>;
 }
 
-function XMLArtifactPreview({ artifact }: { artifact?: Artifact }) {
+function DefineArtifactPreview({ xml, html, diagnostics }: { xml?: Artifact; html?: Artifact; diagnostics?: Artifact }) {
+  const [view, setView] = useState<"styled" | "raw" | "diagnostics">("styled");
   const query = useQuery({
-    queryKey: ["artifact-text", artifact?.id],
-    queryFn: () => api.artifactText(artifact!.download_url),
-    enabled: Boolean(artifact),
+    queryKey: ["artifact-text", view === "diagnostics" ? diagnostics?.id : xml?.id],
+    queryFn: () => api.artifactText((view === "diagnostics" ? diagnostics : xml)!.download_url),
+    enabled: view !== "styled" && Boolean(view === "diagnostics" ? diagnostics : xml),
   });
-  if (!artifact) return null;
-  if (query.isPending) return <EmptyReview text="Loading Define-XML…" />;
-  if (query.isError) return <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">{query.error.message}</div>;
-  return <pre className="max-h-[48rem] overflow-auto rounded-lg border border-white/10 bg-[#09090b] p-4 font-mono text-xs leading-5 text-cyan-100"><code>{query.data}</code></pre>;
+  if (!xml) return null;
+  return <div><div className="mb-3 flex gap-2" role="tablist" aria-label="Define-XML views">{(["styled", "raw", "diagnostics"] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={view === item} onClick={() => setView(item)} className={`rounded-lg px-3 py-2 text-xs font-bold capitalize ${view === item ? "bg-violet-500/15 text-violet-200" : "bg-white/[0.03] text-zinc-500"}`}>{item}</button>)}</div>{view === "styled" ? (html ? <iframe title="Styled Define-XML review" src={api.artifactPreviewUrl(html.download_url)} className="h-[48rem] w-full rounded-lg border border-white/10 bg-white" /> : <EmptyReview text="Styled Define-XML is unavailable." />) : query.isPending ? <EmptyReview text={`Loading Define-XML ${view} view…`} /> : query.isError ? <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">{query.error.message}</div> : <pre className="max-h-[48rem] overflow-auto rounded-lg border border-white/10 bg-[#09090b] p-4 font-mono text-xs leading-5 text-cyan-100"><code>{query.data}</code></pre>}</div>;
+}
+
+function ACRFArtifactReview({ pdf, diagnostics }: { pdf?: Artifact; diagnostics?: Artifact }) {
+  const query = useQuery({ queryKey: ["acrf-diagnostics", diagnostics?.id], queryFn: () => api.artifactText(diagnostics!.download_url), enabled: Boolean(diagnostics) });
+  let parsed: { status?: string; message?: string; annotations?: Array<{ domain: string; variable: string; status: string; page: number | null; label: string }> } = {};
+  try { parsed = query.data ? JSON.parse(query.data) : {}; } catch { /* render unavailable diagnostics below */ }
+  if (!pdf && parsed.status === "ocr_required") return <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.07] p-5 text-sm leading-6 text-amber-100">{parsed.message}</div>;
+  if (!pdf) return <EmptyReview text="Annotated CRF output is unavailable." />;
+  return <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,1fr)]"><aside className="max-h-[48rem] overflow-auto rounded-lg border border-white/10 bg-black/20 p-3"><p className="text-xs font-black uppercase tracking-wider text-zinc-400">Annotation coverage</p><div className="mt-3 space-y-2">{parsed.annotations?.map((item, index) => <a key={`${item.domain}-${item.variable}-${index}`} href={item.page ? `${api.artifactPreviewUrl(pdf.download_url)}#page=${item.page}` : undefined} className="block rounded-lg border border-white/[0.08] p-2 text-xs"><span className={item.status === "matched" ? "text-emerald-300" : item.status === "ambiguous" ? "text-amber-300" : "text-rose-300"}>{item.status.toUpperCase()}</span><span className="ml-2 font-mono text-zinc-200">{item.domain}.{item.variable}</span><span className="mt-1 block text-zinc-600">{item.label || "No CRF label"}{item.page ? ` · page ${item.page}` : ""}</span></a>)}</div></aside><iframe title="Annotated CRF review" src={api.artifactPreviewUrl(pdf.download_url)} className="h-[48rem] w-full rounded-lg border border-white/10 bg-white" /></div>;
 }
 
 function SourceCard({ source }: { source: { name: string; type: SourceType } }) {

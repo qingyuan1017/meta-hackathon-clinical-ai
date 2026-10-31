@@ -7,7 +7,7 @@ from lxml import etree
 from openpyxl import load_workbook
 from reportlab.pdfgen import canvas
 
-from app.artifacts import add_manifest_and_bundle, render_clinical_document, render_edc, render_protocol, render_sdtm, render_tlf
+from app.artifacts import add_manifest_and_bundle, diagnose_define, render_clinical_document, render_edc, render_protocol, render_sdtm, render_tlf
 from app.core_conformance import CoreConformanceError, CoreConformanceResult
 from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMDomainMapping, SDTMDomainRuleAugmentation, SDTMPlan, SDTMRuleAugmentation, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFFigureSpec, TLFPlan, TLFProgramSpec, TLFRow, TLFSourceVariable, TLFSpec
 from app.usdm import USDM_VERSION, validate_usdm
@@ -159,3 +159,51 @@ def test_sdtm_and_tlf_artifacts(tmp_path) -> None:
     assert workbook["Programming"]["C2"].value.startswith("ADSL.TRT01P")
     assert (tmp_path / "l-01.sas").is_file()
     assert (tmp_path / "tlf-setup-2.R").is_file()
+
+
+def test_acrf_coverage_and_define_review_diagnostics(tmp_path) -> None:
+    crf = tmp_path / "blank.pdf"
+    pdf = canvas.Canvas(str(crf))
+    pdf.drawString(50, 750, "Age")
+    pdf.drawString(50, 700, "Age")
+    pdf.save()
+    plan = SDTMPlan(
+        study_name="SYN-ACRF",
+        domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic")],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", source_dataset="RAW_DM", source_field="AGE", crf_source_label="Age"), SDTMVariable(name="SEX", label="Sex", source_dataset="RAW_DM", source_field="SEX", crf_source_label="Sex")])],
+        domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Read", logic="Direct", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
+        rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", description="Direct", logic="Direct", r_expression='.data[["AGE"]]', sas_expression="AGE"), SDTMRuleAugmentation(rule_id="DM-SEX", target_domain="DM", target_variable="SEX", description="Direct", logic="Direct", r_expression='.data[["SEX"]]', sas_expression="SEX")],
+    )
+    paths = render_sdtm(plan, crf, tmp_path, ["r"])
+    assert {"define.xml", "define.xsl", "define.html", "define-diagnostics.json", "annotated-crf.pdf", "acrf-annotations.json"} <= {path.name for path in paths}
+    coverage = json.loads((tmp_path / "acrf-annotations.json").read_text(encoding="utf-8"))
+    assert coverage["summary"] == {"matched": 0, "ambiguous": 1, "unmatched": 1}
+    diagnostics = json.loads((tmp_path / "define-diagnostics.json").read_text(encoding="utf-8"))
+    assert diagnostics["well_formed"] is True
+    assert diagnostics["internal_references_valid"] is True
+    assert diagnostics["xsd_validation"] == "not_run"
+    tree = etree.parse(str(tmp_path / "define.xml"))
+    item_ref = tree.xpath("//*[local-name()='ItemRef']")[0]
+    item_ref.set("ItemOID", "IT.MISSING")
+    broken = tmp_path / "define-broken.xml"
+    tree.write(str(broken), encoding="UTF-8", xml_declaration=True)
+    assert diagnose_define(broken)["missing_references"] == ["IT.MISSING"]
+
+
+def test_non_searchable_crf_reports_ocr_limitation(tmp_path) -> None:
+    crf = tmp_path / "scan.pdf"
+    pdf = canvas.Canvas(str(crf))
+    pdf.showPage()
+    pdf.save()
+    plan = SDTMPlan(
+        study_name="SYN-SCAN",
+        domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic")],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", variables=[SDTMVariable(name="AGE", label="Age", source_dataset="RAW_DM", source_field="AGE")])],
+        domain_rule_augmentations=[SDTMDomainRuleAugmentation(rule_id="DM-SOURCE", target_domain="DM", source_datasets=["RAW_DM"], description="Read", logic="Direct", r_input_expression="raw_dm", sas_input_statement="set raw.raw_dm;")],
+        rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", description="Direct", logic="Direct", r_expression='.data[["AGE"]]', sas_expression="AGE")],
+    )
+    paths = render_sdtm(plan, crf, tmp_path, ["r"])
+    assert "annotated-crf.pdf" not in {path.name for path in paths}
+    coverage = json.loads((tmp_path / "acrf-annotations.json").read_text(encoding="utf-8"))
+    assert coverage["status"] == "ocr_required"
+    assert "not supported" in coverage["message"]

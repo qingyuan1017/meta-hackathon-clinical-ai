@@ -43,6 +43,11 @@ class SDTMVariable(BaseModel):
     controlled_terms: list[str] = Field(default_factory=list)
     value_level_metadata: list[SDTMValueLevelMetadata] = Field(default_factory=list)
     crf_source_label: str | None = None
+    length: int | None = Field(default=None, ge=1, le=32767)
+    format: str | None = None
+    role: str | None = None
+    core: Literal["Req", "Exp", "Perm"] | None = None
+    comment: str | None = None
 
 
 class SDTMDataset(BaseModel):
@@ -50,6 +55,8 @@ class SDTMDataset(BaseModel):
     description: str
     structure: str = "One record per subject per event"
     key_variables: list[str] = Field(default_factory=lambda: ["STUDYID", "USUBJID"])
+    dataset_class: str = "Special Purpose"
+    purpose: str = "Tabulation"
     variables: list[SDTMVariable] = Field(min_length=1)
 
 
