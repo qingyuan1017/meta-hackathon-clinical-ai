@@ -7,7 +7,6 @@ import { api } from "@/lib/api";
 import type { Artifact, CDISCDataset, SDTMWorkbenchState, ValidationFinding } from "@/lib/types";
 import { Button } from "./ui/button";
 import {
-  RecordPlanEditor,
   VariableMappingMatrix,
   newSourceVariable,
   normalizeRecordPlan,
@@ -114,9 +113,6 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
 
   const activeDataset = plan.datasets.find((dataset) => dataset.domain === selectedDomain) ?? plan.datasets[0];
   const activeRuleDomain = activeDataset?.domain ?? "";
-  const activeRules = plan.rule_augmentations
-    .map((rule, index) => ({ rule, index }))
-    .filter(({ rule }) => rule.target_domain === activeRuleDomain);
   const acrfArtifact = artifacts.find((artifact) => artifact.name === "annotated-crf.pdf");
   const acrfDiagnostics = artifacts.find((artifact) => artifact.name === "acrf-annotations.json");
   const defineArtifact = artifacts.find((artifact) => artifact.name === "define.xml");
@@ -319,10 +315,8 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
         <div className="space-y-5">
           <DomainTabs datasets={plan.datasets} selected={activeRuleDomain} onSelect={setSelectedDomain} />
           <section className="space-y-3">
-            <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">{activeRuleDomain || "Domain"} rule and code review</p><p className="mt-1 text-xs text-zinc-600">Review the record-construction pipeline and variable expressions together. The typed pipeline compiles deterministically into this domain&apos;s R and SAS programs.</p></div>{jobId && activeRuleDomain && <Button type="button" variant="outline" size="sm" disabled={rerunMutation.isPending} onClick={() => rerunMutation.mutate({ stage: "rule_augmentation", domain: activeRuleDomain })}><RotateCcw size={14} />Rerun {activeRuleDomain} rules/code</Button>}</div>
-            {activeDataset && <RecordPlanEditor value={activeDataset.record_plan} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} onChange={(record_plan) => update((next) => { const dataset = next.datasets.find((item) => item.domain === activeDataset.domain); if (dataset) dataset.record_plan = record_plan; })} />}
-            {activeRules.map(({ rule, index }) => <VariableRuleEditor key={`${rule.target_domain}-${rule.target_variable}`} rule={rule} onUpdate={(key, nextValue) => update((next) => { (next.rule_augmentations[index] as unknown as Record<string, unknown>)[key] = nextValue; })} />)}
-            {activeRuleDomain && activeRules.length === 0 && <EmptyReview text={`No rule augmentations are available for ${activeRuleDomain}.`} />}
+            <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">{activeRuleDomain || "Domain"} program review</p><p className="mt-1 text-xs text-zinc-600">Review the exact generated R and SAS artifacts with syntax highlighting. Programs are read-only here; rerun the domain or revise its mappings to rebuild them.</p></div>{jobId && activeRuleDomain && <Button type="button" variant="outline" size="sm" disabled={rerunMutation.isPending} onClick={() => rerunMutation.mutate({ stage: "rule_augmentation", domain: activeRuleDomain })}><RotateCcw size={14} />Rerun {activeRuleDomain} rules/code</Button>}</div>
+            {activeRuleDomain ? <DomainProgramReview domain={activeRuleDomain} artifacts={artifacts} /> : <EmptyReview text="No SDTM domain is available for program review." />}
           </section>
         </div>
       )}
@@ -499,8 +493,120 @@ function DomainTabs({ datasets, selected, onSelect }: { datasets: SDTMDataset[];
   return <div className="flex flex-wrap gap-2">{datasets.map((dataset) => <button type="button" key={dataset.domain} onClick={() => onSelect(dataset.domain)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${selected === dataset.domain ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 bg-white/[0.02] text-zinc-500"}`}>{dataset.domain}</button>)}</div>;
 }
 
-function VariableRuleEditor({ rule, onUpdate }: { rule: VariableRule; onUpdate: (key: keyof VariableRule, value: unknown) => void }) {
-  return <article className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]"><header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3"><div><span className="font-mono text-xs font-black text-violet-300">{rule.target_domain}.{rule.target_variable}</span><span className="ml-2 text-xs text-zinc-500">{rule.rule_id}</span></div><span className="rounded-full bg-violet-500/10 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-violet-300">Variable RHS</span></header><div className="grid gap-4 p-4 lg:grid-cols-2"><label className="lg:col-span-2"><EditorLabel>Language-neutral mapping logic</EditorLabel><textarea value={rule.logic} onChange={(event) => onUpdate("logic", event.target.value)} className={`${codeClass} min-h-20`} /></label><label><EditorLabel>R right-hand-side expression</EditorLabel><textarea value={rule.r_expression} onChange={(event) => onUpdate("r_expression", event.target.value)} className={codeClass} spellCheck={false} /></label><label><EditorLabel>SAS right-hand-side expression</EditorLabel><textarea value={rule.sas_expression} onChange={(event) => onUpdate("sas_expression", event.target.value)} className={codeClass} spellCheck={false} /></label><label className="lg:col-span-2"><EditorLabel>Review notes</EditorLabel><textarea value={rule.review_notes.join("\n")} onChange={(event) => onUpdate("review_notes", splitLines(event.target.value))} className={`${codeClass} min-h-20`} /></label></div></article>;
+type ProgramLanguage = "r" | "sas";
+type SyntaxTokenKind = "plain" | "comment" | "string" | "keyword" | "number" | "function" | "operator" | "macro";
+type SyntaxToken = { kind: SyntaxTokenKind; text: string };
+
+const R_KEYWORDS = new Set(["break", "else", "FALSE", "for", "function", "if", "in", "Inf", "NA", "NaN", "next", "NULL", "repeat", "TRUE", "while"]);
+const SAS_KEYWORDS = new Set(["and", "array", "as", "by", "case", "create", "data", "delete", "do", "drop", "else", "end", "first", "format", "from", "full", "group", "having", "if", "in", "infile", "inner", "input", "join", "keep", "last", "left", "length", "merge", "missing", "not", "on", "or", "order", "otherwise", "output", "proc", "quit", "rename", "retain", "right", "run", "select", "set", "table", "then", "when", "where"]);
+
+function DomainProgramReview({ domain, artifacts }: { domain: string; artifacts: Artifact[] }) {
+  const slug = domain.trim().replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+  const rArtifact = artifacts.find((artifact) => artifact.name.toLowerCase() === `build-${slug}.r`);
+  const sasArtifact = artifacts.find((artifact) => artifact.name.toLowerCase() === `build-${slug}.sas`);
+  const [language, setLanguage] = useState<ProgramLanguage>(rArtifact ? "r" : "sas");
+  useEffect(() => setLanguage(rArtifact ? "r" : "sas"), [domain, rArtifact?.id, sasArtifact?.id]);
+  const rQuery = useQuery({ queryKey: ["sdtm-program", rArtifact?.id, rArtifact?.sha256], queryFn: () => api.artifactText(rArtifact!.download_url), enabled: Boolean(rArtifact) });
+  const sasQuery = useQuery({ queryKey: ["sdtm-program", sasArtifact?.id, sasArtifact?.sha256], queryFn: () => api.artifactText(sasArtifact!.download_url), enabled: Boolean(sasArtifact) });
+  const artifact = language === "r" ? rArtifact : sasArtifact;
+  const query = language === "r" ? rQuery : sasQuery;
+
+  if (!rArtifact && !sasArtifact) {
+    return <EmptyReview text={`Generated R/SAS program artifacts are unavailable for ${domain}. Save or rerun the reviewed mapping to build them.`} />;
+  }
+  return <article className="overflow-hidden rounded-xl border border-white/10 bg-[#111113]">
+    <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4">
+      <div><p className="font-mono text-sm font-black text-violet-200">{artifact?.name}</p><p className="mt-1 text-[11px] text-zinc-600">Exact generated artifact · read only{artifact ? ` · SHA-256 ${artifact.sha256.slice(0, 12)}…` : ""}</p></div>
+      <div className="flex flex-wrap items-center gap-2">
+        <div role="tablist" aria-label={`${domain} program languages`} className="flex rounded-lg border border-white/10 bg-black/20 p-1">
+          {(["r", "sas"] as const).map((item) => {
+            const available = item === "r" ? Boolean(rArtifact) : Boolean(sasArtifact);
+            return <button key={item} type="button" role="tab" aria-selected={language === item} disabled={!available} onClick={() => setLanguage(item)} className={`rounded-md px-3 py-1.5 text-[10px] font-black uppercase tracking-wider ${language === item ? "bg-violet-500/20 text-violet-200" : available ? "text-zinc-500 hover:text-zinc-300" : "cursor-not-allowed text-zinc-800"}`}>{item === "r" ? "R" : "SAS"}</button>;
+          })}
+        </div>
+        {artifact && <Button asChild type="button" variant="outline" size="sm"><a href={api.artifactUrl(artifact.download_url)}><Download size={14} />Download</a></Button>}
+      </div>
+    </header>
+    <div className="p-4">
+      {query.isPending ? <EmptyReview text={`Loading ${domain} ${language.toUpperCase()} program…`} /> : query.isError ? <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">{query.error.message}</div> : <SyntaxHighlightedProgram code={query.data ?? ""} language={language} label={`${domain} ${language.toUpperCase()} program`} />}
+    </div>
+  </article>;
+}
+
+function SyntaxHighlightedProgram({ code, language, label }: { code: string; language: ProgramLanguage; label: string }) {
+  let inBlockComment = false;
+  const lines = code.replace(/\r\n?/g, "\n").split("\n").map((line) => {
+    const result = tokenizeProgramLine(line, language, inBlockComment);
+    inBlockComment = result.inBlockComment;
+    return result.tokens;
+  });
+  return <pre className="max-h-[48rem] overflow-auto rounded-lg border border-white/10 bg-[#08090c] py-3 font-mono text-xs leading-5 text-zinc-300"><code aria-label={label}>{lines.map((tokens, lineIndex) => <span className="block min-w-max px-3" key={lineIndex}><span aria-hidden="true" className="mr-4 inline-block w-9 select-none border-r border-white/[0.07] pr-3 text-right text-zinc-700">{lineIndex + 1}</span>{tokens.length ? tokens.map((token, tokenIndex) => <span data-token={token.kind} className={tokenClass(token.kind)} key={`${lineIndex}-${tokenIndex}`}>{token.text}</span>) : "\u00a0"}</span>)}</code></pre>;
+}
+
+function tokenizeProgramLine(line: string, language: ProgramLanguage, startsInBlockComment: boolean): { tokens: SyntaxToken[]; inBlockComment: boolean } {
+  const tokens: SyntaxToken[] = [];
+  let index = 0;
+  let inBlockComment = startsInBlockComment;
+  const push = (kind: SyntaxTokenKind, text: string) => { if (text) tokens.push({ kind, text }); };
+  if (language === "sas" && !inBlockComment && /^\s*\*[^/].*;\s*$/.test(line)) return { tokens: [{ kind: "comment", text: line }], inBlockComment: false };
+  while (index < line.length) {
+    if (inBlockComment) {
+      const end = line.indexOf("*/", index);
+      if (end < 0) { push("comment", line.slice(index)); return { tokens, inBlockComment: true }; }
+      push("comment", line.slice(index, end + 2));
+      index = end + 2;
+      inBlockComment = false;
+      continue;
+    }
+    if (language === "r" && line[index] === "#") { push("comment", line.slice(index)); break; }
+    if (language === "sas" && line.startsWith("/*", index)) {
+      const end = line.indexOf("*/", index + 2);
+      if (end < 0) { push("comment", line.slice(index)); inBlockComment = true; break; }
+      push("comment", line.slice(index, end + 2));
+      index = end + 2;
+      continue;
+    }
+    const character = line[index];
+    if (character === "\"" || character === "'") {
+      let end = index + 1;
+      while (end < line.length) {
+        if (line[end] === character) {
+          if (language === "sas" && line[end + 1] === character) { end += 2; continue; }
+          end += 1;
+          break;
+        }
+        if (line[end] === "\\" && language === "r") end += 1;
+        end += 1;
+      }
+      push("string", line.slice(index, end));
+      index = end;
+      continue;
+    }
+    const remainder = line.slice(index);
+    const whitespace = remainder.match(/^\s+/)?.[0];
+    if (whitespace) { push("plain", whitespace); index += whitespace.length; continue; }
+    const macro = language === "sas" ? remainder.match(/^[%&][A-Za-z_][A-Za-z0-9_]*/) : null;
+    if (macro) { push("macro", macro[0]); index += macro[0].length; continue; }
+    const number = remainder.match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[Ee][+-]?\d+)?/i)?.[0];
+    if (number) { push("number", number); index += number.length; continue; }
+    const identifier = remainder.match(/^[A-Za-z_.][A-Za-z0-9_.$]*/)?.[0];
+    if (identifier) {
+      const keyword = language === "r" ? R_KEYWORDS.has(identifier) : SAS_KEYWORDS.has(identifier.toLowerCase());
+      const isFunction = language === "r" && /^\s*\(/.test(line.slice(index + identifier.length));
+      push(keyword ? "keyword" : isFunction ? "function" : "plain", identifier);
+      index += identifier.length;
+      continue;
+    }
+    const operator = remainder.match(/^(?:%[^%\s]+%|<-|->|:::{0,1}|==|!=|<=|>=|&&|\|\||\+|-|\*|\/|\^|=|<|>|!|&|\||~|:|\$)/)?.[0];
+    if (operator) { push("operator", operator); index += operator.length; continue; }
+    push("plain", character);
+    index += 1;
+  }
+  return { tokens, inBlockComment };
+}
+
+function tokenClass(kind: SyntaxTokenKind): string {
+  return { plain: "text-zinc-300", comment: "italic text-zinc-600", string: "text-amber-300", keyword: "font-semibold text-fuchsia-300", number: "text-sky-300", function: "text-cyan-300", operator: "text-violet-300", macro: "font-semibold text-emerald-300" }[kind];
 }
 
 function EditorLabel({ children }: { children: ReactNode }) { return <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">{children}</span>; }

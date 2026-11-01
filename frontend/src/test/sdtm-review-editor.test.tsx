@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SDTMReviewEditor } from "@/components/sdtm-review-editor";
 import { api } from "@/lib/api";
+import type { Artifact } from "@/lib/types";
 
 const plan = {
   study_name: "SYN-101",
@@ -16,13 +17,20 @@ const plan = {
 };
 
 describe("SDTMReviewEditor", () => {
-  const renderEditor = (value = plan, jobId?: string) => {
+  const renderEditor = (value = plan, jobId?: string, artifacts: Artifact[] = []) => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    return render(<QueryClientProvider client={client}><SDTMReviewEditor jobId={jobId} value={value} onChange={vi.fn()} onSave={vi.fn()} saving={false} /></QueryClientProvider>);
+    return render(<QueryClientProvider client={client}><SDTMReviewEditor jobId={jobId} value={value} artifacts={artifacts} onChange={vi.fn()} onSave={vi.fn()} saving={false} /></QueryClientProvider>);
   };
 
-  it("presents ordered mapping stages plus separate aCRF and Define-XML review tabs", () => {
-    renderEditor();
+  afterEach(() => vi.restoreAllMocks());
+
+  it("presents actual syntax-highlighted domain programs plus separate aCRF and Define-XML review tabs", async () => {
+    vi.spyOn(api, "artifactText").mockImplementation(async (path) => path.includes("sas") ? "data dm;\n  set raw_dm;\nrun;" : "# Build DM\ndm <- raw_dm");
+    const artifacts: Artifact[] = [
+      { id: "dm-r", name: "build-dm.R", media_type: "text/x-r-source", size_bytes: 25, sha256: "a".repeat(64), download_url: "/artifact/dm-r" },
+      { id: "dm-sas", name: "build-dm.sas", media_type: "text/x-sas", size_bytes: 30, sha256: "b".repeat(64), download_url: "/artifact/dm-sas" },
+    ];
+    renderEditor(plan, undefined, artifacts);
 
     expect(screen.getByText("Domain mapping")).toBeInTheDocument();
     expect(screen.getAllByText("RAW_DM")).toHaveLength(2);
@@ -35,8 +43,15 @@ describe("SDTMReviewEditor", () => {
     expect(screen.getByRole("dialog", { name: "Edit AGE" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close variable mapping dialog" }));
     fireEvent.click(screen.getByText("Rule & code"));
-    expect(screen.getByText("Record construction pipeline")).toBeInTheDocument();
-    expect(screen.getByText("DM.AGE")).toBeInTheDocument();
+    const rProgram = await screen.findByLabelText("DM R program");
+    expect(rProgram).toHaveTextContent("# Build DM");
+    expect(rProgram.querySelector('[data-token="comment"]')).toHaveTextContent("# Build DM");
+    fireEvent.click(screen.getByRole("tab", { name: "SAS" }));
+    const sasProgram = await screen.findByLabelText("DM SAS program");
+    expect(sasProgram).toHaveTextContent("data dm;");
+    expect(sasProgram.querySelector('[data-token="keyword"]')).toHaveTextContent("data");
+    expect(screen.queryByText("Record construction pipeline")).not.toBeInTheDocument();
+    expect(screen.queryByText("DM.AGE")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("aCRF review"));
     expect(screen.getByText("No aCRF was generated because this job did not include a blank CRF PDF. Start a new generation with a blank CRF to enable annotation review.")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Define-XML"));
@@ -52,7 +67,7 @@ describe("SDTMReviewEditor", () => {
     await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "variable_mapping", "DM"));
 
     fireEvent.click(screen.getByText("Rule & code"));
-    expect(screen.getByText("DM.AGE")).toBeInTheDocument();
+    expect(screen.getByText("Generated R/SAS program artifacts are unavailable for DM. Save or rerun the reviewed mapping to build them.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Rerun DM rules/code" }));
     await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "rule_augmentation", "DM"));
   });
