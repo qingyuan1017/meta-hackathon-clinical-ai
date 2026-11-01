@@ -19,7 +19,9 @@ from ..sdtm_r import normalize_r_mapping_expression
 from ..sdtm_sas import normalize_sas_filter_expression
 from ..schemas import (
     EDCSourceSpecification,
+    SDTMDataset,
     SDTMDomainMappingPlan,
+    SDTMDomainRecordPlan,
     SDTMDomainMappingReview,
     SDTMPlan,
     SDTMRuleAugmentationPlan,
@@ -231,8 +233,8 @@ class SDTMUseCase(ClinicalUseCase):
                     variable_mapping=variable_mapping,
                 ),
                 warnings=[
-                    "The previously approved variable mapping no longer satisfies the executable record-plan "
-                    "contract. It was preserved and reopened for human correction; rule augmentation was not run.",
+                    "The previously approved variable/VLM mapping no longer satisfies the current mapping "
+                    "contract. It was preserved and reopened for human correction; rule/code generation was not run.",
                     str(exc),
                 ],
                 review_stage="variable_mapping",
@@ -319,14 +321,12 @@ class SDTMUseCase(ClinicalUseCase):
                 objective=(
                     f"Stage 2 of 3, complete-data batch for target {target_domain}: preserve the supplied "
                     "approved domain relationships and return exactly one target dataset for this domain. "
-                    "Determine its complete typed record-construction plan plus variable and value-level mapping. "
-                    "Represent every read, stack, join, transpose, filter, deduplication, or aggregation as an "
-                    "ordered record_plan step. Give every variable and VLM cell all of its approved raw source "
+                    "Determine only its variable and value-level mapping plus minor per-variable derivations. "
+                    "Give every variable and VLM cell all of its approved raw source "
                     "references with explicit roles. Assigned constants have no sources; derived variables retain "
                     "every contributing source. When no blank CRF is supplied, leave crf_source_label null. Do not "
-                    "generate target-variable R or SAS code. Every filter condition must be one executable, safe R "
-                    "boolean expression and every sas_condition must be one executable SAS boolean expression; "
-                    "never put prose or pseudocode in either field."
+                    "generate record-construction steps or target-variable R/SAS code; record preparation belongs "
+                    "to the rule/code stage."
                 ),
                 source=self._variable_mapping_source(
                     target_domain=target_domain,
@@ -897,7 +897,7 @@ class SDTMUseCase(ClinicalUseCase):
             study_name=variable_mapping.study_name,
             standard=variable_mapping.standard,
             define_standard=variable_mapping.define_standard,
-            datasets=variable_mapping.datasets,
+            datasets=self._apply_record_plans(variable_mapping.datasets, rule_plan.record_plans),
             domain_mappings=domain_mapping.domain_mappings,
             unmapped_datasets=domain_mapping.unmapped_datasets,
             rule_augmentations=rule_plan.rule_augmentations,
@@ -1009,11 +1009,31 @@ class SDTMUseCase(ClinicalUseCase):
                 if dataset_domain == domain
                 else existing_rules_by_domain.get(dataset_domain, [])
             )
+        baseline_datasets = {dataset.domain.upper(): dataset for dataset in baseline.datasets}
+        replacement_record_plans = {
+            item.target_domain.upper(): item for item in rule_plan.record_plans
+        }
+        merged_record_plans: list[SDTMDomainRecordPlan] = []
+        for dataset in variable_mapping.datasets:
+            dataset_domain = dataset.domain.upper()
+            if dataset_domain == domain:
+                replacement = replacement_record_plans.get(dataset_domain)
+                if replacement is None:
+                    raise ValueError(f"Rule/code rerun did not return a record plan for {dataset_domain}.")
+                merged_record_plans.append(replacement)
+                continue
+            baseline_dataset = baseline_datasets[dataset_domain]
+            if baseline_dataset.record_plan is None:
+                raise ValueError(f"Baseline domain {dataset_domain} does not contain a record plan.")
+            merged_record_plans.append(SDTMDomainRecordPlan(
+                target_domain=dataset_domain,
+                record_plan=baseline_dataset.record_plan,
+            ))
         proposed = SDTMPlan(
             study_name=baseline.study_name,
             standard=variable_mapping.standard,
             define_standard=variable_mapping.define_standard,
-            datasets=variable_mapping.datasets,
+            datasets=self._apply_record_plans(variable_mapping.datasets, merged_record_plans),
             domain_mappings=baseline.domain_mappings,
             unmapped_datasets=baseline.unmapped_datasets,
             rule_augmentations=merged_rules,
@@ -1037,11 +1057,14 @@ class SDTMUseCase(ClinicalUseCase):
         target_domains: list[str] | None = None,
     ) -> tuple[SDTMRuleAugmentationPlan, list[str]]:
         variable_rules = []
+        record_plans: list[SDTMDomainRecordPlan] = []
         assumptions: list[str] = []
         unresolved: list[str] = []
         warnings: list[str] = []
         agent_options = self._agent_options(context.options)
         stage_count = len(self.descriptor.stages)
+        source_spec = self._approved_source_spec(context.options)
+        sources_by_name = {dataset.name.upper(): dataset for dataset in source_spec.datasets}
 
         datasets_by_domain = {dataset.domain.upper(): dataset for dataset in variable_mapping.datasets}
         requested_domains = (
@@ -1064,6 +1087,10 @@ class SDTMUseCase(ClinicalUseCase):
                 for item in domain_mapping.domain_mappings
                 if item.target_domain.upper() == target_domain
             ]
+            batch_sources = [
+                sources_by_name[item.source_dataset.upper()]
+                for item in batch_mappings
+            ]
             outcome = await ClinicalAgentRunner(
                 definition=_STAGE_AGENTS["rule-augmentation"],
                 result_model=SDTMRuleAugmentationPlan,
@@ -1074,18 +1101,23 @@ class SDTMUseCase(ClinicalUseCase):
                 result_validator=lambda value: self._validate_rule_batch(
                     target_domain,
                     dataset,
+                    batch_mappings,
                     cast(SDTMRuleAugmentationPlan, value),
                 ),
             ).run(
                 objective=(
-                    f"Stage 3 of 3, target {target_domain}: add exactly one implementation rule for every "
-                    "supplied target variable. The approved typed record plan is compiled deterministically, so "
-                    "do not restate source dependencies or generate source preparation code."
+                    f"Stage 3 of 3, target {target_domain}: create exactly one ordered typed record-construction "
+                    "pipeline for the domain and one implementation rule for every supplied target variable. "
+                    "Represent read, stack, join, transpose, filter, deduplicate, and aggregate preparation as "
+                    "record_plan steps; the backend compiles those reviewed steps deterministically into R and SAS. "
+                    "Every filter condition must be an executable safe R expression and every sas_condition an "
+                    "executable SAS expression. Variable rules contain only target right-hand-side expressions."
                 ),
                 source=self._rule_mapping_source(
                     target_domain=target_domain,
                     domain_mappings=batch_mappings,
                     dataset=dataset,
+                    source_datasets=batch_sources,
                 ),
                 options=agent_options,
                 stage=self.descriptor.stages[2],
@@ -1108,7 +1140,13 @@ class SDTMUseCase(ClinicalUseCase):
         for target_domain, outcome in zip(requested_domains, outcomes, strict=True):
             dataset = datasets_by_domain[target_domain]
             batch_plan = cast(SDTMRuleAugmentationPlan, outcome.value)
-            self._validate_rule_batch(target_domain, dataset, batch_plan)
+            batch_mappings = [
+                item
+                for item in domain_mapping.domain_mappings
+                if item.target_domain.upper() == target_domain
+            ]
+            self._validate_rule_batch(target_domain, dataset, batch_mappings, batch_plan)
+            record_plans.extend(batch_plan.record_plans)
             variable_rules.extend(batch_plan.rule_augmentations)
             assumptions.extend(batch_plan.assumptions)
             unresolved.extend(batch_plan.unresolved_mappings)
@@ -1118,6 +1156,7 @@ class SDTMUseCase(ClinicalUseCase):
             SDTMRuleAugmentationPlan(
                 study_name=variable_mapping.study_name,
                 standard=variable_mapping.standard,
+                record_plans=record_plans,
                 rule_augmentations=variable_rules,
                 assumptions=list(dict.fromkeys(assumptions)),
                 unresolved_mappings=list(dict.fromkeys(unresolved)),
@@ -1129,9 +1168,47 @@ class SDTMUseCase(ClinicalUseCase):
     def _validate_rule_batch(
         target_domain: str,
         dataset: Any,
+        domain_mappings: list[Any],
         batch_plan: SDTMRuleAugmentationPlan,
     ) -> None:
         problems = verify_result("sdtm-rule-augmentation", batch_plan)
+        domain_record_plans = [
+            item for item in batch_plan.record_plans
+            if item.target_domain.upper() == target_domain
+        ]
+        foreign_record_domains = sorted({
+            item.target_domain.upper()
+            for item in batch_plan.record_plans
+            if item.target_domain.upper() != target_domain
+        })
+        if len(domain_record_plans) != 1:
+            problems.append(
+                f"Rule/code batch {target_domain} must return exactly one record plan for that domain."
+            )
+        if foreign_record_domains:
+            problems.append(
+                f"Rule/code batch {target_domain} returned record plans for other targets: "
+                f"{', '.join(foreign_record_domains)}."
+            )
+        if len(domain_record_plans) == 1:
+            allowed_sources = {item.source_dataset.upper() for item in domain_mappings}
+            SDTMUseCase._validate_record_plan(
+                target_domain,
+                domain_record_plans[0].record_plan,
+                allowed_sources,
+                problems,
+            )
+            operations = {step.operation for step in domain_record_plans[0].record_plan.steps}
+            required_operations = {
+                item.relationship for item in domain_mappings
+                if item.relationship in {"stack", "join"}
+            }
+            missing_operations = sorted(required_operations - operations)
+            if missing_operations:
+                problems.append(
+                    f"{target_domain} domain relationships require record-plan operation(s): "
+                    f"{', '.join(missing_operations)}."
+                )
         expected_variables = {item.name.upper() for item in dataset.variables}
         actual_variables = {
             item.target_variable.upper()
@@ -1291,10 +1368,8 @@ class SDTMUseCase(ClinicalUseCase):
     ) -> None:
         problems = verify_result("sdtm-variable-mapping", mapping)
         mapped_sources: dict[str, set[str]] = {}
-        relationships: dict[str, set[str]] = {}
         for item in domain_mapping.domain_mappings:
             mapped_sources.setdefault(item.target_domain.upper(), set()).add(item.source_dataset.upper())
-            relationships.setdefault(item.target_domain.upper(), set()).add(item.relationship)
         dataset_domains = {dataset.domain.upper() for dataset in mapping.datasets}
         target_domains = set(mapped_sources)
         missing = sorted(target_domains - dataset_domains)
@@ -1309,15 +1384,6 @@ class SDTMUseCase(ClinicalUseCase):
         }
         for dataset in mapping.datasets:
             allowed_sources = mapped_sources.get(dataset.domain.upper(), set())
-            SDTMUseCase._validate_record_plan(dataset.domain, dataset.record_plan, allowed_sources, problems)
-            operations = {step.operation for step in dataset.record_plan.steps}
-            required_operations = relationships.get(dataset.domain.upper(), set()) & {"stack", "join"}
-            missing_operations = sorted(required_operations - operations)
-            if missing_operations:
-                problems.append(
-                    f"{dataset.domain} domain relationships require record-plan operation(s): "
-                    f"{', '.join(missing_operations)}."
-                )
             for variable in dataset.variables:
                 SDTMUseCase._validate_source_references(
                     f"{dataset.domain}.{variable.name}", variable.sources, allowed_sources, known_sources, problems
@@ -1548,13 +1614,42 @@ class SDTMUseCase(ClinicalUseCase):
         target_domain: str,
         domain_mappings: list[Any],
         dataset: Any,
+        source_datasets: list[Any],
     ) -> str:
         return (
             f"APPROVED DOMAIN MAPPING BATCH FOR {target_domain} — PRESERVE\n"
             f"{cls._compact_json([item.model_dump(mode='json') for item in domain_mappings])}\n\n"
             f"APPROVED VARIABLE MAPPING BATCH FOR {target_domain} — PRESERVE\n"
-            f"{cls._compact_json(dataset.model_dump(mode='json'))}"
+            f"{cls._compact_json(dataset.model_dump(mode='json', exclude={'record_plan'}))}\n\n"
+            f"COMPLETE APPROVED SOURCE METADATA FOR {target_domain}\n"
+            f"{cls._compact_json([item.model_dump(mode='json') for item in source_datasets])}"
         )
+
+    @staticmethod
+    def _apply_record_plans(
+        datasets: list[Any],
+        record_plans: list[SDTMDomainRecordPlan],
+    ) -> list[SDTMDataset]:
+        plans_by_domain: dict[str, Any] = {}
+        for item in record_plans:
+            domain = item.target_domain.upper()
+            if domain in plans_by_domain:
+                raise ValueError(f"Rule/code output contains duplicate record plans for {domain}.")
+            plans_by_domain[domain] = item.record_plan
+        expected_domains = {dataset.domain.upper() for dataset in datasets}
+        missing = sorted(expected_domains - set(plans_by_domain))
+        extra = sorted(set(plans_by_domain) - expected_domains)
+        if missing:
+            raise ValueError(f"Rule/code output is missing record plans for: {', '.join(missing)}.")
+        if extra:
+            raise ValueError(f"Rule/code output contains unknown record-plan domains: {', '.join(extra)}.")
+        return [
+            SDTMDataset.model_validate({
+                **dataset.model_dump(mode="json", exclude={"record_plan"}),
+                "record_plan": plans_by_domain[dataset.domain.upper()].model_dump(mode="json"),
+            })
+            for dataset in datasets
+        ]
 
     @staticmethod
     def _compact_json(value: Any) -> str:

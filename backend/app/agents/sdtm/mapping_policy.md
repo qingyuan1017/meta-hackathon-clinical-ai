@@ -14,7 +14,7 @@ Before mapping begins, deterministically extracted EDC content is normalized int
 
 1. Domain mapping relates every raw or existing-SDTM source dataset to a target SDTMIG 3.4 domain using explicit direct, stack, join, split, or derived relationships. Stack appends observations as rows; join adds columns by reviewed keys and cardinality. Never represent both as a generic merge.
 2. Variable mapping preserves the approved domain plan, adds a typed ordered record-construction plan for every target, and adds target variables with multi-source lineage, origins, controlled-term context, and source-aware value-level metadata. It adds exact blank-CRF labels for aCRF annotations only when a blank CRF was supplied.
-3. Rule augmentation preserves both mapping stages and adds one implementation rule per target domain-variable pair. The backend compiles the approved record plan and combines it with these reviewed R and SAS expressions to produce deterministic draft programs.
+3. Rule/code augmentation preserves both mapping stages, creates one ordered typed record plan per target domain, and adds one implementation rule per target domain-variable pair. The backend compiles the approved record plan and combines it with these reviewed R and SAS expressions to produce deterministic draft programs.
 
 Later stages may flag an earlier decision as unresolved but must not silently replace it. The lead reconciler must verify cross-stage references and retain a complete audit trail from each target domain and variable back to its source.
 

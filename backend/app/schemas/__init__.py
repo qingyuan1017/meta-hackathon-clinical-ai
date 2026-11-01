@@ -45,6 +45,7 @@ from .reviews import (
 )
 from .sdtm import (
     SDTMDataset,
+    SDTMDomainRecordPlan,
     SDTMDomainMapping,
     SDTMDomainMappingPlan,
     SDTMDomainMappingReview,
@@ -62,6 +63,7 @@ from .sdtm import (
     SDTMUnmappedDataset,
     SDTMValueLevelMetadata,
     SDTMVariable,
+    SDTMVariableDataset,
     SDTMVariableMappingPlan,
     SDTMVariableMappingReview,
 )
@@ -140,6 +142,7 @@ __all__ = [
     "ReviewScopeProposalRequest",
     "ReviewVariableScope",
     "SDTMDataset",
+    "SDTMDomainRecordPlan",
     "SDTMDomainMapping",
     "SDTMDomainMappingPlan",
     "SDTMDomainMappingReview",
@@ -166,6 +169,7 @@ __all__ = [
     "SDTMUnmappedDataset",
     "SDTMValueLevelMetadata",
     "SDTMVariable",
+    "SDTMVariableDataset",
     "SDTMVariableMappingPlan",
     "SDTMVariableMappingReview",
     "SDTMVariableMappingUpdate",

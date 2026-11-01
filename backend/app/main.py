@@ -1011,9 +1011,9 @@ async def rerun_completed_sdtm_domain(
 
     review_stage = "variable_mapping_domain" if update.stage == "variable_mapping" else "rule_augmentation_domain"
     message = (
-        f"Regenerate {update.domain} variable and value-level mappings and refresh dependent {update.domain} rules."
+        f"Regenerate {update.domain} variable and value-level mappings and refresh dependent {update.domain} rules/code."
         if update.stage == "variable_mapping"
-        else f"Regenerate rule augmentation for {update.domain}."
+        else f"Regenerate the record pipeline and rule/code augmentation for {update.domain}."
     )
     request = new_patch_request(
         stage=review_stage,

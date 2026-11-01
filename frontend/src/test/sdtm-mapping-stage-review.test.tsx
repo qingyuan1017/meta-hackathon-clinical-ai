@@ -21,7 +21,7 @@ const variable = {
   study_name: "SYN-101",
   standard: "SDTMIG 3.4",
   define_standard: "Define-XML 2.1",
-  datasets: [{ domain: "DM", description: "Demographics", structure: "One record per subject", key_variables: ["USUBJID"], record_plan: { steps: [{ step_id: "read_dm", operation: "read", description: "Read demographics", output: "dm_source", inputs: [], source_dataset: "RAW_DM", column_alignment: [], left: null, right: null, join_type: null, join_keys: [], cardinality: null, id_variables: [], value_variables: [], name_variable: null, value_variable: null, transpose_values: [], condition: null, sas_condition: null, keys: [], order_by: [], keep: "first", group_by: [], aggregations: [], review_notes: [] }], output_step: "read_dm" }, variables: [{ name: "AGE", label: "Age", data_type: "Num", mapping_type: "direct", sources: [{ dataset: "RAW_DM", variable: "AGE", role: "value" }], origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] }],
+  datasets: [{ domain: "DM", description: "Demographics", structure: "One record per subject", key_variables: ["USUBJID"], variables: [{ name: "AGE", label: "Age", data_type: "Num", mapping_type: "direct", sources: [{ dataset: "RAW_DM", variable: "AGE", role: "value" }], origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] }],
   assumptions: [],
   unresolved_mappings: [],
 };
@@ -43,7 +43,7 @@ describe("SDTM mapping review gates", () => {
     render(<SDTMVariableMappingReview value={{ source_spec: source, domain_mapping: domain, variable_mapping: variable }} onChange={vi.fn()} onApprove={approve} saving={false} />);
 
     expect(screen.getByText("Variable and value-level mapping review required")).toBeInTheDocument();
-    expect(screen.getByText("Record construction pipeline")).toBeInTheDocument();
+    expect(screen.queryByText("Record construction pipeline")).not.toBeInTheDocument();
     expect(screen.getByText("Variable & VLM mapping matrix")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit AGE mapping" }));
     expect(screen.getByText("Value-level metadata")).toBeInTheDocument();
@@ -79,7 +79,7 @@ describe("SDTM mapping review gates", () => {
       unresolved_mappings: ["DM decision", "AE decision"],
       datasets: [
         { ...variable.datasets[0], review_assumptions: ["DM assumption"], review_unresolved_mappings: ["DM decision"] },
-        { domain: "AE", description: "Adverse Events", structure: "One record per event", key_variables: ["USUBJID", "AESEQ"], record_plan: variable.datasets[0].record_plan, review_assumptions: ["AE assumption"], review_unresolved_mappings: ["AE decision"], variables: [{ name: "AETERM", label: "Reported Term", data_type: "Char", mapping_type: "direct", sources: [{ dataset: "RAW_DM", variable: "AGE", role: "value" }], origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] },
+        { domain: "AE", description: "Adverse Events", structure: "One record per event", key_variables: ["USUBJID", "AESEQ"], review_assumptions: ["AE assumption"], review_unresolved_mappings: ["AE decision"], variables: [{ name: "AETERM", label: "Reported Term", data_type: "Char", mapping_type: "direct", sources: [{ dataset: "RAW_DM", variable: "AGE", role: "value" }], origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] },
       ],
     };
     render(<SDTMVariableMappingReview value={{ source_spec: source, domain_mapping: domain, variable_mapping: owned }} onChange={vi.fn()} onApprove={vi.fn()} saving={false} />);
@@ -212,7 +212,7 @@ describe("SDTM mapping review gates", () => {
     const sourceWithAe = { ...source, datasets: [...source.datasets, { name: "RAW_AE", label: "Adverse events", source_type: "raw" }] };
     const domainWithAe = { ...domain, domain_mappings: [...domain.domain_mappings, { source_dataset: "RAW_AE", source_type: "raw", target_domain: "AE", relationship: "direct", rationale: "AE source" }] };
     const variableWithAe = structuredClone(variable);
-    variableWithAe.datasets.push({ domain: "AE", description: "Adverse Events", structure: "One record per event", key_variables: ["USUBJID", "AESEQ"], record_plan: { ...variable.datasets[0].record_plan, steps: variable.datasets[0].record_plan.steps.map((step) => ({ ...step, step_id: "read_ae", output: "ae_source", source_dataset: "RAW_AE" })), output_step: "read_ae" }, variables: [{ name: "AETERM", label: "Reported Term", data_type: "Char", mapping_type: "direct", sources: [{ dataset: "RAW_AE", variable: "AETERM", role: "value" }], origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] });
+    variableWithAe.datasets.push({ domain: "AE", description: "Adverse Events", structure: "One record per event", key_variables: ["USUBJID", "AESEQ"], variables: [{ name: "AETERM", label: "Reported Term", data_type: "Char", mapping_type: "direct", sources: [{ dataset: "RAW_AE", variable: "AETERM", role: "value" }], origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] });
     const result = { source_spec: sourceWithAe, domain_mapping: domainWithAe, variable_mapping: variableWithAe };
     const reviewJob = {
       id: "job-domain-feedback", workflow: "sdtm", status: "review_required", review_stage: "variable_mapping",

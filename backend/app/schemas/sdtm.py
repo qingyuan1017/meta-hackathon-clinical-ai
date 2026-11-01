@@ -122,14 +122,13 @@ class SDTMVariable(BaseModel):
     comment: str | None = None
 
 
-class SDTMDataset(BaseModel):
+class SDTMVariableDataset(BaseModel):
     domain: str
     description: str
     structure: str = "One record per subject per event"
     key_variables: list[str] = Field(default_factory=lambda: ["STUDYID", "USUBJID"])
     dataset_class: str = "Special Purpose"
     purpose: str = "Tabulation"
-    record_plan: SDTMRecordPlan
     variables: list[SDTMVariable] = Field(min_length=1)
     review_assumptions: list[str] = Field(
         default_factory=list,
@@ -141,11 +140,17 @@ class SDTMDataset(BaseModel):
     )
 
 
+class SDTMDataset(SDTMVariableDataset):
+    record_plan: SDTMRecordPlan = Field(
+        description="Deterministic record-construction pipeline supplied by the rule/code stage",
+    )
+
+
 class SDTMVariableMappingPlan(BaseModel):
     study_name: str
     standard: str = "SDTMIG 3.4"
     define_standard: str = "Define-XML 2.1"
-    datasets: list[SDTMDataset] = Field(min_length=1)
+    datasets: list[SDTMVariableDataset] = Field(min_length=1)
     assumptions: list[str] = Field(default_factory=list)
     unresolved_mappings: list[str] = Field(default_factory=list)
 
@@ -172,15 +177,27 @@ class SDTMRuleAugmentation(BaseModel):
     review_notes: list[str] = Field(default_factory=list)
 
 
+class SDTMDomainRecordPlan(BaseModel):
+    target_domain: str
+    record_plan: SDTMRecordPlan
+
+
 class SDTMRuleAugmentationPlan(BaseModel):
     study_name: str
     standard: str = "SDTMIG 3.4"
+    record_plans: list[SDTMDomainRecordPlan] = Field(min_length=1)
     rule_augmentations: list[SDTMRuleAugmentation] = Field(min_length=1)
     assumptions: list[str] = Field(default_factory=list)
     unresolved_mappings: list[str] = Field(default_factory=list)
 
 
-class SDTMPlan(SDTMVariableMappingPlan):
+class SDTMPlan(BaseModel):
+    study_name: str
+    standard: str = "SDTMIG 3.4"
+    define_standard: str = "Define-XML 2.1"
+    datasets: list[SDTMDataset] = Field(min_length=1)
     domain_mappings: list[SDTMDomainMapping] = Field(min_length=1)
     unmapped_datasets: list[SDTMUnmappedDataset] = Field(default_factory=list)
     rule_augmentations: list[SDTMRuleAugmentation] = Field(min_length=1)
+    assumptions: list[str] = Field(default_factory=list)
+    unresolved_mappings: list[str] = Field(default_factory=list)

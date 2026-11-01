@@ -197,7 +197,7 @@ def test_sdtm_variable_mapping_accepts_assigned_values_without_raw_sources() -> 
         SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid)
 
 
-def test_sdtm_variable_mapping_validates_multi_source_lineage_and_ordered_record_plan() -> None:
+def test_sdtm_variable_mapping_keeps_lineage_while_rule_stage_validates_record_plan() -> None:
     source_spec = EDCSourceSpecification.model_validate(
         {
             "study_name": "SYN-MULTI",
@@ -238,14 +238,6 @@ def test_sdtm_variable_mapping_validates_multi_source_lineage_and_ordered_record
             {
                 "domain": "AE",
                 "description": "Adverse events",
-                "record_plan": {
-                    "steps": [
-                        {"step_id": "read_ae", "operation": "read", "description": "Read AE", "output": "ae", "source_dataset": "RAW_AE"},
-                        {"step_id": "read_sae", "operation": "read", "description": "Read SAE", "output": "sae", "source_dataset": "RAW_SAE"},
-                        {"step_id": "stack", "operation": "stack", "description": "Stack event streams", "output": "events", "inputs": ["read_ae", "read_sae"]},
-                    ],
-                    "output_step": "stack",
-                },
                 "variables": [
                     {
                         "name": "AETERM",
@@ -263,22 +255,44 @@ def test_sdtm_variable_mapping_validates_multi_source_lineage_and_ordered_record
     }
     mapping = SDTMVariableMappingPlan.model_validate(payload)
     SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, mapping)
+    assert "record_plan" not in mapping.datasets[0].model_dump(mode="json")
+
+    record_plan = {
+        "steps": [
+            {"step_id": "read_ae", "operation": "read", "description": "Read AE", "output": "ae", "source_dataset": "RAW_AE"},
+            {"step_id": "read_sae", "operation": "read", "description": "Read SAE", "output": "sae", "source_dataset": "RAW_SAE"},
+            {"step_id": "stack", "operation": "stack", "description": "Stack event streams", "output": "events", "inputs": ["read_ae", "read_sae"]},
+        ],
+        "output_step": "stack",
+    }
+    rule_plan = SDTMRuleAugmentationPlan.model_validate({
+        "study_name": "SYN-MULTI",
+        "record_plans": [{"target_domain": "AE", "record_plan": record_plan}],
+        "rule_augmentations": [{
+            "rule_id": "AE-AETERM", "target_domain": "AE", "target_variable": "AETERM",
+            "description": "Map term", "logic": "Coalesce stacked terms",
+            "r_expression": '.data[["AETERM"]]', "sas_expression": "AETERM",
+        }],
+    })
+    SDTMUseCase._validate_rule_batch("AE", mapping.datasets[0], domain_mapping.domain_mappings, rule_plan)
 
     joined_domain_payload = domain_mapping.model_dump(mode="json")
     joined_domain_payload["domain_mappings"][0]["relationship"] = "direct"
     joined_domain_payload["domain_mappings"][1]["relationship"] = "join"
     joined_domain_mapping = SDTMDomainMappingPlan.model_validate(joined_domain_payload)
     with pytest.raises(ValueError, match="require record-plan operation.*join"):
-        SDTMUseCase.validate_variable_mapping(source_spec, joined_domain_mapping, mapping)
+        SDTMUseCase._validate_rule_batch(
+            "AE", mapping.datasets[0], joined_domain_mapping.domain_mappings, rule_plan
+        )
 
-    invalid_payload = mapping.model_dump(mode="json")
-    invalid_payload["datasets"][0]["record_plan"]["steps"][0]["inputs"] = ["stack"]
-    invalid = SDTMVariableMappingPlan.model_validate(invalid_payload)
+    invalid_payload = rule_plan.model_dump(mode="json")
+    invalid_payload["record_plans"][0]["record_plan"]["steps"][0]["inputs"] = ["stack"]
+    invalid = SDTMRuleAugmentationPlan.model_validate(invalid_payload)
     with pytest.raises(ValueError, match="unavailable or later step stack"):
-        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid)
+        SDTMUseCase._validate_rule_batch("AE", mapping.datasets[0], domain_mapping.domain_mappings, invalid)
 
 
-def test_sdtm_variable_mapping_requires_executable_r_filter_conditions() -> None:
+def test_sdtm_rule_stage_requires_executable_filter_conditions() -> None:
     source_spec = EDCSourceSpecification.model_validate(
         {
             "study_name": "SYN-FILTER",
@@ -312,27 +326,6 @@ def test_sdtm_variable_mapping_requires_executable_r_filter_conditions() -> None
             {
                 "domain": "AE",
                 "description": "Adverse events",
-                "record_plan": {
-                    "steps": [
-                        {
-                            "step_id": "read_ae",
-                            "operation": "read",
-                            "description": "Read events",
-                            "output": "ae_source",
-                            "source_dataset": "RAW_AE",
-                        },
-                        {
-                            "step_id": "filter_ae",
-                            "operation": "filter",
-                            "description": "Keep reported events",
-                            "output": "ae_filtered",
-                            "inputs": ["read_ae"],
-                            "condition": "AETERM is not null and trim(AETERM) != ''",
-                            "sas_condition": "not missing(AETERM)",
-                        },
-                    ],
-                    "output_step": "filter_ae",
-                },
                 "variables": [
                     {
                         "name": "AETERM",
@@ -344,24 +337,36 @@ def test_sdtm_variable_mapping_requires_executable_r_filter_conditions() -> None
         ],
     }
 
-    invalid = SDTMVariableMappingPlan.model_validate(payload)
+    mapping = SDTMVariableMappingPlan.model_validate(payload)
+    rule_payload = {
+        "study_name": "SYN-FILTER",
+        "record_plans": [{"target_domain": "AE", "record_plan": {
+            "steps": [
+                {"step_id": "read_ae", "operation": "read", "description": "Read events", "output": "ae_source", "source_dataset": "RAW_AE"},
+                {"step_id": "filter_ae", "operation": "filter", "description": "Keep reported events", "output": "ae_filtered", "inputs": ["read_ae"], "condition": "AETERM is not null and trim(AETERM) != ''", "sas_condition": "not missing(AETERM)"},
+            ],
+            "output_step": "filter_ae",
+        }}],
+        "rule_augmentations": [{"rule_id": "AE-AETERM", "target_domain": "AE", "target_variable": "AETERM", "description": "Direct", "logic": "Direct", "r_expression": '.data[["AETERM"]]', "sas_expression": "AETERM"}],
+    }
+    invalid = SDTMRuleAugmentationPlan.model_validate(rule_payload)
     with pytest.raises(ValueError, match="AE record step filter_ae has an invalid executable R condition"):
-        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid)
+        SDTMUseCase._validate_rule_batch("AE", mapping.datasets[0], domain_mapping.domain_mappings, invalid)
 
-    payload["datasets"][0]["record_plan"]["steps"][1]["condition"] = (
+    rule_payload["record_plans"][0]["record_plan"]["steps"][1]["condition"] = (
         '!is.na(.data[["AETERM"]]) & trimws(.data[["AETERM"]]) != ""'
     )
-    payload["datasets"][0]["record_plan"]["steps"][1]["sas_condition"] = "where not missing(AETERM)"
-    invalid_sas = SDTMVariableMappingPlan.model_validate(payload)
+    rule_payload["record_plans"][0]["record_plan"]["steps"][1]["sas_condition"] = "where not missing(AETERM)"
+    invalid_sas = SDTMRuleAugmentationPlan.model_validate(rule_payload)
     with pytest.raises(ValueError, match="AE record step filter_ae has an invalid executable SAS condition"):
-        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid_sas)
+        SDTMUseCase._validate_rule_batch("AE", mapping.datasets[0], domain_mapping.domain_mappings, invalid_sas)
 
-    payload["datasets"][0]["record_plan"]["steps"][1]["sas_condition"] = "not missing(AETERM)"
-    valid = SDTMVariableMappingPlan.model_validate(payload)
-    SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, valid)
+    rule_payload["record_plans"][0]["record_plan"]["steps"][1]["sas_condition"] = "not missing(AETERM)"
+    valid = SDTMRuleAugmentationPlan.model_validate(rule_payload)
+    SDTMUseCase._validate_rule_batch("AE", mapping.datasets[0], domain_mapping.domain_mappings, valid)
 
 
-async def test_sdtm_prepare_review_reopens_legacy_mapping_with_invalid_filter(tmp_path) -> None:
+async def test_sdtm_prepare_review_ignores_legacy_record_plan_owned_by_rule_stage(tmp_path) -> None:
     edc = tmp_path / "edc.json"
     edc.write_text("{}", encoding="utf-8")
     source_spec = {
@@ -439,13 +444,7 @@ async def test_sdtm_prepare_review_reopens_legacy_mapping_with_invalid_filter(tm
         )
     )
 
-    assert review is not None
-    assert review.review_stage == "variable_mapping"
-    review_payload = review.value.model_dump(mode="json")
-    assert review_payload["variable_mapping"]["datasets"][0]["record_plan"]["steps"][1]["condition"] == (
-        "AETERM is not null"
-    )
-    assert any("preserved and reopened" in warning for warning in review.warnings)
+    assert review is None
 
 
 def test_sdtm_domain_revision_preserves_only_unchanged_variable_batches() -> None:
@@ -1147,6 +1146,9 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
     }
     final_result = {
         "study_name": "SYN-101",
+        "record_plans": [
+            {"target_domain": "DM", "record_plan": read_plan("DM", "RAW_DM").model_dump(mode="json")}
+        ],
         "rule_augmentations": [
             {
                 "rule_id": "DM-AGE",
@@ -1250,6 +1252,7 @@ async def test_sdtm_use_case_pauses_after_each_mapping_stage_before_code_generat
     )
 
     assert generated.value.rule_augmentations[0].rule_id == "DM-AGE"
+    assert generated.value.datasets[0].record_plan == read_plan("DM", "RAW_DM")
     assert any("Blank CRF was not supplied" in warning for warning in generated.warnings)
     assert any("BLANK CRF NOT SUPPLIED" in json.dumps(request) for request in completions.requests)
     assert "# SDTM stage 3" in completions.requests[-3]["messages"][0]["content"]
@@ -1447,6 +1450,9 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
                     value=SDTMRuleAugmentationPlan.model_validate(
                         {
                             "study_name": "SYN-BATCH",
+                            "record_plans": [
+                                {"target_domain": target, "record_plan": read_plan(target, f"RAW_{target}").model_dump(mode="json")}
+                            ],
                             "rule_augmentations": [
                                 {
                                     "rule_id": f"{target}-{variable}",
@@ -1470,7 +1476,7 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     rule_plan, _ = await use_case._generate_rule_batches(
         UseCaseContext(
             inputs=[],
-            options={},
+            options={"edc_source_spec": source_spec.model_dump(mode="json")},
             ai=SimpleNamespace(),
             settings=agent_settings(sdtm_domain_agent_concurrency=2),
             agent_progress_path=tmp_path / "progress.json",
@@ -1614,11 +1620,13 @@ async def test_completed_variable_domain_rerun_also_refreshes_only_its_rules(tmp
     async def fake_rules(*_args, **kwargs):
         assert kwargs["target_domains"] == ["AE"]
         variable_mapping = kwargs["variable_mapping"]
-        assert next(item for item in variable_mapping.datasets if item.domain == "DM") == baseline.datasets[0]
+        retained_dm = next(item for item in variable_mapping.datasets if item.domain == "DM")
+        assert retained_dm.variables == baseline.datasets[0].variables
         assert next(item for item in variable_mapping.datasets if item.domain == "AE").variables[0].mapping_expression == "Updated mapping"
         calls.append("rules")
         return SDTMRuleAugmentationPlan.model_validate({
             "study_name": "SYN-RERUN",
+            "record_plans": [{"target_domain": "AE", "record_plan": read_plan("AE", "RAW_AE")}],
             "rule_augmentations": [{"rule_id": "AE-AETERM", "target_domain": "AE", "target_variable": "AETERM", "description": "Updated AE rule", "logic": "Normalize", "r_expression": 'trimws(.data[["AETERM"]])', "sas_expression": "strip(AETERM)"}],
         }), []
 

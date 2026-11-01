@@ -968,21 +968,6 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
             variables = [variable.name.upper() for variable in dataset.variables]
             if len(variables) != len(set(variables)):
                 problems.append(f"Domain {dataset.domain} has duplicate variable names.")
-            step_ids = [step.step_id.casefold() for step in dataset.record_plan.steps]
-            if len(step_ids) != len(set(step_ids)):
-                problems.append(f"Domain {dataset.domain} record-plan step identifiers must be unique.")
-            if dataset.record_plan.output_step.casefold() not in set(step_ids):
-                problems.append(f"Domain {dataset.domain} record-plan output_step does not reference a step.")
-            available_steps: set[str] = set()
-            for step in dataset.record_plan.steps:
-                references = [
-                    *step.inputs,
-                    *([step.left] if step.left else []),
-                    *([step.right] if step.right else []),
-                ]
-                if any(reference.casefold() not in available_steps for reference in references):
-                    problems.append(f"Domain {dataset.domain} step {step.step_id} references a later or unknown step.")
-                available_steps.add(step.step_id.casefold())
             for variable in dataset.variables:
                 identities = [
                     (source.dataset.casefold(), source.variable.casefold(), source.role)
@@ -1014,6 +999,23 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
             for domain in mapped_domains - known_domains:
                 problems.append(f"Domain mapping references target domain {domain} without a variable mapping.")
             for dataset in value.datasets:
+                step_ids = [step.step_id.casefold() for step in dataset.record_plan.steps]
+                if len(step_ids) != len(set(step_ids)):
+                    problems.append(f"Domain {dataset.domain} record-plan step identifiers must be unique.")
+                if dataset.record_plan.output_step.casefold() not in set(step_ids):
+                    problems.append(f"Domain {dataset.domain} record-plan output_step does not reference a step.")
+                available_steps: set[str] = set()
+                for step in dataset.record_plan.steps:
+                    references = [
+                        *step.inputs,
+                        *([step.left] if step.left else []),
+                        *([step.right] if step.right else []),
+                    ]
+                    if any(reference.casefold() not in available_steps for reference in references):
+                        problems.append(
+                            f"Domain {dataset.domain} step {step.step_id} references a later or unknown step."
+                        )
+                    available_steps.add(step.step_id.casefold())
                 mapped_sources = {
                     mapping.source_dataset.casefold()
                     for mapping in value.domain_mappings
@@ -1052,6 +1054,17 @@ def verify_result(workflow: str, value: BaseModel) -> list[str]:
                         f"Rule {rule.rule_id} for {rule.target_domain}.{rule.target_variable} has an invalid R expression: {exc}"
                     )
     elif workflow == "sdtm-rule-augmentation":
+        record_domains = [item.target_domain.upper() for item in value.record_plans]
+        if len(record_domains) != len(set(record_domains)):
+            problems.append("Each target domain must have exactly one rule/code record plan.")
+        for item in value.record_plans:
+            step_ids = [step.step_id.casefold() for step in item.record_plan.steps]
+            if len(step_ids) != len(set(step_ids)):
+                problems.append(f"Domain {item.target_domain} record-plan step identifiers must be unique.")
+            if item.record_plan.output_step.casefold() not in set(step_ids):
+                problems.append(
+                    f"Domain {item.target_domain} record-plan output_step does not reference a step."
+                )
         rule_ids = [rule.rule_id.casefold() for rule in value.rule_augmentations]
         if len(rule_ids) != len(set(rule_ids)):
             problems.append("SDTM rule identifiers must be unique.")

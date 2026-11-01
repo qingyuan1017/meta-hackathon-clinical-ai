@@ -8,12 +8,9 @@ import { groupOperationsByDomain, ReviewPatchPanel } from "./review-patch-panel"
 import { RevisionDecisionPanel } from "./revision-decision-panel";
 import { Button } from "./ui/button";
 import {
-  RecordPlanEditor,
   VariableMappingMatrix,
   newSourceVariable,
-  normalizeRecordPlan,
   normalizeVariable,
-  type SDTMRecordPlan,
   type SDTMVariableDraft,
   type SourceInventoryDataset,
 } from "./sdtm-lineage-editor";
@@ -42,7 +39,6 @@ interface SDTMDataset {
   description: string;
   structure: string;
   key_variables: string[];
-  record_plan: SDTMRecordPlan;
   variables: SDTMVariable[];
   review_assumptions: string[];
   review_unresolved_mappings: string[];
@@ -206,7 +202,6 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
         onUnresolved={(items) => updateDomainReviewNotes(active.domain, "review_unresolved_mappings", items, update)}
       /></div>
       <div className="space-y-4 p-4">
-        <RecordPlanEditor value={active.record_plan} allowedDatasets={allowedSources} onChange={(record_plan) => updateDataset(plan, active.domain, update, "record_plan", record_plan)} />
         <VariableMappingMatrix variables={active.variables} inventory={envelope.source_spec.datasets} allowedDatasets={allowedSources} sourceRelationships={envelope.domain_mapping.domain_mappings.filter((item) => item.target_domain === active.domain).map((item) => ({ dataset: item.source_dataset, relationship: item.relationship }))} onChange={(variables) => updateDataset(plan, active.domain, update, "variables", variables)} />
       </div>
       {(activeAssumptions.length > 0 || activeUnresolved.length > 0) && <div className="border-t border-white/10 p-4"><RevisionDecisionPanel
@@ -239,7 +234,7 @@ function normalizeDomainEnvelope(value: Record<string, unknown>): DomainReviewEn
 function normalizeVariableEnvelope(value: Record<string, unknown>): VariableReviewEnvelope {
   const domain = normalizeDomainEnvelope(value);
   const plan = recordValue(value.variable_mapping);
-  return { ...domain, variable_mapping: { ...plan, study_name: stringValue(plan.study_name, "Untitled study"), standard: stringValue(plan.standard, "SDTMIG 3.4"), define_standard: stringValue(plan.define_standard, "Define-XML 2.1"), datasets: arrayValue<SDTMDataset>(plan.datasets).map((dataset) => ({ ...dataset, key_variables: arrayValue<string>(dataset.key_variables), record_plan: normalizeRecordPlan(dataset.record_plan), review_assumptions: arrayValue<string>(dataset.review_assumptions), review_unresolved_mappings: arrayValue<string>(dataset.review_unresolved_mappings), variables: arrayValue<SDTMVariable>(dataset.variables).map(normalizeVariable) })), assumptions: arrayValue<string>(plan.assumptions), unresolved_mappings: arrayValue<string>(plan.unresolved_mappings) } };
+  return { ...domain, variable_mapping: { ...plan, study_name: stringValue(plan.study_name, "Untitled study"), standard: stringValue(plan.standard, "SDTMIG 3.4"), define_standard: stringValue(plan.define_standard, "Define-XML 2.1"), datasets: arrayValue<SDTMDataset>(plan.datasets).map((dataset) => ({ ...dataset, key_variables: arrayValue<string>(dataset.key_variables), review_assumptions: arrayValue<string>(dataset.review_assumptions), review_unresolved_mappings: arrayValue<string>(dataset.review_unresolved_mappings), variables: arrayValue<SDTMVariable>(dataset.variables).map(normalizeVariable) })), assumptions: arrayValue<string>(plan.assumptions), unresolved_mappings: arrayValue<string>(plan.unresolved_mappings) } };
 }
 function domainIssues(envelope: DomainReviewEnvelope): string[] {
   const issues: string[] = [];
@@ -280,24 +275,15 @@ function domainIssues(envelope: DomainReviewEnvelope): string[] {
 function variableIssues(envelope: VariableReviewEnvelope): string[] {
   const issues: string[] = [];
   const approved = new Map<string, Set<string>>();
-  const relationships = new Map<string, Set<Relationship>>();
   envelope.domain_mapping.domain_mappings.forEach((item) => {
     const sources = approved.get(item.target_domain) ?? new Set<string>();
     sources.add(item.source_dataset);
     approved.set(item.target_domain, sources);
-    const domainRelationships = relationships.get(item.target_domain) ?? new Set<Relationship>();
-    domainRelationships.add(item.relationship);
-    relationships.set(item.target_domain, domainRelationships);
   });
   const datasets = new Map(envelope.variable_mapping.datasets.map((item) => [item.domain, item]));
   approved.forEach((sources, domain) => {
     const dataset = datasets.get(domain);
     if (!dataset) { issues.push(`${domain} needs a variable matrix.`); return; }
-    issues.push(...recordPlanIssues(domain, dataset.record_plan, sources));
-    const operations = new Set(dataset.record_plan.steps.map((step) => step.operation));
-    [...(relationships.get(domain) ?? [])].filter((relationship) => relationship === "stack" || relationship === "join").forEach((relationship) => {
-      if (!operations.has(relationship)) issues.push(`${domain} ${relationship} relationship needs a ${relationship} record-plan operation.`);
-    });
     if (!dataset.variables.length) issues.push(`${domain} needs at least one variable.`);
     dataset.variables.forEach((variable) => {
       const label = `${domain}.${variable.name || "[unnamed]"}`;
@@ -325,7 +311,6 @@ function RelationshipGuide() {
 function hydrateLegacyReviewNotes(plan: SDTMVariableMappingPlanDraft, mapping: SDTMDomainMappingPlanDraft) { if (plan.datasets.some((item) => item.review_assumptions.length || item.review_unresolved_mappings.length)) return; for (const dataset of plan.datasets) { dataset.review_assumptions = plan.assumptions.filter((note) => legacyNoteDomain(note, plan, mapping) === dataset.domain); dataset.review_unresolved_mappings = plan.unresolved_mappings.filter((note) => legacyNoteDomain(note, plan, mapping) === dataset.domain); } }
 function legacyNoteDomain(note: string, plan: SDTMVariableMappingPlanDraft, mapping: SDTMDomainMappingPlanDraft): string | null { const upper = note.toUpperCase(); const matches: Array<{ domain: string; index: number; priority: number }> = []; for (const dataset of plan.datasets) { const domain = dataset.domain.toUpperCase(); const variableMatch = upper.search(new RegExp(`\\b${escapeRegExp(domain)}[A-Z0-9_]{2,}\\b`)); if (variableMatch >= 0) matches.push({ domain, index: variableMatch, priority: 0 }); const sources = mapping.domain_mappings.filter((item) => item.target_domain.toUpperCase() === domain).map((item) => item.source_dataset.toUpperCase()); for (const source of sources) { const sourceMatch = upper.indexOf(source); if (sourceMatch >= 0) matches.push({ domain, index: sourceMatch, priority: 1 }); } const explicit = [new RegExp(`\\b(?:TARGET|DOMAIN)\\s+${escapeRegExp(domain)}\\b`), new RegExp(`\\b${escapeRegExp(domain)}\\s+DOMAIN\\b`), new RegExp(`->\\s*${escapeRegExp(domain)}\\b`), new RegExp(`\\b${escapeRegExp(domain)}\\.`)]; for (const pattern of explicit) { const found = upper.search(pattern); if (found >= 0) matches.push({ domain, index: found, priority: 2 }); } } matches.sort((left, right) => left.priority - right.priority || left.index - right.index); return matches[0]?.domain ?? null; }
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
-function recordPlanIssues(domain: string, plan: SDTMRecordPlan, approved: Set<string>): string[] { const issues: string[] = []; if (!plan.steps.length) return [`${domain} needs at least one record-construction step.`]; const available = new Set<string>(); const reads = new Set<string>(); plan.steps.forEach((step) => { if (!step.step_id.trim() || available.has(step.step_id)) issues.push(`${domain} record steps need unique IDs.`); const references = [...step.inputs, ...(step.left ? [step.left] : []), ...(step.right ? [step.right] : [])]; references.forEach((reference) => { if (!available.has(reference)) issues.push(`${domain}.${step.step_id} references an unavailable or later step ${reference}.`); }); if (step.operation === "read") { if (!step.source_dataset) issues.push(`${domain}.${step.step_id} needs a source dataset.`); else reads.add(step.source_dataset); } if (step.operation === "stack" && step.inputs.length < 2) issues.push(`${domain}.${step.step_id} stack needs at least two inputs.`); if (step.operation === "join" && (!step.left || !step.right || !step.join_keys.length)) issues.push(`${domain}.${step.step_id} join needs left/right inputs and keys.`); available.add(step.step_id); }); approved.forEach((source) => { if (!reads.has(source)) issues.push(`${domain} record plan must read approved source ${source}.`); }); reads.forEach((source) => { if (!approved.has(source)) issues.push(`${domain} record plan reads unapproved source ${source}.`); }); if (!available.has(plan.output_step)) issues.push(`${domain} needs a valid final output step.`); return issues; }
 function recordValue(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function stringValue(value: unknown, fallback: string): string { return typeof value === "string" ? value : fallback; }
 function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }

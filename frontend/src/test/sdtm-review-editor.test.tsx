@@ -27,14 +27,15 @@ describe("SDTMReviewEditor", () => {
     expect(screen.getByText("Domain mapping")).toBeInTheDocument();
     expect(screen.getAllByText("RAW_DM")).toHaveLength(2);
     fireEvent.click(screen.getByText("Variable & VLM"));
-    expect(screen.getByText("Review the record pipeline, then use the variable-by-source matrix. Select a row or cell to edit its metadata and detailed lineage.")).toBeInTheDocument();
-    expect(screen.getByText("Record construction pipeline")).toBeInTheDocument();
+    expect(screen.getByText("Use the variable-by-source matrix to edit target metadata, minor derivations, detailed lineage, and VLM rows.")).toBeInTheDocument();
+    expect(screen.queryByText("Record construction pipeline")).not.toBeInTheDocument();
     expect(screen.getByText("Variable & VLM mapping matrix")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit AGE mapping" }));
     expect(screen.getAllByDisplayValue("AGE")).toHaveLength(2);
     expect(screen.getByRole("dialog", { name: "Edit AGE" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close variable mapping dialog" }));
-    fireEvent.click(screen.getByText("Rule augmentation"));
+    fireEvent.click(screen.getByText("Rule & code"));
+    expect(screen.getByText("Record construction pipeline")).toBeInTheDocument();
     expect(screen.getByText("DM.AGE")).toBeInTheDocument();
     fireEvent.click(screen.getByText("aCRF review"));
     expect(screen.getByText("No aCRF was generated because this job did not include a blank CRF PDF. Start a new generation with a blank CRF to enable annotation review.")).toBeInTheDocument();
@@ -50,9 +51,9 @@ describe("SDTMReviewEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rerun DM Variable & VLM" }));
     await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "variable_mapping", "DM"));
 
-    fireEvent.click(screen.getByText("Rule augmentation"));
+    fireEvent.click(screen.getByText("Rule & code"));
     expect(screen.getByText("DM.AGE")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Rerun DM rules" }));
+    fireEvent.click(screen.getByRole("button", { name: "Rerun DM rules/code" }));
     await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "rule_augmentation", "DM"));
   });
 });
