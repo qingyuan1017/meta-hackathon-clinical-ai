@@ -517,7 +517,13 @@ async def submit_review_feedback(
     if update.baseline_revision != stored_revision:
         raise HTTPException(status_code=409, detail="The review draft changed. Reload it before requesting a revision.")
     try:
-        current_result = validate_review_result(job.workflow, review_stage, update.current_result, options)
+        current_result = validate_review_result(
+            job.workflow,
+            review_stage,
+            update.current_result,
+            options,
+            allow_repairable_sdtm_variable_mapping=True,
+        )
         validate_scope(review_stage, update.scope, current_result)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -599,7 +605,13 @@ async def decide_review_patch(
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=500, detail="The saved review patch is unavailable.") from exc
     try:
-        current = validate_review_result(job.workflow, str(pending.get("stage")), decision.current_result, options)
+        current = validate_review_result(
+            job.workflow,
+            str(pending.get("stage")),
+            decision.current_result,
+            options,
+            allow_repairable_sdtm_variable_mapping=True,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     completed_domain_rerun = str(pending.get("stage")) in {

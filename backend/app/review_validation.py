@@ -14,7 +14,14 @@ from .use_cases.sdtm import SDTMUseCase
 from .use_cases.tlf import TLFUseCase
 
 
-def validate_review_result(workflow: str, stage: str, value: dict, options: dict) -> dict:
+def validate_review_result(
+    workflow: str,
+    stage: str,
+    value: dict,
+    options: dict,
+    *,
+    allow_repairable_sdtm_variable_mapping: bool = False,
+) -> dict:
     if workflow == "sdtm" and stage == "edc_source":
         source = EDCSourceSpecification.model_validate(value)
         problems = verify_result("sdtm-source-normalization", source)
@@ -28,7 +35,12 @@ def validate_review_result(workflow: str, stage: str, value: dict, options: dict
     if workflow == "sdtm" and stage == "variable_mapping":
         review = SDTMVariableMappingReview.model_validate(value)
         SDTMUseCase.validate_domain_mapping(review.source_spec, review.domain_mapping)
-        SDTMUseCase.validate_variable_mapping(review.source_spec, review.domain_mapping, review.variable_mapping)
+        if not allow_repairable_sdtm_variable_mapping:
+            SDTMUseCase.validate_variable_mapping(
+                review.source_spec,
+                review.domain_mapping,
+                review.variable_mapping,
+            )
         return review.model_dump(mode="json")
     if workflow == "sdtm" and stage in {"variable_mapping_domain", "rule_augmentation_domain"}:
         plan = SDTMPlan.model_validate(value)

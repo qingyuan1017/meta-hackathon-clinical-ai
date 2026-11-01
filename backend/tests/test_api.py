@@ -899,6 +899,93 @@ def test_review_feedback_records_user_turn_and_reruns_current_stage(monkeypatch)
         shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
 
 
+def test_sdtm_feedback_can_repair_legacy_variable_mapping_that_fails_new_validation(monkeypatch) -> None:
+    queued: list[str] = []
+    monkeypatch.setattr("app.main.runner.enqueue", queued.append)
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key, settings.meta_model = "test", "test-model"
+    draft = {
+        "source_spec": {
+            "study_name": "SYN-LB",
+            "datasets": [{
+                "name": "RAW_LB",
+                "label": "Wide laboratory results",
+                "variables": [
+                    {"name": "GLUC", "label": "Glucose", "provenance": {"file": "lb.json"}},
+                    {"name": "HGB", "label": "Hemoglobin", "provenance": {"file": "lb.json"}},
+                ],
+                "provenance": {"file": "lb.json"},
+            }],
+        },
+        "domain_mapping": {
+            "study_name": "SYN-LB",
+            "domain_mappings": [{
+                "source_dataset": "RAW_LB",
+                "target_domain": "LB",
+                "rationale": "Laboratory findings",
+            }],
+        },
+        "variable_mapping": {
+            "study_name": "SYN-LB",
+            "datasets": [{
+                "domain": "LB",
+                "description": "Laboratory Test Results",
+                "dataset_class": "Findings",
+                "variables": [{
+                    "name": "LBORRES",
+                    "label": "Result or Finding in Original Units",
+                    "mapping_type": "transpose",
+                    "sources": [_source("RAW_LB", "GLUC"), _source("RAW_LB", "HGB")],
+                    "mapping_expression": "Transpose analyte results.",
+                    "value_level_metadata": [],
+                }],
+            }],
+        },
+    }
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm",
+            title="Repair legacy VLM",
+            status="review_required",
+            options_json=json.dumps({"_review_stage": "variable_mapping"}),
+            input_files_json='["lb.json"]',
+            result_json=json.dumps(draft),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/feedback",
+                json={
+                    "message": "Place each wide analyte source in its matching LB VLM cell.",
+                    "scope": {"target_domains": ["LB"]},
+                    "baseline_revision": result_revision(draft),
+                    "current_result": draft,
+                },
+            )
+        assert response.status_code == 202, response.text
+        assert response.json()["status"] == "queued"
+        assert queued == [job_id]
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            assert stored is not None
+            saved_options = json.loads(stored.options_json)
+            assert saved_options["_review_patch_request"]["scope"]["target_domains"] == ["LB"]
+            saved_variable = saved_options["_review_revision_result"]["variable_mapping"]["datasets"][0]["variables"][0]
+            assert [source["variable"] for source in saved_variable["sources"]] == ["GLUC", "HGB"]
+            assert saved_variable["value_level_metadata"] == []
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
 def test_scoped_review_patch_three_way_merge_preserves_newer_unrelated_edit() -> None:
     baseline = {
         "study_name": "SYN-101",
