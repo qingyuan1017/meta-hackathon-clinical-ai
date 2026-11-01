@@ -85,12 +85,17 @@ describe("SDTM mapping review gates", () => {
     render(<SDTMVariableMappingReview value={{ source_spec: source, domain_mapping: domain, variable_mapping: owned }} onChange={vi.fn()} onApprove={vi.fn()} saving={false} />);
 
     const stageDecisions = screen.getByRole("region", { name: "Stage-wide feedback decisions" });
+    expect(stageDecisions.querySelector(":scope > details")).not.toHaveAttribute("open");
     expect(within(stageDecisions).getByText("Stage decision")).toBeInTheDocument();
     expect(within(stageDecisions).getByText("Stage assumption")).toBeInTheDocument();
+    const stageAssumptions = within(stageDecisions).getByRole("group", { name: "Assumptions retained" });
+    expect(stageAssumptions).not.toHaveAttribute("open");
+    expect(stageAssumptions).toHaveClass("border-emerald-500/25");
     expect(stageDecisions.compareDocumentPosition(screen.getByRole("button", { name: "DM" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("textbox", { name: "Assumptions — one per line" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "Unresolved mappings — one per line" })).not.toBeInTheDocument();
     const dmDecisions = screen.getByRole("region", { name: "DM feedback decisions" });
+    expect(dmDecisions.querySelector(":scope > details")).not.toHaveAttribute("open");
     expect(within(dmDecisions).getByText("DM decision")).toBeInTheDocument();
     expect(within(dmDecisions).getByText("DM assumption")).toBeInTheDocument();
     expect(within(dmDecisions).queryByText("AE decision")).not.toBeInTheDocument();
