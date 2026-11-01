@@ -8,7 +8,7 @@ import type { Artifact, CDISCDataset, SDTMWorkbenchState, ValidationFinding } fr
 import { Button } from "./ui/button";
 import {
   RecordPlanEditor,
-  VariableMappingCards,
+  VariableMappingMatrix,
   newSourceVariable,
   normalizeRecordPlan,
   normalizeVariable,
@@ -22,7 +22,7 @@ interface DomainMapping {
   source_dataset: string;
   source_type: SourceType;
   target_domain: string;
-  relationship: "direct" | "split" | "merge" | "derived";
+  relationship: "direct" | "stack" | "join" | "split" | "derived";
   rationale: string;
 }
 
@@ -270,6 +270,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
             </section>
 
             <section className="space-y-3">
+              <RelationshipGuide />
               {plan.datasets.map((dataset) => (
                 <DomainDropZone key={dataset.domain} dataset={dataset} mappings={plan.domain_mappings.filter((mapping) => mapping.target_domain === dataset.domain)} onDrop={(event) => onDrop(event, dataset.domain)} onUpdate={(mappingIndex, key, nextValue) => update((next) => {
                   const mapping = next.domain_mappings.filter((item) => item.target_domain === dataset.domain)[mappingIndex];
@@ -292,13 +293,13 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
           {activeDataset ? (
             <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4">
-                <div><p className="text-sm font-bold text-zinc-100">{activeDataset.domain} · {activeDataset.description}</p><p className="mt-1 text-xs text-zinc-500">Review the record pipeline first, then each variable and value-level lineage card.</p></div>
+                <div><p className="text-sm font-bold text-zinc-100">{activeDataset.domain} · {activeDataset.description}</p><p className="mt-1 text-xs text-zinc-500">Review the record pipeline, then use the variable-by-source matrix. Select a row or cell to edit its metadata and detailed lineage.</p></div>
                 <div className="flex flex-wrap gap-2">{jobId && <Button type="button" variant="outline" size="sm" disabled={rerunMutation.isPending} onClick={() => rerunMutation.mutate({ stage: "variable_mapping", domain: activeDataset.domain })}><RotateCcw size={14} />Rerun {activeDataset.domain} Variable &amp; VLM</Button>}<Button type="button" variant="outline" size="sm" onClick={() => addVariable(activeDataset.domain)}><Plus size={14} />Variable</Button><Button type="button" variant="outline" size="sm" onClick={() => addSuppQualifier(activeDataset.domain)}><Plus size={14} />SUPP/VLM qualifier</Button></div>
               </div>
               <div className="space-y-4 p-4">
                 {jobId && <p className="rounded-lg border border-amber-400/15 bg-amber-500/[0.05] px-3 py-2 text-[11px] leading-5 text-amber-100/80">The rerun starts from the last saved approved plan, replaces only {activeDataset.domain}, refreshes its dependent rules, and requires approval before downloads change. Save any manual edits first.</p>}
                 <RecordPlanEditor value={activeDataset.record_plan} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} onChange={(record_plan) => update((next) => { const dataset = next.datasets.find((item) => item.domain === activeDataset.domain); if (dataset) dataset.record_plan = record_plan; })} />
-                <VariableMappingCards variables={activeDataset.variables} inventory={sourceInventory} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} onChange={(variables) => update((next) => {
+                <VariableMappingMatrix variables={activeDataset.variables} inventory={sourceInventory} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} sourceRelationships={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => ({ dataset: mapping.source_dataset, relationship: mapping.relationship }))} onChange={(variables) => update((next) => {
                   const dataset = next.datasets.find((item) => item.domain === activeDataset.domain);
                   if (!dataset) return;
                   variables.forEach((variable, index) => {
@@ -487,7 +488,11 @@ function SourceCard({ source }: { source: { name: string; type: SourceType } }) 
 }
 
 function DomainDropZone({ dataset, mappings, onDrop, onUpdate, onRemove }: { dataset: SDTMDataset; mappings: DomainMapping[]; onDrop: (event: DragEvent) => void; onUpdate: (index: number, key: keyof DomainMapping, value: string) => void; onRemove: (index: number) => void }) {
-  return <div onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={onDrop} className="rounded-xl border border-dashed border-violet-500/25 bg-violet-500/[0.035] p-4 transition hover:border-violet-400/50"><div className="flex items-start justify-between gap-3"><div><p className="font-mono text-base font-black text-violet-200">{dataset.domain}</p><p className="mt-1 text-xs text-zinc-400">{dataset.description}</p></div><span className="rounded-full border border-white/10 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-zinc-500">Drop target</span></div><div className="mt-4 space-y-2">{mappings.map((mapping, index) => <div key={`${mapping.source_dataset}-${index}`} className="grid gap-2 rounded-lg border border-white/10 bg-[#111113] p-3 lg:grid-cols-[minmax(130px,0.8fr)_100px_110px_minmax(180px,1.4fr)_32px]"><div className="flex items-center gap-2"><span className="font-mono text-xs font-bold text-zinc-200">{mapping.source_dataset}</span><ArrowRight size={13} className="text-zinc-600" /><span className="font-mono text-xs font-bold text-violet-300">{dataset.domain}</span></div><select value={mapping.source_type} onChange={(event) => onUpdate(index, "source_type", event.target.value)} className={inputClass}><option value="raw">Raw</option><option value="sdtm">SDTM</option></select><select value={mapping.relationship} onChange={(event) => onUpdate(index, "relationship", event.target.value)} className={inputClass}><option value="direct">Direct</option><option value="split">Split</option><option value="merge">Merge</option><option value="derived">Derived</option></select><input value={mapping.rationale} onChange={(event) => onUpdate(index, "rationale", event.target.value)} placeholder="Mapping rationale" className={inputClass} /><button type="button" aria-label={`Remove ${mapping.source_dataset} mapping`} onClick={() => onRemove(index)} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={14} /></button></div>)}{!mappings.length && <p className="rounded-lg border border-white/[0.07] bg-black/10 p-4 text-center text-xs text-zinc-600">Drop a raw or SDTM source dataset here.</p>}</div></div>;
+  return <div onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; }} onDrop={onDrop} className="rounded-xl border border-dashed border-violet-500/25 bg-violet-500/[0.035] p-4 transition hover:border-violet-400/50"><div className="flex items-start justify-between gap-3"><div><p className="font-mono text-base font-black text-violet-200">{dataset.domain}</p><p className="mt-1 text-xs text-zinc-400">{dataset.description}</p></div><span className="rounded-full border border-white/10 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-zinc-500">Drop target</span></div><div className="mt-4 space-y-2">{mappings.map((mapping, index) => <div key={`${mapping.source_dataset}-${index}`} className="grid gap-2 rounded-lg border border-white/10 bg-[#111113] p-3 lg:grid-cols-[minmax(130px,0.8fr)_100px_110px_minmax(180px,1.4fr)_32px]"><div className="flex items-center gap-2"><span className="font-mono text-xs font-bold text-zinc-200">{mapping.source_dataset}</span><ArrowRight size={13} className="text-zinc-600" /><span className="font-mono text-xs font-bold text-violet-300">{dataset.domain}</span></div><select value={mapping.source_type} onChange={(event) => onUpdate(index, "source_type", event.target.value)} className={inputClass}><option value="raw">Raw</option><option value="sdtm">SDTM</option></select><select aria-label={`${mapping.source_dataset} to ${dataset.domain} relationship`} value={mapping.relationship} onChange={(event) => onUpdate(index, "relationship", event.target.value)} className={inputClass}><option value="direct">Direct</option><option value="stack">Stack</option><option value="join">Join</option><option value="split">Split</option><option value="derived">Derived</option></select><input value={mapping.rationale} onChange={(event) => onUpdate(index, "rationale", event.target.value)} placeholder="Mapping rationale" className={inputClass} /><button type="button" aria-label={`Remove ${mapping.source_dataset} mapping`} onClick={() => onRemove(index)} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={14} /></button></div>)}{!mappings.length && <p className="rounded-lg border border-white/[0.07] bg-black/10 p-4 text-center text-xs text-zinc-600">Drop a raw or SDTM source dataset here.</p>}</div></div>;
+}
+
+function RelationshipGuide() {
+  return <div className="grid gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-[11px] leading-5 text-zinc-500 sm:grid-cols-2 xl:grid-cols-5"><span><strong className="text-emerald-300">Direct</strong> keeps one source&apos;s row structure.</span><span><strong className="text-violet-300">Stack</strong> appends observations as new rows.</span><span><strong className="text-sky-300">Join</strong> adds columns by reviewed keys and cardinality.</span><span><strong className="text-amber-300">Split</strong> routes one source to multiple domains.</span><span><strong className="text-zinc-300">Derived</strong> constructs records without a row-aligned source.</span></div>;
 }
 
 function DomainTabs({ datasets, selected, onSelect }: { datasets: SDTMDataset[]; selected: string; onSelect: (domain: string) => void }) {
@@ -545,6 +550,11 @@ function reviewIssues(plan: SDTMPlanDraft): string[] {
       if (step.operation === "stack" && step.inputs.length < 2) issues.push(`${dataset.domain}.${step.step_id} stack needs at least two inputs.`);
       if (step.operation === "join" && (!step.left || !step.right || !step.join_keys.length)) issues.push(`${dataset.domain}.${step.step_id} join needs both inputs and keys.`);
       available.add(step.step_id);
+    });
+    const operations = new Set(dataset.record_plan.steps.map((step) => step.operation));
+    mappings.forEach((mapping) => {
+      const requiredOperation = mapping.relationship === "stack" || mapping.relationship === "join" ? mapping.relationship : null;
+      if (requiredOperation && !operations.has(requiredOperation)) issues.push(`${dataset.domain} ${requiredOperation} relationship needs a ${requiredOperation} record-plan operation.`);
     });
     mappings.forEach((mapping) => { if (!reads.has(mapping.source_dataset)) issues.push(`${dataset.domain} record plan must read ${mapping.source_dataset}.`); });
     if (!available.has(dataset.record_plan.output_step)) issues.push(`${dataset.domain} needs a valid final record step.`);

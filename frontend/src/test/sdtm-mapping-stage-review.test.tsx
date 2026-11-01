@@ -44,8 +44,11 @@ describe("SDTM mapping review gates", () => {
 
     expect(screen.getByText("Variable and value-level mapping review required")).toBeInTheDocument();
     expect(screen.getByText("Record construction pipeline")).toBeInTheDocument();
+    expect(screen.getByText("Variable & VLM mapping matrix")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit AGE mapping" }));
     expect(screen.getByText("Value-level metadata")).toBeInTheDocument();
     expect(screen.getAllByDisplayValue("AGE")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "Close variable mapping dialog" }));
     fireEvent.click(screen.getByText("Approve mappings and generate rules/code"));
     expect(approve).toHaveBeenCalledWith(expect.objectContaining({
       datasets: [expect.objectContaining({ domain: "DM", variables: variable.datasets[0].variables })],
@@ -104,6 +107,7 @@ describe("SDTM mapping review gates", () => {
     assigned.datasets[0].variables.push({ name: "STUDYID", label: "Study Identifier", data_type: "Char", mapping_type: "assigned", sources: [], origin: "Assigned", mapping_expression: "Assign the approved study identifier SYN-101.", controlled_terms: [], value_level_metadata: [], crf_source_label: null });
     render(<SDTMVariableMappingReview value={{ source_spec: source, domain_mapping: domain, variable_mapping: assigned }} onChange={vi.fn()} onApprove={approve} saving={false} />);
 
+    fireEvent.click(screen.getByRole("button", { name: "Edit STUDYID mapping" }));
     expect(screen.getByText("0 source references · assigned")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Approve mappings and generate rules/code"));
     expect(approve).toHaveBeenCalledWith(expect.objectContaining({
@@ -114,9 +118,10 @@ describe("SDTM mapping review gates", () => {
   it("adds a second typed source and value-level lineage without replacing the first", () => {
     const onChange = vi.fn();
     const multiSource = { ...source, datasets: [...source.datasets, { name: "RAW_LABS", label: "Lab lookup", source_type: "raw", variables: [{ name: "AGE_AT_DRAW", label: "Age at draw" }] }] };
-    const multiDomain = { ...domain, domain_mappings: [...domain.domain_mappings, { source_dataset: "RAW_LABS", source_type: "raw", target_domain: "DM", relationship: "merge", rationale: "Age lookup" }] };
+    const multiDomain = { ...domain, domain_mappings: [...domain.domain_mappings, { source_dataset: "RAW_LABS", source_type: "raw", target_domain: "DM", relationship: "join", rationale: "Age lookup" }] };
     const { rerender } = render(<SDTMVariableMappingReview value={{ source_spec: multiSource, domain_mapping: multiDomain, variable_mapping: variable }} onChange={onChange} onApprove={vi.fn()} saving={false} />);
 
+    fireEvent.click(screen.getByRole("button", { name: "Edit AGE mapping" }));
     fireEvent.click(screen.getByRole("button", { name: "Add AGE sources" }));
     const withSecondSource = onChange.mock.calls.at(-1)![0];
     rerender(<SDTMVariableMappingReview value={withSecondSource} onChange={onChange} onApprove={vi.fn()} saving={false} />);
@@ -135,6 +140,49 @@ describe("SDTM mapping review gates", () => {
     const withVlm = onChange.mock.calls.at(-1)![0];
     rerender(<SDTMVariableMappingReview value={withVlm} onChange={onChange} onApprove={vi.fn()} saving={false} />);
     expect(screen.getByRole("button", { name: "Add AGE VLM 1 sources" })).toBeInTheDocument();
+  });
+
+  it("adds separate matrix columns for stack sources and value-level source slices", () => {
+    const sourceWithVs = {
+      ...source,
+      datasets: [
+        { name: "VS_HEIGHT", label: "Height", source_type: "raw", variables: [{ name: "RESULT", label: "Result" }] },
+        { name: "VS_WEIGHT", label: "Weight and temperature", source_type: "raw", variables: [{ name: "RESULT", label: "Result" }] },
+      ],
+    };
+    const domainWithVs = {
+      ...domain,
+      domain_mappings: [
+        { source_dataset: "VS_HEIGHT", source_type: "raw", target_domain: "VS", relationship: "stack", rationale: "Append height rows" },
+        { source_dataset: "VS_WEIGHT", source_type: "raw", target_domain: "VS", relationship: "stack", rationale: "Append weight and temperature rows" },
+      ],
+    };
+    const variableWithSlices = structuredClone(variable);
+    variableWithSlices.datasets[0].domain = "VS";
+    variableWithSlices.datasets[0].variables[0] = {
+      ...variableWithSlices.datasets[0].variables[0],
+      name: "VSORRES",
+      label: "Result or Finding in Original Units",
+      mapping_type: "coalesce",
+      sources: [
+        { dataset: "VS_HEIGHT", variable: "RESULT", role: "value" },
+        { dataset: "VS_WEIGHT", variable: "RESULT", role: "value" },
+      ],
+      value_level_metadata: [
+        { where_clause: "VSTESTCD = 'HEIGHT'", label: "Height", data_type: "Num", origin: "CRF", mapping_expression: "Direct", sources: [{ dataset: "VS_HEIGHT", variable: "RESULT", role: "value" }], controlled_terms: [] },
+        { where_clause: "VSTESTCD = 'WEIGHT'", label: "Weight", data_type: "Num", origin: "CRF", mapping_expression: "Direct", sources: [{ dataset: "VS_WEIGHT", variable: "RESULT", role: "value" }], controlled_terms: [] },
+        { where_clause: "VSTESTCD = 'TEMP'", label: "Temperature", data_type: "Num", origin: "CRF", mapping_expression: "Direct", sources: [{ dataset: "VS_WEIGHT", variable: "RESULT", role: "value" }], controlled_terms: [] },
+      ],
+    };
+    render(<SDTMVariableMappingReview value={{ source_spec: sourceWithVs, domain_mapping: domainWithVs, variable_mapping: variableWithSlices }} onChange={vi.fn()} onApprove={vi.fn()} saving={false} />);
+
+    const matrix = screen.getByRole("table");
+    expect(within(matrix).getAllByText("VS_HEIGHT")).toHaveLength(2);
+    expect(within(matrix).getAllByText("VS_WEIGHT")).toHaveLength(3);
+    expect(within(matrix).getAllByText("stack")).toHaveLength(5);
+    expect(within(matrix).getByText("VSTESTCD = 'HEIGHT'")).toBeInTheDocument();
+    expect(within(matrix).getByText("VSTESTCD = 'WEIGHT'")).toBeInTheDocument();
+    expect(within(matrix).getByText("VSTESTCD = 'TEMP'")).toBeInTheDocument();
   });
 
   it("allows a source to be reviewed as intentionally not mapped", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { Button } from "./ui/button";
 
@@ -8,6 +8,7 @@ export type SDTMDataType = "Char" | "Num";
 export type SDTMMappingType = "direct" | "assigned" | "derived" | "coalesce" | "lookup" | "transpose" | "aggregate";
 export type SDTMSourceRole = "value" | "join_key" | "lookup" | "filter" | "timing" | "grouping" | "sequence";
 export type SDTMRecordOperation = "read" | "stack" | "join" | "transpose" | "filter" | "deduplicate" | "aggregate";
+export type SDTMSourceRelationship = "direct" | "stack" | "join" | "split" | "derived";
 
 export interface SDTMSourceReference {
   dataset: string;
@@ -175,15 +176,119 @@ function RecordOperationFields({ step, priorSteps, allowedDatasets, onChange }: 
   return <div className="space-y-3"><div className="grid gap-3 md:grid-cols-2"><StepSelect label="Input step" value={step.inputs[0] ?? null} options={priorOptions} onChange={(input) => onChange({ inputs: input ? [input] : [] })} /><ListInput label="Group by" value={step.group_by} onChange={(group_by) => onChange({ group_by })} /></div><div className="flex items-center justify-between"><EditorLabel>Aggregations</EditorLabel><button type="button" onClick={() => onChange({ aggregations: [...step.aggregations, { output_variable: "", operation: "count", source_variable: null }] })} className="text-[10px] font-bold text-violet-300">+ aggregation</button></div>{step.aggregations.map((item, index) => <div key={index} className="grid gap-2 md:grid-cols-[1fr_140px_1fr_36px]"><input value={item.output_variable} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, output_variable: event.target.value.toUpperCase() }) })} placeholder="Output variable" className={inputClass} /><select value={item.operation} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, operation: event.target.value as SDTMAggregation["operation"] }) })} className={inputClass}>{["count", "sum", "min", "max", "mean", "first", "last"].map((operation) => <option key={operation}>{operation}</option>)}</select><input disabled={item.operation === "count"} value={item.source_variable ?? ""} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, source_variable: event.target.value.toUpperCase() || null }) })} placeholder="Source variable" className={inputClass} /><RemoveButton label={`Remove aggregation ${index + 1}`} onClick={() => onChange({ aggregations: step.aggregations.filter((_, itemIndex) => itemIndex !== index) })} /></div>)}</div>;
 }
 
-export function VariableMappingCards({ variables, onChange, inventory, allowedDatasets }: {
+export function VariableMappingMatrix({ variables, onChange, inventory, allowedDatasets, sourceRelationships }: {
   variables: SDTMVariableDraft[];
   onChange: (variables: SDTMVariableDraft[]) => void;
   inventory: SourceInventoryDataset[];
   allowedDatasets: string[];
+  sourceRelationships: Array<{ dataset: string; relationship: SDTMSourceRelationship }>;
+}) {
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const selected = selectedIndex === null ? null : variables[selectedIndex] ?? null;
+  const sourceColumns = buildVariableMatrixColumns(variables, allowedDatasets, sourceRelationships);
+  const updateSelected = (next: SDTMVariableDraft[]) => {
+    if (selectedIndex === null || !next[0]) return;
+    onChange(replaceAt(variables, selectedIndex, next[0]));
+  };
+  return <>
+    <section className="overflow-hidden rounded-xl border border-white/10 bg-[#121214]">
+      <div className="border-b border-white/[0.07] px-4 py-3">
+        <p className="text-xs font-black uppercase tracking-[0.12em] text-violet-200">Variable &amp; VLM mapping matrix</p>
+        <p className="mt-1 text-xs leading-5 text-zinc-500">Rows are SDTM variables. Direct and stack sources remain separate columns; joined lookup sources are labeled separately because they add columns rather than append records. Value-level conditions create additional source-slice columns.</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="min-w-full border-collapse text-left text-xs">
+          <thead className="bg-black/20 text-zinc-400">
+            <tr>
+              <th className="sticky left-0 z-10 min-w-56 border-b border-r border-white/[0.07] bg-[#101012] px-3 py-3">SDTM variable</th>
+              {sourceColumns.map((column) => <th key={column.key} className="min-w-48 border-b border-r border-white/[0.07] px-3 py-3 align-top last:border-r-0">
+                <div className="flex items-center gap-2"><span className="font-mono font-bold text-zinc-200">{column.dataset}</span><RelationshipBadge relationship={column.relationship} /></div>
+                {column.whereClause && <span className="mt-1 block max-w-64 whitespace-normal font-mono text-[10px] font-normal leading-4 text-cyan-300">{column.whereClause}</span>}
+              </th>)}
+              {!sourceColumns.length && <th className="min-w-48 border-b border-white/[0.07] px-3 py-3 text-zinc-600">Assigned / derived</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {variables.map((variable, index) => <tr key={`${variable.name}-${index}`} className="group border-b border-white/[0.05] last:border-b-0">
+              <th className="sticky left-0 z-[5] border-r border-white/[0.07] bg-[#121214] p-0 group-hover:bg-[#17171a]">
+                <button type="button" aria-label={`Edit ${variable.name || `variable ${index + 1}`} mapping`} onClick={() => setSelectedIndex(index)} className="flex w-full items-start justify-between gap-3 px-3 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
+                  <span><span className="block font-mono text-sm font-black text-violet-200">{variable.name || "[unnamed]"}</span><span className="mt-1 block font-normal text-zinc-500">{variable.label || "No label"} · {variable.data_type}</span></span><Pencil size={13} className="mt-1 shrink-0 text-zinc-600 group-hover:text-violet-300" />
+                </button>
+              </th>
+              {sourceColumns.map((column) => <td key={column.key} className="border-r border-white/[0.05] p-0 align-top last:border-r-0">
+                <button type="button" aria-label={`Edit ${variable.name || `variable ${index + 1}`} for ${column.dataset}${column.whereClause ? ` ${column.whereClause}` : ""}`} onClick={() => setSelectedIndex(index)} className="min-h-16 w-full px-3 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
+                  <MatrixCell variable={variable} column={column} />
+                </button>
+              </td>)}
+              {!sourceColumns.length && <td className="px-3 py-3 text-zinc-500">{variable.mapping_type}</td>}
+            </tr>)}
+          </tbody>
+        </table>
+      </div>
+      {!variables.length && <p className="p-6 text-center text-xs text-zinc-600">No SDTM variables are available for review.</p>}
+    </section>
+    {selected && <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/75 p-4 pt-[5vh] backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="variable-mapping-dialog-title" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedIndex(null); }}>
+      <div className="w-full max-w-6xl rounded-2xl border border-violet-500/25 bg-[#0d0d0f] shadow-2xl shadow-black/60">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-4 rounded-t-2xl border-b border-white/10 bg-[#0d0d0f]/95 px-5 py-4 backdrop-blur">
+          <div><p id="variable-mapping-dialog-title" className="font-mono text-base font-black text-violet-200">Edit {selected.name || "SDTM variable"}</p><p className="mt-1 text-xs text-zinc-500">Edit target name, label, data type, derivation, source lineage, and value-level metadata.</p></div>
+          <button type="button" aria-label="Close variable mapping dialog" onClick={() => setSelectedIndex(null)} className="grid h-9 w-9 place-items-center rounded-md text-zinc-500 hover:bg-white/5 hover:text-white"><X size={16} /></button>
+        </div>
+        <div className="p-5"><VariableMappingCards variables={[selected]} onChange={updateSelected} inventory={inventory} allowedDatasets={allowedDatasets} removable={false} /></div>
+      </div>
+    </div>}
+  </>;
+}
+
+interface VariableMatrixColumn {
+  key: string;
+  dataset: string;
+  relationship: SDTMSourceRelationship;
+  whereClause: string | null;
+}
+
+function buildVariableMatrixColumns(variables: SDTMVariableDraft[], allowedDatasets: string[], sourceRelationships: Array<{ dataset: string; relationship: SDTMSourceRelationship }>): VariableMatrixColumn[] {
+  const relationshipByDataset = new Map(sourceRelationships.map((item) => [item.dataset, item.relationship]));
+  const datasets = Array.from(new Set([...allowedDatasets, ...variables.flatMap((variable) => [...variable.sources, ...variable.value_level_metadata.flatMap((vlm) => vlm.sources)].map((source) => source.dataset)).filter(Boolean)]));
+  const columns: VariableMatrixColumn[] = datasets.map((dataset) => ({ key: `${dataset}|base`, dataset, relationship: relationshipByDataset.get(dataset) ?? "direct", whereClause: null }));
+  const seenSlices = new Set<string>();
+  for (const variable of variables) {
+    for (const vlm of variable.value_level_metadata) {
+      if (!vlm.where_clause.trim()) continue;
+      for (const source of vlm.sources) {
+        if (!source.dataset) continue;
+        const key = `${source.dataset}|${vlm.where_clause.trim()}`;
+        if (seenSlices.has(key)) continue;
+        seenSlices.add(key);
+        columns.push({ key, dataset: source.dataset, relationship: relationshipByDataset.get(source.dataset) ?? "direct", whereClause: vlm.where_clause.trim() });
+      }
+    }
+  }
+  return columns;
+}
+
+function MatrixCell({ variable, column }: { variable: SDTMVariableDraft; column: VariableMatrixColumn }) {
+  const references = column.whereClause
+    ? variable.value_level_metadata.filter((vlm) => vlm.where_clause.trim() === column.whereClause).flatMap((vlm) => vlm.sources).filter((source) => source.dataset === column.dataset)
+    : variable.sources.filter((source) => source.dataset === column.dataset);
+  if (!references.length) return <span className="text-zinc-700">—</span>;
+  return <span className="space-y-1">{references.map((reference, index) => <span key={`${reference.variable}-${reference.role}-${index}`} className="block"><span className="font-mono font-bold text-zinc-200">{reference.variable || "[variable]"}</span><span className="ml-2 text-[10px] text-zinc-600">{reference.role.replace("_", " ")}</span></span>)}</span>;
+}
+
+function RelationshipBadge({ relationship }: { relationship: SDTMSourceRelationship }) {
+  const styles: Record<SDTMSourceRelationship, string> = { direct: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300", stack: "border-violet-500/25 bg-violet-500/10 text-violet-300", join: "border-sky-500/25 bg-sky-500/10 text-sky-300", split: "border-amber-500/25 bg-amber-500/10 text-amber-300", derived: "border-zinc-500/25 bg-zinc-500/10 text-zinc-400" };
+  return <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wider ${styles[relationship]}`}>{relationship}</span>;
+}
+
+export function VariableMappingCards({ variables, onChange, inventory, allowedDatasets, removable = true }: {
+  variables: SDTMVariableDraft[];
+  onChange: (variables: SDTMVariableDraft[]) => void;
+  inventory: SourceInventoryDataset[];
+  allowedDatasets: string[];
+  removable?: boolean;
 }) {
   const update = (index: number, next: SDTMVariableDraft) => onChange(replaceAt(variables, index, next));
   return <div className="space-y-3">{variables.map((variable, index) => <article key={`${variable.name}-${index}`} className="rounded-xl border border-white/10 bg-[#141416] p-4">
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-sm font-black text-violet-200">{variable.name || "[unnamed]"}</p><p className="mt-1 text-xs text-zinc-600">{variable.sources.length} source reference{variable.sources.length === 1 ? "" : "s"} · {variable.mapping_type}</p></div><RemoveButton label={`Remove ${variable.name || `variable ${index + 1}`}`} onClick={() => onChange(variables.filter((_, itemIndex) => itemIndex !== index))} /></div>
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-sm font-black text-violet-200">{variable.name || "[unnamed]"}</p><p className="mt-1 text-xs text-zinc-600">{variable.sources.length} source reference{variable.sources.length === 1 ? "" : "s"} · {variable.mapping_type}</p></div>{removable && <RemoveButton label={`Remove ${variable.name || `variable ${index + 1}`}`} onClick={() => onChange(variables.filter((_, itemIndex) => itemIndex !== index))} />}</div>
     <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label><EditorLabel>SDTM variable</EditorLabel><input value={variable.name} onChange={(event) => update(index, { ...variable, name: event.target.value.toUpperCase() })} className={`${inputClass} font-mono font-bold`} /></label><label><EditorLabel>Label</EditorLabel><input value={variable.label} onChange={(event) => update(index, { ...variable, label: event.target.value })} className={inputClass} /></label><label><EditorLabel>Data type</EditorLabel><select value={variable.data_type} onChange={(event) => update(index, { ...variable, data_type: event.target.value as SDTMDataType })} className={inputClass}><option>Char</option><option>Num</option></select></label><label><EditorLabel>Mapping type</EditorLabel><select aria-label={`${variable.name} mapping type`} value={variable.mapping_type} onChange={(event) => update(index, { ...variable, mapping_type: event.target.value as SDTMMappingType })} className={inputClass}>{["direct", "assigned", "derived", "coalesce", "lookup", "transpose", "aggregate"].map((item) => <option key={item}>{item}</option>)}</select></label></div>
     <div className="mt-3"><SourceReferencesEditor value={variable.sources} onChange={(sources) => update(index, { ...variable, sources })} inventory={inventory} allowedDatasets={allowedDatasets} label={`${variable.name || `Variable ${index + 1}`} sources`} /></div>
     <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="md:col-span-2"><EditorLabel>Mapping logic</EditorLabel><textarea rows={3} value={variable.mapping_expression} onChange={(event) => update(index, { ...variable, mapping_expression: event.target.value })} className={inputClass} /></label><label><EditorLabel>Origin</EditorLabel><input value={variable.origin} onChange={(event) => update(index, { ...variable, origin: event.target.value })} className={inputClass} /></label><label><EditorLabel>Controlled terms</EditorLabel><input value={variable.controlled_terms.join(", ")} onChange={(event) => update(index, { ...variable, controlled_terms: splitList(event.target.value) })} className={inputClass} /></label><label><EditorLabel>aCRF source label</EditorLabel><input value={variable.crf_source_label ?? ""} onChange={(event) => update(index, { ...variable, crf_source_label: event.target.value || null })} className={inputClass} /></label></div>

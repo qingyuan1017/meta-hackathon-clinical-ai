@@ -27,9 +27,13 @@ describe("SDTMReviewEditor", () => {
     expect(screen.getByText("Domain mapping")).toBeInTheDocument();
     expect(screen.getAllByText("RAW_DM")).toHaveLength(2);
     fireEvent.click(screen.getByText("Variable & VLM"));
-    expect(screen.getByText("Review the record pipeline first, then each variable and value-level lineage card.")).toBeInTheDocument();
+    expect(screen.getByText("Review the record pipeline, then use the variable-by-source matrix. Select a row or cell to edit its metadata and detailed lineage.")).toBeInTheDocument();
     expect(screen.getByText("Record construction pipeline")).toBeInTheDocument();
+    expect(screen.getByText("Variable & VLM mapping matrix")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit AGE mapping" }));
     expect(screen.getAllByDisplayValue("AGE")).toHaveLength(2);
+    expect(screen.getByRole("dialog", { name: "Edit AGE" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close variable mapping dialog" }));
     fireEvent.click(screen.getByText("Rule augmentation"));
     expect(screen.getByText("DM.AGE")).toBeInTheDocument();
     fireEvent.click(screen.getByText("aCRF review"));
