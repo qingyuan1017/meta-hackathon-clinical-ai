@@ -52,21 +52,26 @@ afterEach(() => {
 });
 
 describe("AgentActivitySidebar", () => {
-  it("starts collapsed and supports drawer and full-screen history views", async () => {
+  it("starts collapsed and supports docked and full-screen history views", async () => {
     vi.spyOn(api, "agentProgress").mockResolvedValue(progress);
+    const onOpenChange = vi.fn();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><AgentActivitySidebar job={job} /></ReviewDraftProvider></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><AgentActivitySidebar job={job} onOpenChange={onOpenChange} /></ReviewDraftProvider></QueryClientProvider>);
 
     expect(screen.queryByRole("dialog", { name: "Agent activity history" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Agent history" }));
-    expect(screen.getByRole("dialog", { name: "Agent activity history" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Agent activity history" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Agent activity history" })).not.toBeInTheDocument();
+    expect(onOpenChange).toHaveBeenLastCalledWith(true);
 
     fireEvent.click(screen.getByRole("button", { name: "View agent history full screen" }));
+    expect(screen.getByRole("dialog", { name: "Agent activity history" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Exit full screen agent history" })).toHaveAttribute("aria-pressed", "true");
 
     fireEvent.click(screen.getByRole("button", { name: "Collapse agent history" }));
     expect(screen.queryByRole("dialog", { name: "Agent activity history" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Agent history" })).toBeInTheDocument();
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
   });
 
   it("submits human guidance as a stage revision without approval", async () => {
