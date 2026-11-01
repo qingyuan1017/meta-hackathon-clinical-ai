@@ -421,6 +421,7 @@ class SDTMUseCase(ClinicalUseCase):
             1,
             min(context.settings.sdtm_domain_agent_concurrency, len(target_domains) or 1),
         )
+        max_attempts = max(1, min(context.settings.sdtm_domain_agent_max_attempts, 3))
         semaphore = asyncio.Semaphore(concurrency)
         progress_path = context.agent_progress_path
         baseline = self._read_agent_progress(progress_path)
@@ -438,8 +439,22 @@ class SDTMUseCase(ClinicalUseCase):
                 domain_paths[domain] = stage_directory / f"{index:03d}-{domain_slug}.json"
 
         async def run_domain(target_domain: str) -> AgentOutcome:
-            async with semaphore:
-                return await generate(target_domain, domain_paths.get(target_domain))
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    async with semaphore:
+                        return await generate(target_domain, domain_paths.get(target_domain))
+                except Exception as exc:
+                    if attempt >= max_attempts or not self._is_retryable_domain_error(exc):
+                        raise
+                    self._record_domain_retry(
+                        domain_paths.get(target_domain),
+                        target_domain=target_domain,
+                        attempt=attempt + 1,
+                        max_attempts=max_attempts,
+                        error=exc,
+                    )
+                    await asyncio.sleep(0)
+            raise RuntimeError(f"{target_domain} domain agent exhausted its retry attempts.")
 
         stop_monitor = asyncio.Event()
 
@@ -498,6 +513,87 @@ class SDTMUseCase(ClinicalUseCase):
                     status=final_status,
                 )
         return outcomes
+
+    @staticmethod
+    def _is_retryable_domain_error(exc: BaseException) -> bool:
+        status_code = getattr(exc, "status_code", None)
+        if isinstance(status_code, int) and (status_code == 429 or status_code >= 500):
+            return True
+        name = type(exc).__name__.casefold()
+        message = " ".join(str(exc).split()).casefold()
+        retryable_markers = (
+            "timeout",
+            "timed out",
+            "rate limit",
+            "ratelimit",
+            "connection reset",
+            "connection error",
+            "connectionerror",
+            "temporarily unavailable",
+            "service unavailable",
+        )
+        return any(marker in name or marker in message for marker in retryable_markers)
+
+    @staticmethod
+    def _record_domain_retry(
+        path: Path | None,
+        *,
+        target_domain: str,
+        attempt: int,
+        max_attempts: int,
+        error: BaseException,
+    ) -> None:
+        if path is None:
+            return
+        trace: dict[str, Any] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    trace = loaded
+            except (OSError, json.JSONDecodeError):
+                trace = {}
+        events = [event for event in trace.get("events", []) if isinstance(event, dict)]
+        turns = [int(event.get("turn", 0)) for event in events if isinstance(event.get("turn"), int)]
+        turn = max([int(trace.get("turn", 0)), *turns]) + 1
+        now = datetime.now(timezone.utc).isoformat()
+        error_text = " ".join(str(error).split())[:500] or type(error).__name__
+        events.append({
+            "turn": turn,
+            "type": "domain_retry",
+            "actor": "system",
+            "name": "retry_domain_agent",
+            "stage": trace.get("stage"),
+            "ok": True,
+            "error": None,
+            "summary": f"Retrying {target_domain} after a transient model-service failure.",
+            "intent": "Retry only the affected domain while retaining accepted results from other domains.",
+            "input_summary": f"Attempt {attempt - 1} ended with a retryable error.",
+            "output_summary": f"Starting attempt {attempt} of {max_attempts} for {target_domain}.",
+            "input_details": {
+                "Target domain": target_domain,
+                "Prior error": error_text,
+            },
+            "output_details": {
+                "Attempt": attempt,
+                "Maximum attempts": max_attempts,
+                "Other domain results retained": True,
+            },
+            "evidence": ["Per-domain model request trace"],
+            "occurred_at": now,
+        })
+        trace.update({
+            "status": "retrying",
+            "turn": turn,
+            "updated_at": now,
+            "error": None,
+            "last_error": error_text,
+            "events": events,
+        })
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(trace, indent=2, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(path)
 
     @staticmethod
     def _read_agent_progress(path: Path | None) -> dict[str, Any]:

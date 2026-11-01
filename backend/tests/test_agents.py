@@ -772,6 +772,59 @@ async def test_agent_returns_workflow_validator_problems_for_correction(tmp_path
     assert "A reviewed R and SAS condition is required." in tool_messages[-2]["content"]
 
 
+async def test_cdisc_dataset_tool_result_omits_navigation_links_without_losing_metadata(monkeypatch) -> None:
+    variables = [
+        {
+            "name": f"LBVAR{index}",
+            "label": f"Lab variable {index}",
+            "description": "Complete variable metadata",
+            "simpleDatatype": "Char",
+            "core": "Exp",
+            "_links": {"self": {"href": "https://library.example/" + "x" * 1_000}},
+        }
+        for index in range(62)
+    ]
+    raw_payload = {
+        "ok": True,
+        "result": {
+            "result": {
+                "name": "LB",
+                "label": "Laboratory Test Results",
+                "datasetVariables": variables,
+                "_links": {"self": {"href": "https://library.example/datasets/LB"}},
+            }
+        },
+    }
+
+    async def fake_call(_clients, _call):
+        return json.dumps(raw_payload)
+
+    monkeypatch.setattr(MetaAIClient, "_call_mcp_tool", fake_call)
+    settings = agent_settings()
+    runner = ClinicalAgentRunner(
+        definition=STAGE_AGENTS[1][1],
+        result_model=SDTMVariableMappingPlan,
+        ai=MetaAIClient(settings),
+        settings=settings,
+    )
+    call = SimpleNamespace(function=SimpleNamespace(name="cdisc_get_dataset"))
+    result = await runner._run_remote_tool(
+        call,
+        {"cdisc_get_dataset": SimpleNamespace()},
+        {"contract_inspected": True, "remote_calls": 0},
+    )
+
+    dataset = result["result"]["result"]
+    assert len(dataset["datasetVariables"]) == 62
+    assert dataset["datasetVariables"][0]["description"] == "Complete variable metadata"
+    assert "_links" not in json.dumps(result)
+    assert result["reference_response"] == {
+        "complete_metadata": True,
+        "navigation_link_fields_omitted": 63,
+    }
+    assert len(json.dumps(result)) < len(json.dumps(raw_payload)) / 3
+
+
 def test_sdtm_submit_tool_uses_shallow_provider_schema() -> None:
     settings = agent_settings()
     runner = ClinicalAgentRunner(
@@ -1434,6 +1487,78 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     rule_calls_by_target = {call["target"]: call for call in rule_calls}
     assert '"domain":"AE"' not in rule_calls_by_target["DM"]["source"]
     assert '"domain":"DM"' not in rule_calls_by_target["AE"]["source"]
+
+
+async def test_sdtm_parallel_domain_agents_retry_only_transiently_failed_domain(tmp_path) -> None:
+    progress_path = tmp_path / "agent" / "progress.json"
+    attempts = {"DM": 0, "LB": 0}
+
+    async def generate(domain: str, path) -> AgentOutcome:
+        attempts[domain] += 1
+        prior = {}
+        if path is not None and path.is_file():
+            prior = json.loads(path.read_text(encoding="utf-8"))
+        events = [event for event in prior.get("events", []) if isinstance(event, dict)]
+        if domain == "LB" and attempts[domain] == 1:
+            if path is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({
+                    "status": "paused",
+                    "turn": 1,
+                    "stage": "Variable & value-level mapping",
+                    "events": events,
+                    "error": "Model API call failed: Request timed out.",
+                }), encoding="utf-8")
+            raise TimeoutError("Request timed out.")
+        now = f"2026-11-01T15:2{attempts[domain]}:00+00:00"
+        events.append({
+            "turn": max([int(item.get("turn", 0)) for item in events] or [0]) + 1,
+            "type": "tool",
+            "name": "submit_result",
+            "summary": "Submitted mapping",
+            "occurred_at": now,
+        })
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "status": "completed",
+                "turn": events[-1]["turn"],
+                "stage": "Variable & value-level mapping",
+                "events": events,
+                "updated_at": now,
+                "completed_at": now,
+            }), encoding="utf-8")
+        return AgentOutcome(value=StudySummary(study_title=domain), warnings=[], events=events)
+
+    outcomes = await SDTMUseCase()._run_parallel_domain_agents(
+        UseCaseContext(
+            inputs=[],
+            options={},
+            ai=SimpleNamespace(),
+            settings=agent_settings(
+                sdtm_domain_agent_concurrency=2,
+                sdtm_domain_agent_max_attempts=2,
+            ),
+            agent_progress_path=progress_path,
+        ),
+        target_domains=["DM", "LB"],
+        stage="Variable & value-level mapping",
+        stage_index=2,
+        stage_count=3,
+        completed_stages=["Domain mapping"],
+        generate=generate,
+    )
+
+    assert [outcome.value.study_title for outcome in outcomes] == ["DM", "LB"]
+    assert attempts == {"DM": 1, "LB": 2}
+    merged = json.loads(progress_path.read_text(encoding="utf-8"))
+    retry = next(event for event in merged["events"] if event["type"] == "domain_retry")
+    assert retry["input_details"]["Target domain"] == "LB"
+    assert retry["output_details"]["Other domain results retained"] is True
+    assert {item["domain"]: item["status"] for item in merged["domain_agents"]} == {
+        "DM": "completed",
+        "LB": "completed",
+    }
 
 
 async def test_completed_variable_domain_rerun_also_refreshes_only_its_rules(tmp_path, monkeypatch) -> None:

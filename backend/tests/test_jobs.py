@@ -153,6 +153,12 @@ def test_sanitize_error_unwraps_nested_exception_groups() -> None:
     assert sanitize_error(error) == "JSON schema exceeds the maximum nesting depth of 10 levels"
 
 
+def test_sanitize_error_recognizes_timed_out_wording() -> None:
+    assert sanitize_error(TimeoutError("Request timed out.")) == (
+        "The Meta API request timed out. Retry the job or choose a smaller input."
+    )
+
+
 async def test_completed_sdtm_domain_rerun_builds_review_patch_without_replacing_baseline(tmp_path, monkeypatch) -> None:
     baseline = SDTMPlan.model_validate({
         "study_name": "SYN-RERUN",

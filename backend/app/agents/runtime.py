@@ -568,7 +568,53 @@ class ClinicalAgentRunner:
         except Exception as exc:
             return {"ok": False, "error": f"External tool failed: {str(exc)[:500]}"}
         payload = json.loads(raw)
-        return payload if isinstance(payload, dict) else {"ok": True, "result": payload}
+        normalized = payload if isinstance(payload, dict) else {"ok": True, "result": payload}
+        return self._compact_remote_tool_result(call.function.name, normalized)
+
+    @classmethod
+    def _compact_remote_tool_result(cls, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Remove non-semantic CDISC navigation metadata before the next model turn.
+
+        CDISC dataset responses repeat large hyperlink collections for the dataset and
+        every variable. Those links are useful to an interactive API client but do not
+        inform an SDTM mapping decision. Keeping all clinical metadata while removing
+        only `_links` prevents the reference response from dominating the model context.
+        """
+
+        if name not in CDISC_TOOLS:
+            return payload
+        compacted, removed = cls._without_navigation_links(payload)
+        if not isinstance(compacted, dict):
+            compacted = {"ok": True, "result": compacted}
+        if removed:
+            compacted["reference_response"] = {
+                "complete_metadata": True,
+                "navigation_link_fields_omitted": removed,
+            }
+        return compacted
+
+    @classmethod
+    def _without_navigation_links(cls, value: Any) -> tuple[Any, int]:
+        if isinstance(value, dict):
+            result: dict[str, Any] = {}
+            removed = 0
+            for key, item in value.items():
+                if key == "_links":
+                    removed += 1
+                    continue
+                compacted, child_removed = cls._without_navigation_links(item)
+                result[key] = compacted
+                removed += child_removed
+            return result, removed
+        if isinstance(value, list):
+            result = []
+            removed = 0
+            for item in value:
+                compacted, child_removed = cls._without_navigation_links(item)
+                result.append(compacted)
+                removed += child_removed
+            return result, removed
+        return value, 0
 
     def _server_specs(self) -> list[tuple[str, bool, str, tuple[str, ...]]]:
         return [

@@ -296,7 +296,7 @@ def sanitize_error(exc: BaseException) -> str:
     lowered = message.lower()
     if "api key" in lowered or "authorization" in lowered or "unauthorized" in lowered:
         return "The Meta API rejected the configured credentials. Check the server configuration."
-    if "timeout" in lowered:
+    if "timeout" in lowered or "timed out" in lowered:
         return "The Meta API request timed out. Retry the job or choose a smaller input."
     return message or "Generation failed. Review the API logs for details."
 
