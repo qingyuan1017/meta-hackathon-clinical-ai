@@ -2,6 +2,7 @@
 
 import { ArrowDown, ArrowUp, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import type { ReviewPatchOperation } from "@/lib/types";
 import { Button } from "./ui/button";
 
 export type SDTMDataType = "Char" | "Num";
@@ -176,12 +177,14 @@ function RecordOperationFields({ step, priorSteps, allowedDatasets, onChange }: 
   return <div className="space-y-3"><div className="grid gap-3 md:grid-cols-2"><StepSelect label="Input step" value={step.inputs[0] ?? null} options={priorOptions} onChange={(input) => onChange({ inputs: input ? [input] : [] })} /><ListInput label="Group by" value={step.group_by} onChange={(group_by) => onChange({ group_by })} /></div><div className="flex items-center justify-between"><EditorLabel>Aggregations</EditorLabel><button type="button" onClick={() => onChange({ aggregations: [...step.aggregations, { output_variable: "", operation: "count", source_variable: null }] })} className="text-[10px] font-bold text-violet-300">+ aggregation</button></div>{step.aggregations.map((item, index) => <div key={index} className="grid gap-2 md:grid-cols-[1fr_140px_1fr_36px]"><input value={item.output_variable} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, output_variable: event.target.value.toUpperCase() }) })} placeholder="Output variable" className={inputClass} /><select value={item.operation} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, operation: event.target.value as SDTMAggregation["operation"] }) })} className={inputClass}>{["count", "sum", "min", "max", "mean", "first", "last"].map((operation) => <option key={operation}>{operation}</option>)}</select><input disabled={item.operation === "count"} value={item.source_variable ?? ""} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, source_variable: event.target.value.toUpperCase() || null }) })} placeholder="Source variable" className={inputClass} /><RemoveButton label={`Remove aggregation ${index + 1}`} onClick={() => onChange({ aggregations: step.aggregations.filter((_, itemIndex) => itemIndex !== index) })} /></div>)}</div>;
 }
 
-export function VariableMappingMatrix({ variables, onChange, inventory, allowedDatasets, sourceRelationships }: {
+export function VariableMappingMatrix({ variables, onChange, inventory, allowedDatasets, sourceRelationships, domain, proposalOperations = [] }: {
   variables: SDTMVariableDraft[];
   onChange: (variables: SDTMVariableDraft[]) => void;
   inventory: SourceInventoryDataset[];
   allowedDatasets: string[];
   sourceRelationships: Array<{ dataset: string; relationship: SDTMSourceRelationship }>;
+  domain?: string;
+  proposalOperations?: ReviewPatchOperation[];
 }) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [addingVlmColumn, setAddingVlmColumn] = useState(false);
@@ -189,7 +192,11 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
   const [vlmWhereClause, setVlmWhereClause] = useState("");
   const [vlmTargetIndexes, setVlmTargetIndexes] = useState<number[]>([]);
   const selected = selectedIndex === null ? null : variables[selectedIndex] ?? null;
-  const sourceColumns = buildVariableMatrixColumns(variables, allowedDatasets, sourceRelationships);
+  const proposedVariables = proposalOperations.length && domain
+    ? projectVariableMappingProposal(domain, variables, proposalOperations)
+    : variables;
+  const sourceColumns = buildVariableMatrixColumns([...variables, ...proposedVariables], allowedDatasets, sourceRelationships);
+  const currentColumnKeys = new Set(buildVariableMatrixColumns(variables, allowedDatasets, sourceRelationships).map((column) => column.key));
   const updateSelected = (next: SDTMVariableDraft[]) => {
     if (selectedIndex === null || !next[0]) return;
     onChange(replaceAt(variables, selectedIndex, next[0]));
@@ -226,7 +233,8 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
     <section className="overflow-hidden rounded-xl border border-white/10 bg-[#121214]">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/[0.07] px-4 py-3">
         <div><p className="text-xs font-black uppercase tracking-[0.12em] text-violet-200">Variable &amp; VLM mapping matrix</p>
-        <p className="mt-1 max-w-4xl text-xs leading-5 text-zinc-500">Rows are SDTM variables. Direct and stack sources remain separate columns; joined lookup sources are labeled separately because they add columns rather than append records. Each value-level condition is a shared column, so related test code, result, and unit mappings can be reviewed in the correct cells.</p></div>
+        <p className="mt-1 max-w-4xl text-xs leading-5 text-zinc-500">Rows are SDTM variables. Direct and stack sources remain separate columns; joined lookup sources are labeled separately because they add columns rather than append records. Each value-level condition is a shared column, so related test code, result, and unit mappings can be reviewed in the correct cells.</p>
+        {proposalOperations.length > 0 && <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px]"><span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-1 font-black uppercase tracking-wider text-amber-200">Proposed overlay · {proposalOperations.length} changes</span><span className="text-zinc-500">Changed cells show current and proposed content together. Unmarked cells remain unchanged.</span></div>}</div>
         <Button type="button" variant="outline" size="sm" onClick={openVlmColumnDialog}><Plus size={13} />Add VLM column</Button>
       </div>
       <div className="overflow-x-auto">
@@ -236,26 +244,29 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
               <th className="sticky left-0 z-10 min-w-56 border-b border-r border-white/[0.07] bg-[#101012] px-3 py-3">SDTM variable</th>
               {sourceColumns.map((column) => <th key={column.key} className="min-w-48 border-b border-r border-white/[0.07] px-3 py-3 align-top last:border-r-0">
                 <div className="flex items-start justify-between gap-2"><div><div className="flex items-center gap-2"><span className="font-mono font-bold text-zinc-200">{column.dataset}</span><RelationshipBadge relationship={column.relationship} /></div>
-                {column.whereClause && <span className="mt-1 block max-w-64 whitespace-normal font-mono text-[10px] font-normal leading-4 text-cyan-300">{column.whereClause}</span>}</div>
-                {column.whereClause && <button type="button" aria-label={`Remove VLM column ${column.dataset} ${column.whereClause}`} onClick={() => removeVlmColumn(column)} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={12} /></button>}</div>
+                {column.whereClause && <span className="mt-1 block max-w-64 whitespace-normal font-mono text-[10px] font-normal leading-4 text-cyan-300">{column.whereClause}</span>}{!currentColumnKeys.has(column.key) && <span className="mt-1 inline-block rounded-full border border-emerald-400/20 bg-emerald-400/10 px-1.5 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-300">Proposed column</span>}</div>
+                {column.whereClause && currentColumnKeys.has(column.key) && <button type="button" aria-label={`Remove VLM column ${column.dataset} ${column.whereClause}`} onClick={() => removeVlmColumn(column)} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={12} /></button>}</div>
               </th>)}
               {!sourceColumns.length && <th className="min-w-48 border-b border-white/[0.07] px-3 py-3 text-zinc-600">Assigned / derived</th>}
             </tr>
           </thead>
           <tbody>
-            {variables.map((variable, index) => <tr key={`${variable.name}-${index}`} className="group border-b border-white/[0.05] last:border-b-0">
+            {variables.map((variable, index) => {
+              const proposed = proposedVariables[index] ?? variable;
+              const metadataChanged = variableMetadataSignature(variable) !== variableMetadataSignature(proposed);
+              return <tr key={`${variable.name}-${index}`} className="group border-b border-white/[0.05] last:border-b-0">
               <th className="sticky left-0 z-[5] border-r border-white/[0.07] bg-[#121214] p-0 group-hover:bg-[#17171a]">
                 <button type="button" aria-label={`Edit ${variable.name || `variable ${index + 1}`} mapping`} onClick={() => setSelectedIndex(index)} className="flex w-full items-start justify-between gap-3 px-3 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
-                  <span><span className="block font-mono text-sm font-black text-violet-200">{variable.name || "[unnamed]"}</span><span className="mt-1 block font-normal text-zinc-500">{variable.label || "No label"} · {variable.data_type}</span></span><Pencil size={13} className="mt-1 shrink-0 text-zinc-600 group-hover:text-violet-300" />
+                  <span><span className="block font-mono text-sm font-black text-violet-200">{variable.name || "[unnamed]"}</span><span className="mt-1 block font-normal text-zinc-500">{variable.label || "No label"} · {variable.data_type} · {variable.mapping_type}</span>{metadataChanged && <span className="mt-2 block rounded-md border border-amber-400/20 bg-amber-400/[0.07] p-2 text-[10px] font-normal leading-4"><span className="font-black uppercase tracking-wider text-amber-200">Proposed metadata</span><span className="mt-1 block text-emerald-200">{proposed.label || "No label"} · {proposed.data_type} · {proposed.mapping_type}</span>{variable.mapping_expression !== proposed.mapping_expression && <span className="mt-1 block whitespace-normal text-zinc-400">Logic: {proposed.mapping_expression || "Not present"}</span>}</span>}</span><Pencil size={13} className="mt-1 shrink-0 text-zinc-600 group-hover:text-violet-300" />
                 </button>
               </th>
               {sourceColumns.map((column) => <td key={column.key} className="border-r border-white/[0.05] p-0 align-top last:border-r-0">
                 <button type="button" aria-label={`Edit ${variable.name || `variable ${index + 1}`} for ${column.dataset}${column.whereClause ? ` ${column.whereClause}` : ""}`} onClick={() => setSelectedIndex(index)} className="min-h-16 w-full px-3 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
-                  <MatrixCell variable={variable} column={column} />
+                  <MatrixCell variable={variable} proposedVariable={proposed} column={column} />
                 </button>
               </td>)}
               {!sourceColumns.length && <td className="px-3 py-3 text-zinc-500">{variable.mapping_type}</td>}
-            </tr>)}
+            </tr>;})}
           </tbody>
         </table>
       </div>
@@ -309,18 +320,135 @@ function buildVariableMatrixColumns(variables: SDTMVariableDraft[], allowedDatas
   return columns;
 }
 
-function MatrixCell({ variable, column }: { variable: SDTMVariableDraft; column: VariableMatrixColumn }) {
-  const matchingVlm = column.whereClause
-    ? variable.value_level_metadata.filter((vlm) => canonicalWhereClause(vlm.where_clause) === canonicalWhereClause(column.whereClause ?? ""))
-    : [];
-  const references = column.whereClause
-    ? matchingVlm.flatMap((vlm) => vlm.sources).filter((source) => source.dataset === column.dataset)
-    : variable.sources.filter((source) => source.dataset === column.dataset);
-  const assigned = matchingVlm.find((vlm) => !vlm.sources.length && allowsSourcelessVlmOrigin(vlm.origin));
-  if (!references.length && assigned) return <span><span className="block font-bold text-amber-300">Assigned / derived</span><span className="mt-1 block max-w-56 truncate text-[10px] text-zinc-600">{assigned.mapping_expression}</span></span>;
-  if (!references.length) return <span className="text-zinc-700">—</span>;
-  return <span className="space-y-1">{references.map((reference, index) => <span key={`${reference.variable}-${reference.role}-${index}`} className="block"><span className="font-mono font-bold text-zinc-200">{reference.variable || "[variable]"}</span><span className="ml-2 text-[10px] text-zinc-600">{reference.role.replace("_", " ")}</span></span>)}</span>;
+interface MatrixCellState {
+  references: SDTMSourceReference[];
+  vlm: SDTMValueLevelMetadataDraft | null;
 }
+
+function MatrixCell({ variable, proposedVariable, column }: { variable: SDTMVariableDraft; proposedVariable: SDTMVariableDraft; column: VariableMatrixColumn }) {
+  const current = matrixCellState(variable, column);
+  const proposed = matrixCellState(proposedVariable, column);
+  if (JSON.stringify(current) === JSON.stringify(proposed)) return <MatrixCellValue state={current} />;
+  return <span className="block rounded-lg border border-amber-400/25 bg-amber-400/[0.06] p-2">
+    <span className="block text-[9px] font-black uppercase tracking-wider text-rose-300">Current</span>
+    <span className="mt-1 block opacity-65"><MatrixCellValue state={current} showLogic /></span>
+    <span className="mt-2 block border-t border-amber-300/15 pt-2 text-[9px] font-black uppercase tracking-wider text-emerald-300">Proposed</span>
+    <span className="mt-1 block"><MatrixCellValue state={proposed} showLogic proposed /></span>
+  </span>;
+}
+
+function matrixCellState(variable: SDTMVariableDraft, column: VariableMatrixColumn): MatrixCellState {
+  if (!column.whereClause) return {
+    references: variable.sources.filter((source) => source.dataset === column.dataset),
+    vlm: null,
+  };
+  const matching = variable.value_level_metadata.find((vlm) => canonicalWhereClause(vlm.where_clause) === canonicalWhereClause(column.whereClause ?? ""));
+  if (!matching) return { references: [], vlm: null };
+  const references = matching.sources.filter((source) => source.dataset === column.dataset);
+  const ownsAssignedCell = !matching.sources.length && allowsSourcelessVlmOrigin(matching.origin);
+  return { references, vlm: references.length || ownsAssignedCell ? matching : null };
+}
+
+function MatrixCellValue({ state, showLogic = false, proposed = false }: { state: MatrixCellState; showLogic?: boolean; proposed?: boolean }) {
+  if (!state.references.length && state.vlm && !state.vlm.sources.length) return <span><span className={`block font-bold ${proposed ? "text-emerald-200" : "text-amber-300"}`}>Assigned / derived</span>{showLogic && <span className="mt-1 block whitespace-normal text-[10px] leading-4 text-zinc-500">{state.vlm.mapping_expression}</span>}</span>;
+  if (!state.references.length) return <span className="text-zinc-700">{showLogic ? "Empty cell" : "—"}</span>;
+  return <span className="space-y-1">{state.references.map((reference, index) => <span key={`${reference.dataset}-${reference.variable}-${reference.role}-${index}`} className="block"><span className={`font-mono font-bold ${proposed ? "text-emerald-200" : "text-zinc-200"}`}>{reference.variable || "[variable]"}</span><span className="ml-2 text-[10px] text-zinc-600">{reference.role.replace("_", " ")}</span></span>)}{showLogic && state.vlm && <span className="mt-1 block whitespace-normal text-[10px] leading-4 text-zinc-500">{state.vlm.mapping_expression}</span>}</span>;
+}
+
+function variableMetadataSignature(variable: SDTMVariableDraft): string {
+  return JSON.stringify({
+    name: variable.name,
+    label: variable.label,
+    data_type: variable.data_type,
+    mapping_type: variable.mapping_type,
+    origin: variable.origin,
+    mapping_expression: variable.mapping_expression,
+    controlled_terms: variable.controlled_terms,
+    crf_source_label: variable.crf_source_label,
+  });
+}
+
+export function projectVariableMappingProposal(domain: string, variables: SDTMVariableDraft[], operations: ReviewPatchOperation[]): SDTMVariableDraft[] {
+  const projected = structuredClone(variables);
+  for (const operation of operations) {
+    const match = operation.path.match(/^\/variable_mapping\/datasets\/domain=([^/]+)\/variables\/name=([^/]+)(?:\/(.*))?$/);
+    if (!match || decodePatchSelector(match[1]).toUpperCase() !== domain.toUpperCase()) continue;
+    const variableName = decodePatchSelector(match[2]).toUpperCase();
+    const variableIndex = projected.findIndex((variable) => variable.name.toUpperCase() === variableName);
+    if (variableIndex < 0) continue;
+    const tail = match[3] ?? "";
+    if (!tail) {
+      if (isRecord(operation.after)) projected[variableIndex] = normalizeVariable(operation.after as unknown as SDTMVariableDraft);
+      continue;
+    }
+    applyVariableProposalOperation(projected[variableIndex], tail, operation.after);
+  }
+  return projected;
+}
+
+function applyVariableProposalOperation(variable: SDTMVariableDraft, tail: string, after: unknown): void {
+  const segments = tail.split("/").map(decodePatchSelector);
+  const [section, selector, field] = segments;
+  if (section === "sources" && selector?.startsWith("variable=")) {
+    const sourceVariable = selector.slice("variable=".length).toUpperCase();
+    const index = variable.sources.findIndex((source) => source.variable.toUpperCase() === sourceVariable);
+    if (after === null) {
+      if (index >= 0) variable.sources.splice(index, 1);
+    } else if (isRecord(after)) {
+      const source = normalizeSourceReference(after);
+      if (index >= 0) variable.sources[index] = source;
+      else variable.sources.push(source);
+    }
+    return;
+  }
+  if (section === "value_level_metadata" && selector?.startsWith("where_clause=")) {
+    const whereClause = selector.slice("where_clause=".length);
+    const index = variable.value_level_metadata.findIndex((item) => canonicalWhereClause(item.where_clause) === canonicalWhereClause(whereClause));
+    if (!field) {
+      if (after === null) {
+        if (index >= 0) variable.value_level_metadata.splice(index, 1);
+      } else if (isRecord(after)) {
+        const item = normalizeVlm(after);
+        if (index >= 0) variable.value_level_metadata[index] = item;
+        else variable.value_level_metadata.push(item);
+      }
+      return;
+    }
+    if (index < 0) return;
+    const item = variable.value_level_metadata[index] as unknown as Record<string, unknown>;
+    item[field] = structuredClone(after);
+    variable.value_level_metadata[index] = normalizeVlm(item);
+    return;
+  }
+  if (segments.length === 1) {
+    const record = variable as unknown as Record<string, unknown>;
+    record[section] = structuredClone(after);
+    Object.assign(variable, normalizeVariable(variable));
+  }
+}
+
+function normalizeSourceReference(value: Record<string, unknown>): SDTMSourceReference {
+  const role = stringValue(value.role, "value");
+  return {
+    dataset: stringValue(value.dataset, ""),
+    variable: stringValue(value.variable, ""),
+    role: roles.includes(role as SDTMSourceRole) ? role as SDTMSourceRole : "value",
+  };
+}
+
+function normalizeVlm(value: Record<string, unknown>): SDTMValueLevelMetadataDraft {
+  return {
+    where_clause: stringValue(value.where_clause, ""),
+    label: stringValue(value.label, ""),
+    data_type: value.data_type === "Num" ? "Num" : "Char",
+    origin: stringValue(value.origin, "CRF"),
+    mapping_expression: stringValue(value.mapping_expression, ""),
+    sources: arrayValue<Record<string, unknown>>(value.sources).map(normalizeSourceReference),
+    controlled_terms: arrayValue<string>(value.controlled_terms),
+  };
+}
+
+function decodePatchSelector(value: string): string { return value.replaceAll("~1", "/").replaceAll("~0", "~"); }
 
 function RelationshipBadge({ relationship }: { relationship: SDTMSourceRelationship }) {
   const styles: Record<SDTMSourceRelationship, string> = { direct: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300", stack: "border-violet-500/25 bg-violet-500/10 text-violet-300", join: "border-sky-500/25 bg-sky-500/10 text-sky-300", split: "border-amber-500/25 bg-amber-500/10 text-amber-300", derived: "border-zinc-500/25 bg-zinc-500/10 text-zinc-400" };

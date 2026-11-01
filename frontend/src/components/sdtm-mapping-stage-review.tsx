@@ -2,7 +2,7 @@
 
 import { useMemo, useState, type DragEvent, type ReactNode } from "react";
 import { AlertTriangle, ArrowRight, Database, GripVertical, Plus, Save, Table2, Trash2 } from "lucide-react";
-import type { Job } from "@/lib/types";
+import type { Job, ReviewPatchOperation } from "@/lib/types";
 import type { RevisionFeedbackEvent } from "@/lib/revision-decision";
 import { groupOperationsByDomain, ReviewPatchPanel } from "./review-patch-panel";
 import { RevisionDecisionPanel } from "./revision-decision-panel";
@@ -176,10 +176,18 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
       ? groupOperationsByDomain(reviewJob.review_patch.operations, recordValue(reviewJob.result)).map((group) => [group.domain, group.operations.length])
       : [],
   );
+  const activeProposalOperations = active && reviewJob?.review_patch?.stage === "variable_mapping"
+    ? reviewJob.review_patch.operations.filter((operation) => operation.path.includes(`/variable_mapping/datasets/domain=${encodePatchSelector(active.domain)}/`))
+    : [];
   const activeAssumptions = active ? domainReviewNotes(plan, envelope.domain_mapping, active.domain, "review_assumptions") : [];
   const activeUnresolved = active ? domainReviewNotes(plan, envelope.domain_mapping, active.domain, "review_unresolved_mappings") : [];
+  const proposedActiveAssumptions = active ? proposedArrayValue(activeProposalOperations, `/variable_mapping/datasets/domain=${encodePatchSelector(active.domain)}/review_assumptions`) : null;
+  const proposedActiveUnresolved = active ? proposedArrayValue(activeProposalOperations, `/variable_mapping/datasets/domain=${encodePatchSelector(active.domain)}/review_unresolved_mappings`) : null;
   const stageAssumptions = stageWideReviewNotes(plan, envelope.domain_mapping, "assumptions");
   const stageUnresolved = stageWideReviewNotes(plan, envelope.domain_mapping, "unresolved_mappings");
+  const stageProposalOperations = reviewJob?.review_patch?.stage === "variable_mapping" ? reviewJob.review_patch.operations : [];
+  const proposedStageAssumptions = proposedArrayValue(stageProposalOperations, "/variable_mapping/assumptions");
+  const proposedStageUnresolved = proposedArrayValue(stageProposalOperations, "/variable_mapping/unresolved_mappings");
 
   return <div className="space-y-5">
     <ReviewGateHeader step="3 of 3" title="Variable and value-level mapping review required" description="Review each SDTM variable row and the VLM cells. Rule augmentation and code generation remain blocked until this matrix is approved." />
@@ -194,16 +202,17 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
         <label><EditorLabel>Structure</EditorLabel><input value={active.structure} onChange={(event) => updateDataset(plan, active.domain, update, "structure", event.target.value)} className={inputClass} /></label>
         <Button type="button" variant="outline" className="mt-5" onClick={() => update((next) => { const dataset = next.datasets.find((item) => item.domain === active.domain); if (dataset) dataset.variables.push(newSourceVariable("NEWVAR", allowedSources[0] ?? "")); })}><Plus size={14} />Variable</Button>
       </div>
-      {reviewJob?.review_patch && <div className="px-4"><ReviewPatchPanel job={reviewJob} domain={active.domain} /></div>}
       <div className="border-b border-white/10 p-4"><ReviewNotes
         title={`${active.domain} mapping comments`}
         assumptions={activeAssumptions}
         unresolved={activeUnresolved}
+        proposedAssumptions={proposedActiveAssumptions}
+        proposedUnresolved={proposedActiveUnresolved}
         onAssumptions={(items) => updateDomainReviewNotes(active.domain, "review_assumptions", items, update)}
         onUnresolved={(items) => updateDomainReviewNotes(active.domain, "review_unresolved_mappings", items, update)}
       /></div>
       <div className="space-y-4 p-4">
-        <VariableMappingMatrix variables={active.variables} inventory={envelope.source_spec.datasets} allowedDatasets={allowedSources} sourceRelationships={envelope.domain_mapping.domain_mappings.filter((item) => item.target_domain === active.domain).map((item) => ({ dataset: item.source_dataset, relationship: item.relationship }))} onChange={(variables) => updateDataset(plan, active.domain, update, "variables", variables)} />
+        <VariableMappingMatrix variables={active.variables} inventory={envelope.source_spec.datasets} allowedDatasets={allowedSources} sourceRelationships={envelope.domain_mapping.domain_mappings.filter((item) => item.target_domain === active.domain).map((item) => ({ dataset: item.source_dataset, relationship: item.relationship }))} domain={active.domain} proposalOperations={activeProposalOperations} onChange={(variables) => updateDataset(plan, active.domain, update, "variables", variables)} />
       </div>
       {(activeAssumptions.length > 0 || activeUnresolved.length > 0) && <div className="border-t border-white/10 p-4"><RevisionDecisionPanel
         result={{ assumptions: activeAssumptions, unresolved_mappings: activeUnresolved }}
@@ -213,9 +222,8 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
         onlyMatchedFeedback
       /></div>}
     </section>}
-    {reviewJob?.review_patch && <ReviewPatchPanel job={reviewJob} domain="General" />}
     {(stageAssumptions.length > 0 || stageUnresolved.length > 0) && <>
-      <ReviewNotes title="Stage-wide comments" assumptions={stageAssumptions} unresolved={stageUnresolved} onAssumptions={(items) => update((next) => { next.assumptions = mergeStageAndDomainNotes(items, next.datasets, "review_assumptions"); })} onUnresolved={(items) => update((next) => { next.unresolved_mappings = mergeStageAndDomainNotes(items, next.datasets, "review_unresolved_mappings"); })} />
+      <ReviewNotes title="Stage-wide comments" assumptions={stageAssumptions} unresolved={stageUnresolved} proposedAssumptions={proposedStageAssumptions} proposedUnresolved={proposedStageUnresolved} onAssumptions={(items) => update((next) => { next.assumptions = mergeStageAndDomainNotes(items, next.datasets, "review_assumptions"); })} onUnresolved={(items) => update((next) => { next.unresolved_mappings = mergeStageAndDomainNotes(items, next.datasets, "review_unresolved_mappings"); })} />
       <RevisionDecisionPanel result={{ assumptions: stageAssumptions, unresolved_mappings: stageUnresolved }} events={feedbackEvents} title="Stage-wide feedback decisions" ariaLabel="Stage-wide feedback decisions" onlyMatchedFeedback />
     </>}
     <ApprovalBar issues={issues} error={error} saving={saving} readyText="Every approved domain has a reviewable variable matrix." actionText="Approve mappings and generate rules/code" onApprove={() => onApprove(plan)} />
@@ -223,7 +231,8 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
 }
 
 function ReviewGateHeader({ step, title, description }: { step: string; title: string; description: string }) { return <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-4"><p className="text-xs font-black uppercase tracking-[0.14em] text-amber-200">Review gate {step}</p><p className="mt-1 text-base font-bold text-amber-100">{title}</p><p className="mt-1 text-sm leading-6 text-amber-100/75">{description}</p></div>; }
-function ReviewNotes({ title, assumptions, unresolved, onAssumptions, onUnresolved }: { title?: string; assumptions: string[]; unresolved: string[]; onAssumptions: (items: string[]) => void; onUnresolved: (items: string[]) => void }) { return <section>{title && <p className="mb-3 text-xs font-black uppercase tracking-[0.12em] text-zinc-400">{title}</p>}<div className="grid gap-4 md:grid-cols-2"><label><EditorLabel>Assumptions — one per line</EditorLabel><textarea value={assumptions.join("\n")} onChange={(event) => onAssumptions(splitLines(event.target.value))} className={`${inputClass} min-h-28`} /></label><label><EditorLabel>Unresolved mappings — one per line</EditorLabel><textarea value={unresolved.join("\n")} onChange={(event) => onUnresolved(splitLines(event.target.value))} className={`${inputClass} min-h-28`} /></label></div></section>; }
+function ReviewNotes({ title, assumptions, unresolved, proposedAssumptions, proposedUnresolved, onAssumptions, onUnresolved }: { title?: string; assumptions: string[]; unresolved: string[]; proposedAssumptions?: string[] | null; proposedUnresolved?: string[] | null; onAssumptions: (items: string[]) => void; onUnresolved: (items: string[]) => void }) { return <section>{title && <p className="mb-3 text-xs font-black uppercase tracking-[0.12em] text-zinc-400">{title}</p>}<div className="grid gap-4 md:grid-cols-2"><label><EditorLabel>Assumptions — one per line</EditorLabel><textarea value={assumptions.join("\n")} onChange={(event) => onAssumptions(splitLines(event.target.value))} className={`${inputClass} min-h-28`} />{proposedAssumptions && JSON.stringify(proposedAssumptions) !== JSON.stringify(assumptions) && <ProposedNoteValue label="Proposed assumptions" items={proposedAssumptions} />}</label><label><EditorLabel>Unresolved mappings — one per line</EditorLabel><textarea value={unresolved.join("\n")} onChange={(event) => onUnresolved(splitLines(event.target.value))} className={`${inputClass} min-h-28`} />{proposedUnresolved && JSON.stringify(proposedUnresolved) !== JSON.stringify(unresolved) && <ProposedNoteValue label="Proposed unresolved mappings" items={proposedUnresolved} />}</label></div></section>; }
+function ProposedNoteValue({ label, items }: { label: string; items: string[] }) { return <span className="mt-2 block rounded-lg border border-amber-400/20 bg-amber-400/[0.06] p-3"><span className="block text-[9px] font-black uppercase tracking-wider text-amber-200">{label}</span><span className="mt-1 block whitespace-pre-wrap text-xs leading-5 text-emerald-100/80">{items.length ? items.join("\n") : "No entries proposed."}</span></span>; }
 function ApprovalBar({ issues, error, saving, readyText, actionText, onApprove }: { issues: string[]; error?: string | null; saving: boolean; readyText: string; actionText: string; onApprove: () => void }) { return <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between"><div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="flex items-center gap-2 text-xs font-bold text-emerald-300"><Table2 size={15} />{readyText}</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div><Button type="button" variant="clinical" onClick={onApprove} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Approving and resuming…" : actionText}</Button></div>; }
 function EditorLabel({ children }: { children: ReactNode }) { return <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">{children}</span>; }
 
@@ -316,5 +325,7 @@ function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()
 function recordValue(value: unknown): Record<string, unknown> { return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
 function stringValue(value: unknown, fallback: string): string { return typeof value === "string" ? value : fallback; }
 function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
+function proposedArrayValue(operations: ReviewPatchOperation[], path: string): string[] | null { const operation = operations.find((item) => item.path === path); return operation && Array.isArray(operation.after) ? operation.after.filter((item): item is string => typeof item === "string") : null; }
+function encodePatchSelector(value: string): string { return value.replaceAll("~", "~0").replaceAll("/", "~1"); }
 function allowsSourcelessOrigin(value: string): boolean { const normalized = value.trim().toLowerCase(); return ["assigned", "derived", "protocol", "system", "sponsor"].some((token) => normalized.includes(token)); }
 function splitLines(value: string): string[] { return value.split("\n").map((item) => item.trim()).filter(Boolean); }

@@ -227,7 +227,7 @@ describe("SDTM mapping review gates", () => {
     }));
   });
 
-  it("shows each feedback decision inside its respective domain tab", () => {
+  it("projects each domain proposal directly into its active mapping matrix", () => {
     const sourceWithAe = { ...source, datasets: [...source.datasets, { name: "RAW_AE", label: "Adverse events", source_type: "raw" }] };
     const domainWithAe = { ...domain, domain_mappings: [...domain.domain_mappings, { source_dataset: "RAW_AE", source_type: "raw", target_domain: "AE", relationship: "direct", rationale: "AE source" }] };
     const variableWithAe = structuredClone(variable);
@@ -243,6 +243,7 @@ describe("SDTM mapping review gates", () => {
         submitted_at: "2026-10-31T12:00:00Z", decided_at: null, reviewer: null,
         operations: [
           { path: "/variable_mapping/datasets/domain=DM/variables/name=AGE/mapping_expression", before: "Direct", after: "AGE" },
+          { path: "/variable_mapping/datasets/domain=DM/variables/name=AGE/value_level_metadata/where_clause=AGECAT = 'ADULT'", before: null, after: { where_clause: "AGECAT = 'ADULT'", label: "Adult age", data_type: "Num", origin: "Derived", mapping_expression: "Use AGE for adult subjects", sources: [{ dataset: "RAW_DM", variable: "AGE_BAND", role: "value" }], controlled_terms: [] } },
           { path: "/variable_mapping/datasets/domain=AE/variables/name=AETERM/mapping_expression", before: "Direct", after: "trim(AETERM)" },
         ],
       },
@@ -250,10 +251,15 @@ describe("SDTM mapping review gates", () => {
     const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
     render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={reviewJob.id}><SDTMVariableMappingReview value={result} onChange={vi.fn()} onApprove={vi.fn()} saving={false} reviewJob={reviewJob} /></ReviewDraftProvider></QueryClientProvider>);
 
-    expect(screen.getByRole("region", { name: "DM feedback decision" })).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "AE feedback decision" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /AE\s*1/ }));
-    expect(screen.getByRole("region", { name: "AE feedback decision" })).toBeInTheDocument();
+    expect(screen.getByText("Proposed overlay · 2 changes")).toBeInTheDocument();
+    expect(screen.getByText("Logic: AGE")).toBeInTheDocument();
+    expect(screen.getByText("AGECAT = 'ADULT'")).toBeInTheDocument();
+    expect(screen.getByText("AGE_BAND")).toBeInTheDocument();
+    expect(screen.getByText("Empty cell")).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "DM feedback decision" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /AE\s*1/ }));
+    expect(screen.getByText("Proposed overlay · 1 changes")).toBeInTheDocument();
+    expect(screen.getByText("Logic: trim(AETERM)")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "AE feedback decision" })).not.toBeInTheDocument();
   });
 });
