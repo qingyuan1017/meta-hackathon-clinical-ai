@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { Bot, CheckCircle2, Circle, Info } from "lucide-react";
 import { ConfigStatus } from "@/components/config-status";
 import { AgentActivitySidebar } from "@/components/agent-activity-sidebar";
@@ -21,6 +22,7 @@ export default function WorkflowPage() {
   const workflow = params.workflow as Workflow;
   const definition = workflowById[workflow];
   const jobId = search.get("job");
+  const [agentHistoryOpen, setAgentHistoryOpen] = useState(false);
   const discipline = search.get("discipline") ?? "biostats";
   const health = useQuery({ queryKey: ["health"], queryFn: api.health });
   const contract = useQuery({
@@ -37,6 +39,7 @@ export default function WorkflowPage() {
       return status === "queued" || status === "running" ? 2_000 : false;
     },
   });
+  useEffect(() => setAgentHistoryOpen(false), [jobId]);
   if (!definition) return <div className="mx-auto max-w-3xl px-5 py-20"><h1 className="text-2xl font-bold">Workflow not found</h1><Link href="/" className="mt-4 inline-block text-clinical-700">Return home</Link></div>;
   const Icon = definition.icon;
   const disciplineQuery = workflow === "clinical-document" ? `&discipline=${discipline}` : "";
@@ -58,7 +61,7 @@ export default function WorkflowPage() {
           <Link href="/" className="focus-ring text-sm font-medium text-zinc-500 hover:text-white">All modules</Link>
         </div>
       </div>
-      <div className="mt-7 grid items-start gap-7 xl:grid-cols-[260px_minmax(0,1fr)]">
+      <div className={`mt-7 grid items-start gap-7 xl:grid-cols-[260px_minmax(0,1fr)] ${agentHistoryOpen ? "2xl:grid-cols-[240px_minmax(0,1fr)_380px]" : ""}`}>
         <aside>
           <div className="rounded-xl border border-white/10 bg-[#18181b] p-5 shadow-sm">
             <div className="grid h-10 w-10 place-items-center rounded-lg bg-clinical-500/15 text-violet-300"><Icon size={19} /></div>
@@ -87,7 +90,7 @@ export default function WorkflowPage() {
           {jobId && jobQuery.data ? <ResultView job={jobQuery.data} onReset={reset} /> : jobId && jobQuery.isLoading ? <div className="grid min-h-96 place-items-center rounded-xl border border-white/10 bg-[#18181b] text-sm text-zinc-500">Loading job…</div> : <WorkflowForm workflow={workflow} discipline={discipline} enabled={Boolean(health.data?.meta_configured)} onCreated={onCreated} />}
           {jobQuery.error && <div className="rounded-xl border border-rose-500/25 bg-rose-500/10 p-4 text-sm text-rose-300">{jobQuery.error.message}</div>}
         </section>
-        {jobId && jobQuery.data && <AgentActivitySidebar job={jobQuery.data} />}
+        {jobId && jobQuery.data && <AgentActivitySidebar job={jobQuery.data} onOpenChange={setAgentHistoryOpen} />}
       </div>
     </div>
     </ReviewDraftProvider>

@@ -10,7 +10,7 @@ import type { Job, ReviewScope } from "@/lib/types";
 import { AgentTurnTimeline } from "./agent-turn-timeline";
 import { StatusBadge } from "./status-badge";
 
-export function AgentActivitySidebar({ job }: { job: Job }) {
+export function AgentActivitySidebar({ job, onOpenChange }: { job: Job; onOpenChange?: (open: boolean) => void }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [fullScreen, setFullScreen] = useState(false);
   const [message, setMessage] = useState("");
@@ -39,18 +39,24 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
   useEffect(() => {
     setDrawerOpen(false);
     setFullScreen(false);
-  }, [job.id]);
+    onOpenChange?.(false);
+  }, [job.id, onOpenChange]);
+
+  const updateDrawerOpen = (open: boolean) => {
+    setDrawerOpen(open);
+    onOpenChange?.(open);
+  };
 
   useEffect(() => {
     if (!drawerOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (fullScreen) setFullScreen(false);
-      else setDrawerOpen(false);
+      else updateDrawerOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [drawerOpen, fullScreen]);
+  }, [drawerOpen, fullScreen, onOpenChange]);
 
   const content = query.data
     ? <AgentTurnTimeline progress={query.data} result={job.result} warnings={job.warnings} compact={!fullScreen} />
@@ -74,7 +80,7 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
       {!drawerOpen && (
         <button
           type="button"
-          onClick={() => setDrawerOpen(true)}
+          onClick={() => updateDrawerOpen(true)}
           aria-expanded={false}
           className="focus-ring fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-600 px-4 py-3 text-sm font-bold text-white shadow-2xl transition hover:bg-violet-500"
         >
@@ -83,16 +89,23 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
       )}
 
       {drawerOpen && (
-        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Agent activity history">
-          {!fullScreen && <button type="button" aria-label="Dismiss agent history overlay" onClick={() => setDrawerOpen(false)} className="absolute inset-0 bg-black/70 backdrop-blur-sm" />}
-          <aside className={fullScreen ? "absolute inset-0 flex flex-col bg-[#18181b]" : "absolute inset-y-0 right-0 flex w-[min(94vw,32rem)] flex-col border-l border-white/10 bg-[#18181b] shadow-2xl"}>
+        <>
+          {!fullScreen && <button type="button" aria-label="Dismiss agent history overlay" onClick={() => updateDrawerOpen(false)} className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm 2xl:hidden" />}
+          <aside
+            role={fullScreen ? "dialog" : "complementary"}
+            aria-modal={fullScreen ? true : undefined}
+            aria-label="Agent activity history"
+            className={fullScreen
+              ? "fixed inset-0 z-50 flex flex-col bg-[#18181b]"
+              : "fixed inset-y-0 right-0 z-50 flex w-[min(94vw,32rem)] flex-col border-l border-white/10 bg-[#18181b] shadow-2xl 2xl:sticky 2xl:top-4 2xl:z-auto 2xl:h-[calc(100vh-2rem)] 2xl:w-auto 2xl:rounded-xl 2xl:border 2xl:shadow-sm"}
+          >
             <div className="flex items-start justify-between gap-3 border-b border-white/[0.08]">
               <ActivityHeader job={job} turnCount={query.data?.events.length} />
               <div className="mr-3 mt-3 flex shrink-0 items-center gap-2">
                 <button type="button" onClick={() => setFullScreen((value) => !value)} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white" aria-label={fullScreen ? "Exit full screen agent history" : "View agent history full screen"} aria-pressed={fullScreen}>
                   {fullScreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
                 </button>
-                <button type="button" onClick={() => { setDrawerOpen(false); setFullScreen(false); }} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white" aria-label="Collapse agent history">
+                <button type="button" onClick={() => { updateDrawerOpen(false); setFullScreen(false); }} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white" aria-label="Collapse agent history">
                   <PanelRightClose size={18} />
                 </button>
               </div>
@@ -100,7 +113,7 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
             <div className={fullScreen ? "min-h-0 flex-1 overflow-y-auto p-5 lg:p-8" : "min-h-0 flex-1 overflow-y-auto p-3"}>{content}</div>
             {composer}
           </aside>
-        </div>
+        </>
       )}
     </>
   );
