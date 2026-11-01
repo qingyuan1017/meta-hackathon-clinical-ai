@@ -185,6 +185,21 @@ describe("SDTM mapping review gates", () => {
     expect(within(matrix).getByText("VSTESTCD = 'WEIGHT'")).toBeInTheDocument();
     expect(within(matrix).getByText("VSTESTCD = 'TEMP'")).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Remove VSORRES source VS_WEIGHT.RESULT from base mapping" }));
+    const withoutBaseWeight = onChange.mock.calls.at(-1)![0];
+    expect(withoutBaseWeight.variable_mapping.datasets[0].variables[0].sources).toEqual([
+      { dataset: "VS_HEIGHT", variable: "RESULT", role: "value" },
+    ]);
+    expect(withoutBaseWeight.variable_mapping.datasets[0].variables[0].value_level_metadata).toHaveLength(3);
+
+    rerender(<SDTMVariableMappingReview value={withoutBaseWeight} onChange={onChange} onApprove={vi.fn()} saving={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove VSORRES source VS_WEIGHT.RESULT from VSTESTCD = 'WEIGHT'" }));
+    const withoutWeightSliceSource = onChange.mock.calls.at(-1)![0];
+    expect(withoutWeightSliceSource.variable_mapping.datasets[0].variables[0].value_level_metadata).toEqual(expect.arrayContaining([
+      expect.objectContaining({ where_clause: "VSTESTCD = 'WEIGHT'", sources: [] }),
+    ]));
+
+    rerender(<SDTMVariableMappingReview value={withoutWeightSliceSource} onChange={onChange} onApprove={vi.fn()} saving={false} />);
     fireEvent.click(screen.getByRole("button", { name: "Add VLM column" }));
     expect(screen.getByRole("dialog", { name: "Add shared VLM column" })).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "VLM source dataset" }), { target: { value: "VS_WEIGHT" } });
