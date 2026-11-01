@@ -17,6 +17,7 @@ from app.schemas import (
     EDCSourceSpecification,
     EDCVisit,
     SDTMDomainMappingPlan,
+    SDTMPlan,
     SDTMRuleAugmentationPlan,
     SDTMVariableMappingPlan,
     StudySummary,
@@ -1386,6 +1387,79 @@ async def test_sdtm_variable_and_rule_mapping_are_batched_by_target_domain(
     rule_calls_by_target = {call["target"]: call for call in rule_calls}
     assert '"domain":"AE"' not in rule_calls_by_target["DM"]["source"]
     assert '"domain":"DM"' not in rule_calls_by_target["AE"]["source"]
+
+
+async def test_completed_variable_domain_rerun_also_refreshes_only_its_rules(tmp_path, monkeypatch) -> None:
+    source_spec = EDCSourceSpecification.model_validate({
+        "study_name": "SYN-RERUN",
+        "datasets": [
+            {"name": "RAW_DM", "label": "Demographics", "variables": [{"name": "AGE", "label": "Age", "provenance": {"file": "edc.json"}}], "provenance": {"file": "edc.json"}},
+            {"name": "RAW_AE", "label": "Adverse events", "variables": [{"name": "AETERM", "label": "Term", "provenance": {"file": "edc.json"}}], "provenance": {"file": "edc.json"}},
+        ],
+    })
+    baseline = SDTMPlan.model_validate({
+        "study_name": "SYN-RERUN",
+        "domain_mappings": [
+            {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "DM source"},
+            {"source_dataset": "RAW_AE", "target_domain": "AE", "rationale": "AE source"},
+        ],
+        "datasets": [
+            {"domain": "DM", "description": "DM", "record_plan": read_plan("DM", "RAW_DM"), "variables": [{"name": "AGE", "label": "Age", "sources": [source("RAW_DM", "AGE")]}]},
+            {"domain": "AE", "description": "AE", "record_plan": read_plan("AE", "RAW_AE"), "variables": [{"name": "AETERM", "label": "Term", "sources": [source("RAW_AE", "AETERM")], "mapping_expression": "Old mapping"}]},
+        ],
+        "rule_augmentations": [
+            {"rule_id": "DM-AGE", "target_domain": "DM", "target_variable": "AGE", "description": "DM rule", "logic": "Direct", "r_expression": '.data[["AGE"]]', "sas_expression": "AGE"},
+            {"rule_id": "AE-AETERM", "target_domain": "AE", "target_variable": "AETERM", "description": "Old AE rule", "logic": "Direct", "r_expression": '.data[["AETERM"]]', "sas_expression": "AETERM"},
+        ],
+    })
+    generated_ae = SDTMVariableMappingPlan.model_validate({
+        "study_name": "SYN-RERUN",
+        "datasets": [{
+            "domain": "AE", "description": "AE", "record_plan": read_plan("AE", "RAW_AE"),
+            "variables": [{"name": "AETERM", "label": "Term", "sources": [source("RAW_AE", "AETERM")], "mapping_expression": "Updated mapping"}],
+        }],
+    })
+    calls: list[str] = []
+
+    async def fake_variables(*_args, **kwargs):
+        assert kwargs["target_domains"] == ["AE"]
+        calls.append("variables")
+        return generated_ae, []
+
+    async def fake_rules(*_args, **kwargs):
+        assert kwargs["target_domains"] == ["AE"]
+        variable_mapping = kwargs["variable_mapping"]
+        assert next(item for item in variable_mapping.datasets if item.domain == "DM") == baseline.datasets[0]
+        assert next(item for item in variable_mapping.datasets if item.domain == "AE").variables[0].mapping_expression == "Updated mapping"
+        calls.append("rules")
+        return SDTMRuleAugmentationPlan.model_validate({
+            "study_name": "SYN-RERUN",
+            "rule_augmentations": [{"rule_id": "AE-AETERM", "target_domain": "AE", "target_variable": "AETERM", "description": "Updated AE rule", "logic": "Normalize", "r_expression": 'trimws(.data[["AETERM"]])', "sas_expression": "strip(AETERM)"}],
+        }), []
+
+    use_case = SDTMUseCase()
+    monkeypatch.setattr(use_case, "_generate_variable_mapping_batches", fake_variables)
+    monkeypatch.setattr(use_case, "_generate_rule_batches", fake_rules)
+    edc_path = tmp_path / "edc.json"
+    edc_path.write_text(source_spec.model_dump_json(), encoding="utf-8")
+    generated = await use_case.regenerate_completed_domain(
+        UseCaseContext(
+            inputs=[edc_path],
+            options={"edc_source_spec": source_spec.model_dump(mode="json")},
+            ai=SimpleNamespace(),
+            settings=agent_settings(),
+        ),
+        baseline=baseline,
+        stage="variable_mapping",
+        target_domain="AE",
+    )
+
+    proposed = generated.value
+    assert calls == ["variables", "rules"]
+    assert proposed.datasets[0] == baseline.datasets[0]
+    assert proposed.datasets[1].variables[0].mapping_expression == "Updated mapping"
+    assert proposed.rule_augmentations[0] == baseline.rule_augmentations[0]
+    assert proposed.rule_augmentations[1].description == "Updated AE rule"
 
 
 def test_sdtm_parallel_domain_progress_merges_isolated_traces(tmp_path) -> None:
