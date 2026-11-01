@@ -91,6 +91,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ variable_mapping: variableMapping }),
     }),
+  rerunSdtmDomain: (id: string, stage: "variable_mapping" | "rule_augmentation", domain: string) =>
+    request<Job>(`/api/v1/jobs/${id}/sdtm-domain-reruns`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stage, domain }),
+    }),
   approveTlfInventory: (id: string, inventoryPlan: Record<string, unknown>) =>
     request<Job>(`/api/v1/jobs/${id}/tlf-inventory`, {
       method: "PUT",

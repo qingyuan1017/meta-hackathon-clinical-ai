@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, ListChecks, Play, Plus, Save, ScrollText, Table2, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, ListChecks, Play, Plus, RotateCcw, Save, ScrollText, Table2, Trash2, Upload } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Artifact, CDISCDataset, SDTMWorkbenchState, ValidationFinding } from "@/lib/types";
 import { Button } from "./ui/button";
@@ -85,6 +85,16 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
   const [libraryStandard, setLibraryStandard] = useState<"sdtm" | "sdtmig">("sdtmig");
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
+  const client = useQueryClient();
+  const rerunMutation = useMutation({
+    mutationFn: ({ stage, domain }: { stage: "variable_mapping" | "rule_augmentation"; domain: string }) =>
+      api.rerunSdtmDomain(jobId!, stage, domain),
+    onSuccess: (updated) => {
+      client.setQueryData(["job", jobId], updated);
+      client.invalidateQueries({ queryKey: ["jobs"] });
+      client.invalidateQueries({ queryKey: ["agent-progress", jobId] });
+    },
+  });
 
   const sourceInventory = useMemo(() => {
     const sources = new Map<string, SourceType>();
@@ -103,6 +113,10 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
   }, [customSources, plan.datasets, plan.domain_mappings]);
 
   const activeDataset = plan.datasets.find((dataset) => dataset.domain === selectedDomain) ?? plan.datasets[0];
+  const activeRuleDomain = activeDataset?.domain ?? "";
+  const activeRules = plan.rule_augmentations
+    .map((rule, index) => ({ rule, index }))
+    .filter(({ rule }) => rule.target_domain === activeRuleDomain);
   const acrfArtifact = artifacts.find((artifact) => artifact.name === "annotated-crf.pdf");
   const acrfDiagnostics = artifacts.find((artifact) => artifact.name === "acrf-annotations.json");
   const defineArtifact = artifacts.find((artifact) => artifact.name === "define.xml");
@@ -279,9 +293,10 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
             <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4">
                 <div><p className="text-sm font-bold text-zinc-100">{activeDataset.domain} · {activeDataset.description}</p><p className="mt-1 text-xs text-zinc-500">Review the record pipeline first, then each variable and value-level lineage card.</p></div>
-                <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" size="sm" onClick={() => addVariable(activeDataset.domain)}><Plus size={14} />Variable</Button><Button type="button" variant="outline" size="sm" onClick={() => addSuppQualifier(activeDataset.domain)}><Plus size={14} />SUPP/VLM qualifier</Button></div>
+                <div className="flex flex-wrap gap-2">{jobId && <Button type="button" variant="outline" size="sm" disabled={rerunMutation.isPending} onClick={() => rerunMutation.mutate({ stage: "variable_mapping", domain: activeDataset.domain })}><RotateCcw size={14} />Rerun {activeDataset.domain} Variable &amp; VLM</Button>}<Button type="button" variant="outline" size="sm" onClick={() => addVariable(activeDataset.domain)}><Plus size={14} />Variable</Button><Button type="button" variant="outline" size="sm" onClick={() => addSuppQualifier(activeDataset.domain)}><Plus size={14} />SUPP/VLM qualifier</Button></div>
               </div>
               <div className="space-y-4 p-4">
+                {jobId && <p className="rounded-lg border border-amber-400/15 bg-amber-500/[0.05] px-3 py-2 text-[11px] leading-5 text-amber-100/80">The rerun starts from the last saved approved plan, replaces only {activeDataset.domain}, refreshes its dependent rules, and requires approval before downloads change. Save any manual edits first.</p>}
                 <RecordPlanEditor value={activeDataset.record_plan} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} onChange={(record_plan) => update((next) => { const dataset = next.datasets.find((item) => item.domain === activeDataset.domain); if (dataset) dataset.record_plan = record_plan; })} />
                 <VariableMappingCards variables={activeDataset.variables} inventory={sourceInventory} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} onChange={(variables) => update((next) => {
                   const dataset = next.datasets.find((item) => item.domain === activeDataset.domain);
@@ -302,9 +317,11 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
 
       {stage === "rules" && (
         <div className="space-y-5">
+          <DomainTabs datasets={plan.datasets} selected={activeRuleDomain} onSelect={setSelectedDomain} />
           <section className="space-y-3">
-            <div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">Variable rule review</p><p className="mt-1 text-xs text-zinc-600">Record preparation is compiled from the approved pipelines on the Variable &amp; VLM tab. These expressions are target-variable right-hand sides only.</p></div>
-            {plan.rule_augmentations.map((rule, index) => <VariableRuleEditor key={`${rule.target_domain}-${rule.target_variable}`} rule={rule} onUpdate={(key, nextValue) => update((next) => { (next.rule_augmentations[index] as unknown as Record<string, unknown>)[key] = nextValue; })} />)}
+            <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">{activeRuleDomain || "Domain"} variable rule review</p><p className="mt-1 text-xs text-zinc-600">Rules are reviewed and regenerated one domain at a time. Record preparation is compiled from the approved pipelines on the Variable &amp; VLM tab.</p></div>{jobId && activeRuleDomain && <Button type="button" variant="outline" size="sm" disabled={rerunMutation.isPending} onClick={() => rerunMutation.mutate({ stage: "rule_augmentation", domain: activeRuleDomain })}><RotateCcw size={14} />Rerun {activeRuleDomain} rules</Button>}</div>
+            {activeRules.map(({ rule, index }) => <VariableRuleEditor key={`${rule.target_domain}-${rule.target_variable}`} rule={rule} onUpdate={(key, nextValue) => update((next) => { (next.rule_augmentations[index] as unknown as Record<string, unknown>)[key] = nextValue; })} />)}
+            {activeRuleDomain && activeRules.length === 0 && <EmptyReview text={`No rule augmentations are available for ${activeRuleDomain}.`} />}
           </section>
         </div>
       )}
@@ -336,7 +353,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
       {stage === "csdrg" && <CSDRGReview jobId={jobId} source={csdrgJson} pdf={csdrgPdf} />}
 
       <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-        <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="text-xs font-bold text-emerald-300">All mapping references are ready for schema validation.</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div>
+        <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="text-xs font-bold text-emerald-300">All mapping references are ready for schema validation.</p>}{(error || rerunMutation.error) && <p className="mt-1 text-xs text-rose-300">{error ?? rerunMutation.error?.message}</p>}</div>
         <Button type="button" variant="clinical" onClick={() => onSave(plan)} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Validating and rebuilding…" : "Save reviewed mappings"}</Button>
       </div>
     </div>

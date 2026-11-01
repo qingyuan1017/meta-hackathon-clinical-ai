@@ -26,6 +26,7 @@ export function ReviewPatchPanel({ job, domain, summaryOnly = false }: { job: Jo
     },
   });
   if (!patch) return null;
+  const completedDomainRerun = patch.stage === "variable_mapping_domain" || patch.stage === "rule_augmentation_domain";
   const allGroups = groupOperationsByDomain(patch.operations, asRecord(job.result));
   const operationGroups = domain ? allGroups.filter((group) => group.domain === domain) : allGroups;
   if (domain) return operationGroups.length ? <div className="mt-3"><DomainPatchSection group={operationGroups[0]} /></div> : null;
@@ -33,7 +34,7 @@ export function ReviewPatchPanel({ job, domain, summaryOnly = false }: { job: Jo
     <section className="rounded-xl border border-amber-400/25 bg-amber-500/[0.07] p-4" aria-label="Scoped revision preview">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="flex items-center gap-2 text-sm font-extrabold text-amber-100"><GitCompareArrows size={17} />Scoped revision awaiting decision</p>
+          <p className="flex items-center gap-2 text-sm font-extrabold text-amber-100"><GitCompareArrows size={17} />{completedDomainRerun ? "Domain rerun awaiting approval" : "Scoped revision awaiting decision"}</p>
           <p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-300">{patch.message}</p>
           <p className="mt-1 text-[11px] text-zinc-500">{patch.operations.length} changed path(s) across {operationGroups.length} domain section(s). Unlisted paths remain locked to the current draft.</p>
         </div>
@@ -42,9 +43,9 @@ export function ReviewPatchPanel({ job, domain, summaryOnly = false }: { job: Jo
       {patch.conflicts.length > 0 && <div className="mt-3 rounded-lg border border-rose-400/25 bg-rose-500/10 p-3 text-xs text-rose-200">The patch conflicts with newer edits: {patch.conflicts.join(", ")}. It was not applied.</div>}
       {!summaryOnly && <div className="mt-4 max-h-[32rem] space-y-3 overflow-auto pr-1">{operationGroups.map((group) => <DomainPatchSection key={group.domain} group={group} />)}</div>}
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button type="button" variant="clinical" disabled={mutation.isPending || !job.result_revision} onClick={() => mutation.mutate(true)}><Check size={15} />Accept all domain sections</Button>
-        <Button type="button" variant="outline" disabled={mutation.isPending || !job.result_revision} onClick={() => mutation.mutate(false)}><X size={15} />Reject all domain sections</Button>
-        <span className="text-[11px] text-zinc-500">The patch is one transaction; this decision covers every domain section and does not approve the stage.</span>
+        <Button type="button" variant="clinical" disabled={mutation.isPending || !job.result_revision} onClick={() => mutation.mutate(true)}><Check size={15} />{completedDomainRerun ? "Approve rerun and rebuild" : "Accept all domain sections"}</Button>
+        <Button type="button" variant="outline" disabled={mutation.isPending || !job.result_revision} onClick={() => mutation.mutate(false)}><X size={15} />{completedDomainRerun ? "Reject rerun" : "Reject all domain sections"}</Button>
+        <span className="text-[11px] text-zinc-500">{completedDomainRerun ? "Approval replaces only the proposed domain content, rebuilds derived artifacts, and preserves all other domains." : "The patch is one transaction; this decision covers every domain section and does not approve the stage."}</span>
       </div>
       {mutation.error && <p className="mt-3 rounded-lg border border-rose-500/20 bg-rose-500/10 p-2 text-xs text-rose-300">{mutation.error.message}</p>}
     </section>
@@ -89,6 +90,13 @@ function operationDomain(operation: ReviewPatchOperation, result: Record<string,
   if (operation.path.includes("/unmapped_datasets/")) return "Not mapped";
   const pathDomain = operation.path.match(/\/(?:domain|target_domain)=([^/]+)/i)?.[1];
   if (pathDomain) return decodePointer(pathDomain).toUpperCase();
+  const ruleId = operation.path.match(/\/rule_augmentations\/rule_id=([^/]+)/i)?.[1];
+  if (ruleId) {
+    const rules = Array.isArray(result.rule_augmentations) ? result.rule_augmentations : [];
+    const match = rules.find((item) => String(asRecord(item).rule_id ?? "").toUpperCase() === decodePointer(ruleId).toUpperCase());
+    const target = asRecord(match).target_domain;
+    if (typeof target === "string" && target.trim()) return target.trim().toUpperCase();
+  }
   const valueDomain = domainFromValue(operation.after) ?? domainFromValue(operation.before);
   if (valueDomain) return valueDomain;
   if (operation.path.endsWith("/target_domain")) {

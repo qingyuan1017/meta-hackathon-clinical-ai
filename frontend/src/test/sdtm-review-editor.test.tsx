@@ -1,6 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { SDTMReviewEditor } from "@/components/sdtm-review-editor";
+import { api } from "@/lib/api";
 
 const plan = {
   study_name: "SYN-101",
@@ -14,8 +16,13 @@ const plan = {
 };
 
 describe("SDTMReviewEditor", () => {
+  const renderEditor = (value = plan, jobId?: string) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    return render(<QueryClientProvider client={client}><SDTMReviewEditor jobId={jobId} value={value} onChange={vi.fn()} onSave={vi.fn()} saving={false} /></QueryClientProvider>);
+  };
+
   it("presents ordered mapping stages plus separate aCRF and Define-XML review tabs", () => {
-    render(<SDTMReviewEditor value={plan} onChange={vi.fn()} onSave={vi.fn()} saving={false} />);
+    renderEditor();
 
     expect(screen.getByText("Domain mapping")).toBeInTheDocument();
     expect(screen.getAllByText("RAW_DM")).toHaveLength(2);
@@ -29,5 +36,19 @@ describe("SDTMReviewEditor", () => {
     expect(screen.getByText("No aCRF was generated because this job did not include a blank CRF PDF. Start a new generation with a blank CRF to enable annotation review.")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Define-XML"));
     expect(screen.getByText("Define-XML 2.1 review will appear after the SDTM artifacts are generated.")).toBeInTheDocument();
+  });
+
+  it("offers independent completed-job reruns for the selected domain", async () => {
+    const rerun = vi.spyOn(api, "rerunSdtmDomain").mockResolvedValue({} as never);
+    renderEditor(plan, "job-1");
+
+    fireEvent.click(screen.getByText("Variable & VLM"));
+    fireEvent.click(screen.getByRole("button", { name: "Rerun DM Variable & VLM" }));
+    await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "variable_mapping", "DM"));
+
+    fireEvent.click(screen.getByText("Rule augmentation"));
+    expect(screen.getByText("DM.AGE")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rerun DM rules" }));
+    await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "rule_augmentation", "DM"));
   });
 });

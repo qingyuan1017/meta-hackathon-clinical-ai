@@ -326,6 +326,8 @@ const REVIEW_STAGE_LABELS: Record<NonNullable<Job["review_stage"]>, string> = {
   edc_source: "EDC source specification",
   domain_mapping: "SDTM domain mapping",
   variable_mapping: "SDTM variable and value-level mapping",
+  variable_mapping_domain: "Completed SDTM domain variable/VLM rerun",
+  rule_augmentation_domain: "Completed SDTM domain rule rerun",
   tlf_inventory: "TLF output inventory",
   tlf_shell: "TLF shell",
   tlf_programming: "TLF programming plan",

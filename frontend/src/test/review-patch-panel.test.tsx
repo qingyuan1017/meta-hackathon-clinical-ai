@@ -48,4 +48,22 @@ describe("ReviewPatchPanel", () => {
     expect(screen.getByRole("region", { name: "DM feedback decision" })).toHaveTextContent("AGE");
     expect(screen.getByRole("region", { name: "AE feedback decision" })).toHaveTextContent("AETERM");
   });
+
+  it("shows completed rule reruns under their target domain", () => {
+    const job = {
+      id: "job-3", status: "review_required", result_revision: "b".repeat(64),
+      result: { rule_augmentations: [{ rule_id: "AE-AETERM", target_domain: "AE", target_variable: "AETERM" }] },
+      review_patch: {
+        transaction_id: "patch-3", status: "proposed", stage: "rule_augmentation_domain", message: "Regenerate AE rules.",
+        scope: { paths: [], source_datasets: [], target_domains: ["AE"], variables: [] },
+        baseline_revision: "a".repeat(64), proposed_revision: "c".repeat(64), conflicts: [],
+        submitted_at: "2026-10-31T12:00:00Z", decided_at: null, reviewer: null,
+        operations: [{ path: "/rule_augmentations/rule_id=AE-AETERM/logic", before: "Direct", after: "Normalize term" }],
+      },
+    } as Job;
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><ReviewPatchPanel job={job} /></ReviewDraftProvider></QueryClientProvider>);
+    expect(screen.getByRole("region", { name: "AE feedback decision" })).toHaveTextContent("Normalize term");
+    expect(screen.getByRole("button", { name: "Approve rerun and rebuild" })).toBeInTheDocument();
+  });
 });
