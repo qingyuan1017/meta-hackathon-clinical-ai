@@ -324,7 +324,11 @@ class SDTMUseCase(ClinicalUseCase):
                     "Determine only its variable and value-level mapping plus minor per-variable derivations. "
                     "Give every variable and VLM cell all of its approved raw source "
                     "references with explicit roles. Assigned constants have no sources; derived variables retain "
-                    "every contributing source. When no blank CRF is supplied, leave crf_source_label null. Do not "
+                    "every contributing source. For wide-to-long findings, use an identical test-code where-clause "
+                    "set across slice-dependent variables and put test code, test name, result, unit, standard result, "
+                    "standard unit, range, and flag sources in their own target-variable VLM cells; every multi-source "
+                    "transpose variable must distribute all of its sources into those cells. When no blank CRF is "
+                    "supplied, leave crf_source_label null. Do not "
                     "generate record-construction steps or target-variable R/SAS code; record preparation belongs "
                     "to the rule/code stage."
                 ),
@@ -1408,8 +1412,79 @@ class SDTMUseCase(ClinicalUseCase):
                         f"{dataset.domain}.{variable.name} VLM {index}", metadata.sources,
                         allowed_sources, known_sources, problems,
                     )
+            SDTMUseCase._validate_vlm_matrix(dataset, problems)
         if problems:
             raise ValueError(" ".join(problems))
+
+    @staticmethod
+    def _validate_vlm_matrix(dataset: Any, problems: list[str]) -> None:
+        finding_suffixes = (
+            "TESTCD", "TEST", "ORRES", "ORRESU", "STRESC", "STRESN", "STRESU",
+            "STNRLO", "STNRHI", "NRIND", "ORNRLO", "ORNRHI",
+        )
+        wide_finding = any(
+            variable.name.upper().endswith("ORRES")
+            and variable.mapping_type == "transpose"
+            and len(variable.sources) > 1
+            for variable in dataset.variables
+        )
+        required = [
+            variable for variable in dataset.variables
+            if len(variable.sources) > 1
+            and (
+                variable.mapping_type == "transpose"
+                or (wide_finding and variable.name.upper().endswith(finding_suffixes))
+            )
+        ]
+        expected_conditions: set[str] | None = None
+        for variable in required:
+            label = f"{dataset.domain}.{variable.name}"
+            if not variable.value_level_metadata:
+                problems.append(f"{label} has multi-source transpose lineage and needs VLM cells.")
+                continue
+            conditions = [SDTMUseCase._canonical_vlm_condition(item.where_clause) for item in variable.value_level_metadata]
+            if any(not item for item in conditions):
+                problems.append(f"{label} has a VLM cell without a where clause.")
+            if len(set(conditions)) != len(conditions):
+                problems.append(f"{label} has duplicate VLM conditions.")
+            covered_sources = {
+                (source.dataset.upper(), source.variable.upper())
+                for metadata in variable.value_level_metadata
+                for source in metadata.sources
+            }
+            missing_sources = [
+                source for source in variable.sources
+                if (source.dataset.upper(), source.variable.upper()) not in covered_sources
+            ]
+            if missing_sources:
+                missing_text = ", ".join(f"{item.dataset}.{item.variable}" for item in missing_sources)
+                problems.append(f"{label} has source lineage outside its VLM cells: {missing_text}.")
+            for index, metadata in enumerate(variable.value_level_metadata, 1):
+                if not metadata.label.strip():
+                    problems.append(f"{label} VLM {index} needs a label.")
+                if not metadata.mapping_expression.strip():
+                    problems.append(f"{label} VLM {index} needs mapping logic.")
+                if not metadata.sources and not SDTMUseCase._allows_sourceless_variable(metadata.origin):
+                    problems.append(
+                        f"{label} VLM {index} needs source lineage or an Assigned, Derived, Protocol, System, "
+                        "or Sponsor origin."
+                    )
+                if (
+                    not metadata.sources
+                    and (not metadata.mapping_expression.strip() or metadata.mapping_expression.strip().casefold() == "direct")
+                ):
+                    problems.append(f"{label} VLM {index} needs explicit assignment or derivation logic.")
+            condition_set = {item for item in conditions if item}
+            if expected_conditions is None and condition_set:
+                expected_conditions = condition_set
+            elif expected_conditions is not None and condition_set != expected_conditions:
+                problems.append(
+                    f"{label} VLM conditions do not align with the other transposed variables in {dataset.domain}."
+                )
+
+    @staticmethod
+    def _canonical_vlm_condition(value: str) -> str:
+        return "".join(value.upper().replace('"', "'").split())
 
     @staticmethod
     def _validate_source_references(

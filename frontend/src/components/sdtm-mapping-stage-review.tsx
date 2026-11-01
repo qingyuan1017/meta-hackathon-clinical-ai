@@ -11,6 +11,7 @@ import {
   VariableMappingMatrix,
   newSourceVariable,
   normalizeVariable,
+  vlmMatrixIssues,
   type SDTMVariableDraft,
   type SourceInventoryDataset,
 } from "./sdtm-lineage-editor";
@@ -295,6 +296,7 @@ function variableIssues(envelope: VariableReviewEnvelope): string[] {
       if (!variable.sources.length && (!variable.mapping_expression.trim() || variable.mapping_expression.trim().toLowerCase() === "direct")) issues.push(`${label} needs explicit assignment or derivation logic.`);
       variable.value_level_metadata.forEach((vlm, index) => vlm.sources.forEach((source) => { if (!source.dataset.trim() || !source.variable.trim()) issues.push(`${label} VLM ${index + 1} has an incomplete source reference.`); else if (!sources.has(source.dataset)) issues.push(`${label} VLM ${index + 1} uses an unapproved source.`); }));
     });
+    issues.push(...vlmMatrixIssues(domain, dataset.variables));
   });
   datasets.forEach((_dataset, domain) => { if (!approved.has(domain)) issues.push(`${domain} was not approved at the domain gate.`); });
   return Array.from(new Set(issues));

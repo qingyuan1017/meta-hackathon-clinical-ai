@@ -292,6 +292,73 @@ def test_sdtm_variable_mapping_keeps_lineage_while_rule_stage_validates_record_p
         SDTMUseCase._validate_rule_batch("AE", mapping.datasets[0], domain_mapping.domain_mappings, invalid)
 
 
+def test_sdtm_variable_mapping_requires_aligned_vlm_cells_for_wide_findings() -> None:
+    source_spec = EDCSourceSpecification.model_validate({
+        "study_name": "SYN-LB",
+        "datasets": [{
+            "name": "RAW_LB", "label": "Wide laboratory data", "provenance": {"file": "lb.json"},
+            "variables": [
+                {"name": "GLUC", "label": "Glucose", "provenance": {"file": "lb.json"}},
+                {"name": "HGB", "label": "Hemoglobin", "provenance": {"file": "lb.json"}},
+                {"name": "GLUC_UN", "label": "Glucose unit", "provenance": {"file": "lb.json"}},
+                {"name": "HGB_UN", "label": "Hemoglobin unit", "provenance": {"file": "lb.json"}},
+            ],
+        }],
+    })
+    domain_mapping = SDTMDomainMappingPlan.model_validate({
+        "study_name": "SYN-LB",
+        "domain_mappings": [{"source_dataset": "RAW_LB", "target_domain": "LB", "rationale": "Laboratory findings"}],
+    })
+    payload = {
+        "study_name": "SYN-LB",
+        "datasets": [{
+            "domain": "LB", "description": "Laboratory Test Results", "dataset_class": "Findings",
+            "variables": [
+                {
+                    "name": "LBORRES", "label": "Result or Finding in Original Units", "mapping_type": "transpose",
+                    "sources": [
+                        {"dataset": "RAW_LB", "variable": "GLUC", "role": "value"},
+                        {"dataset": "RAW_LB", "variable": "HGB", "role": "value"},
+                    ],
+                    "mapping_expression": "Transpose analyte results.",
+                    "value_level_metadata": [],
+                },
+                {
+                    "name": "LBORRESU", "label": "Original Units", "mapping_type": "transpose",
+                    "sources": [
+                        {"dataset": "RAW_LB", "variable": "GLUC_UN", "role": "value"},
+                        {"dataset": "RAW_LB", "variable": "HGB_UN", "role": "value"},
+                    ],
+                    "mapping_expression": "Transpose analyte units.",
+                    "value_level_metadata": [],
+                },
+            ],
+        }],
+    }
+    incomplete = SDTMVariableMappingPlan.model_validate(payload)
+    with pytest.raises(ValueError, match="LB.LBORRES has multi-source transpose lineage and needs VLM cells"):
+        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, incomplete)
+
+    conditions = [("LBTESTCD = 'GLUC'", "Glucose"), ("LBTESTCD='HGB'", "Hemoglobin")]
+    for variable, source_names in zip(payload["datasets"][0]["variables"], [("GLUC", "HGB"), ("GLUC_UN", "HGB_UN")], strict=True):
+        variable["value_level_metadata"] = [
+            {
+                "where_clause": where_clause, "label": label, "data_type": "Char", "origin": "CRF",
+                "mapping_expression": f"Map {source_name} for {label}.",
+                "sources": [{"dataset": "RAW_LB", "variable": source_name, "role": "value"}],
+            }
+            for (where_clause, label), source_name in zip(conditions, source_names, strict=True)
+        ]
+    valid = SDTMVariableMappingPlan.model_validate(payload)
+    SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, valid)
+
+    misaligned_payload = valid.model_dump(mode="json")
+    misaligned_payload["datasets"][0]["variables"][1]["value_level_metadata"][1]["where_clause"] = "LBTESTCD = 'RBC'"
+    misaligned = SDTMVariableMappingPlan.model_validate(misaligned_payload)
+    with pytest.raises(ValueError, match="LB.LBORRESU VLM conditions do not align"):
+        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, misaligned)
+
+
 def test_sdtm_rule_stage_requires_executable_filter_conditions() -> None:
     source_spec = EDCSourceSpecification.model_validate(
         {

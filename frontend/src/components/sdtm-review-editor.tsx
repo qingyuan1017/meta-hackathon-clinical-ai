@@ -11,6 +11,7 @@ import {
   newSourceVariable,
   normalizeRecordPlan,
   normalizeVariable,
+  vlmMatrixIssues,
   type SDTMRecordPlan,
   type SDTMVariableDraft,
 } from "./sdtm-lineage-editor";
@@ -672,6 +673,7 @@ function reviewIssues(plan: SDTMPlanDraft): string[] {
       if (!variable.sources.length && !allowsSourcelessOrigin(variable.origin)) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs an assigned or derived origin without a raw source.`);
       if (!variable.sources.length && (!variable.mapping_expression.trim() || variable.mapping_expression.trim().toLowerCase() === "direct")) issues.push(`${dataset.domain}.${variable.name || "[unnamed]"} needs explicit assignment or derivation logic.`);
     });
+    issues.push(...vlmMatrixIssues(dataset.domain, dataset.variables));
   });
   return issues;
 }

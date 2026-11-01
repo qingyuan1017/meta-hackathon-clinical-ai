@@ -184,17 +184,50 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
   sourceRelationships: Array<{ dataset: string; relationship: SDTMSourceRelationship }>;
 }) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [addingVlmColumn, setAddingVlmColumn] = useState(false);
+  const [vlmDataset, setVlmDataset] = useState(allowedDatasets[0] ?? "");
+  const [vlmWhereClause, setVlmWhereClause] = useState("");
+  const [vlmTargetIndexes, setVlmTargetIndexes] = useState<number[]>([]);
   const selected = selectedIndex === null ? null : variables[selectedIndex] ?? null;
   const sourceColumns = buildVariableMatrixColumns(variables, allowedDatasets, sourceRelationships);
   const updateSelected = (next: SDTMVariableDraft[]) => {
     if (selectedIndex === null || !next[0]) return;
     onChange(replaceAt(variables, selectedIndex, next[0]));
   };
+  const openVlmColumnDialog = () => {
+    const defaults = variables.flatMap((variable, index) => variable.mapping_type === "transpose" || variable.value_level_metadata.length ? [index] : []);
+    setVlmDataset(allowedDatasets[0] ?? sourceRelationships[0]?.dataset ?? "");
+    setVlmWhereClause("");
+    setVlmTargetIndexes(defaults.length ? defaults : variables.length ? [0] : []);
+    setAddingVlmColumn(true);
+  };
+  const addVlmColumn = () => {
+    const whereClause = vlmWhereClause.trim();
+    if (!whereClause || !vlmDataset || !vlmTargetIndexes.length) return;
+    onChange(variables.map((variable, index) => {
+      if (!vlmTargetIndexes.includes(index)) return variable;
+      const existingIndex = variable.value_level_metadata.findIndex((item) => canonicalWhereClause(item.where_clause) === canonicalWhereClause(whereClause));
+      if (existingIndex < 0) return { ...variable, value_level_metadata: [...variable.value_level_metadata, newVlm(whereClause, vlmDataset)] };
+      const existing = variable.value_level_metadata[existingIndex];
+      if (existing.sources.some((source) => source.dataset === vlmDataset)) return variable;
+      return { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, existingIndex, { ...existing, sources: [...existing.sources, { dataset: vlmDataset, variable: "", role: "value" }] }) };
+    }));
+    setAddingVlmColumn(false);
+  };
+  const removeVlmColumn = (column: VariableMatrixColumn) => onChange(variables.map((variable) => ({
+    ...variable,
+    value_level_metadata: variable.value_level_metadata.flatMap((item) => {
+      if (canonicalWhereClause(item.where_clause) !== canonicalWhereClause(column.whereClause ?? "")) return [item];
+      const sources = item.sources.filter((source) => source.dataset !== column.dataset);
+      return sources.length ? [{ ...item, sources }] : [];
+    }),
+  })));
   return <>
     <section className="overflow-hidden rounded-xl border border-white/10 bg-[#121214]">
-      <div className="border-b border-white/[0.07] px-4 py-3">
-        <p className="text-xs font-black uppercase tracking-[0.12em] text-violet-200">Variable &amp; VLM mapping matrix</p>
-        <p className="mt-1 text-xs leading-5 text-zinc-500">Rows are SDTM variables. Direct and stack sources remain separate columns; joined lookup sources are labeled separately because they add columns rather than append records. Value-level conditions create additional source-slice columns.</p>
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/[0.07] px-4 py-3">
+        <div><p className="text-xs font-black uppercase tracking-[0.12em] text-violet-200">Variable &amp; VLM mapping matrix</p>
+        <p className="mt-1 max-w-4xl text-xs leading-5 text-zinc-500">Rows are SDTM variables. Direct and stack sources remain separate columns; joined lookup sources are labeled separately because they add columns rather than append records. Each value-level condition is a shared column, so related test code, result, and unit mappings can be reviewed in the correct cells.</p></div>
+        <Button type="button" variant="outline" size="sm" onClick={openVlmColumnDialog}><Plus size={13} />Add VLM column</Button>
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-full border-collapse text-left text-xs">
@@ -202,8 +235,9 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
             <tr>
               <th className="sticky left-0 z-10 min-w-56 border-b border-r border-white/[0.07] bg-[#101012] px-3 py-3">SDTM variable</th>
               {sourceColumns.map((column) => <th key={column.key} className="min-w-48 border-b border-r border-white/[0.07] px-3 py-3 align-top last:border-r-0">
-                <div className="flex items-center gap-2"><span className="font-mono font-bold text-zinc-200">{column.dataset}</span><RelationshipBadge relationship={column.relationship} /></div>
-                {column.whereClause && <span className="mt-1 block max-w-64 whitespace-normal font-mono text-[10px] font-normal leading-4 text-cyan-300">{column.whereClause}</span>}
+                <div className="flex items-start justify-between gap-2"><div><div className="flex items-center gap-2"><span className="font-mono font-bold text-zinc-200">{column.dataset}</span><RelationshipBadge relationship={column.relationship} /></div>
+                {column.whereClause && <span className="mt-1 block max-w-64 whitespace-normal font-mono text-[10px] font-normal leading-4 text-cyan-300">{column.whereClause}</span>}</div>
+                {column.whereClause && <button type="button" aria-label={`Remove VLM column ${column.dataset} ${column.whereClause}`} onClick={() => removeVlmColumn(column)} className="grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={12} /></button>}</div>
               </th>)}
               {!sourceColumns.length && <th className="min-w-48 border-b border-white/[0.07] px-3 py-3 text-zinc-600">Assigned / derived</th>}
             </tr>
@@ -227,6 +261,15 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
       </div>
       {!variables.length && <p className="p-6 text-center text-xs text-zinc-600">No SDTM variables are available for review.</p>}
     </section>
+    {addingVlmColumn && <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/75 p-4 pt-[8vh] backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="vlm-column-dialog-title" onMouseDown={(event) => { if (event.currentTarget === event.target) setAddingVlmColumn(false); }}>
+      <div className="w-full max-w-2xl rounded-2xl border border-cyan-500/25 bg-[#0d0d0f] shadow-2xl shadow-black/60">
+        <div className="flex items-start justify-between gap-4 border-b border-white/10 px-5 py-4"><div><p id="vlm-column-dialog-title" className="text-sm font-black text-cyan-200">Add shared VLM column</p><p className="mt-1 text-xs leading-5 text-zinc-500">Create the same value-level condition for the selected SDTM variables, then edit each matrix cell to assign its correct source variable and mapping.</p></div><button type="button" aria-label="Close VLM column dialog" onClick={() => setAddingVlmColumn(false)} className="grid h-9 w-9 place-items-center rounded-md text-zinc-500 hover:bg-white/5 hover:text-white"><X size={16} /></button></div>
+        <div className="space-y-4 p-5"><div className="grid gap-3 md:grid-cols-2"><label><EditorLabel>Source dataset</EditorLabel><select aria-label="VLM source dataset" value={vlmDataset} onChange={(event) => setVlmDataset(event.target.value)} className={inputClass}><option value="">Choose dataset</option>{allowedDatasets.map((dataset) => <option key={dataset}>{dataset}</option>)}</select></label><label><EditorLabel>Where clause</EditorLabel><input aria-label="VLM where clause" value={vlmWhereClause} onChange={(event) => setVlmWhereClause(event.target.value)} placeholder="LBTESTCD = 'GLUC'" className={`${inputClass} font-mono`} /></label></div>
+          <div><EditorLabel>Target variable cells</EditorLabel><div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3">{variables.map((variable, index) => <label key={`${variable.name}-${index}`} className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs ${vlmTargetIndexes.includes(index) ? "border-cyan-500/30 bg-cyan-500/[0.07] text-cyan-100" : "border-white/10 text-zinc-500"}`}><input type="checkbox" aria-label={`Include ${variable.name} in VLM column`} checked={vlmTargetIndexes.includes(index)} onChange={(event) => setVlmTargetIndexes((current) => event.target.checked ? [...current, index] : current.filter((item) => item !== index))} /><span className="font-mono font-bold">{variable.name || `[variable ${index + 1}]`}</span></label>)}</div></div>
+          <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setAddingVlmColumn(false)}>Cancel</Button><Button type="button" variant="clinical" disabled={!vlmDataset || !vlmWhereClause.trim() || !vlmTargetIndexes.length} onClick={addVlmColumn}>Create VLM column</Button></div>
+        </div>
+      </div>
+    </div>}
     {selected && <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/75 p-4 pt-[5vh] backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="variable-mapping-dialog-title" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedIndex(null); }}>
       <div className="w-full max-w-6xl rounded-2xl border border-violet-500/25 bg-[#0d0d0f] shadow-2xl shadow-black/60">
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 rounded-t-2xl border-b border-white/10 bg-[#0d0d0f]/95 px-5 py-4 backdrop-blur">
@@ -256,7 +299,7 @@ function buildVariableMatrixColumns(variables: SDTMVariableDraft[], allowedDatas
       if (!vlm.where_clause.trim()) continue;
       for (const source of vlm.sources) {
         if (!source.dataset) continue;
-        const key = `${source.dataset}|${vlm.where_clause.trim()}`;
+        const key = `${source.dataset}|${canonicalWhereClause(vlm.where_clause)}`;
         if (seenSlices.has(key)) continue;
         seenSlices.add(key);
         columns.push({ key, dataset: source.dataset, relationship: relationshipByDataset.get(source.dataset) ?? "direct", whereClause: vlm.where_clause.trim() });
@@ -267,9 +310,14 @@ function buildVariableMatrixColumns(variables: SDTMVariableDraft[], allowedDatas
 }
 
 function MatrixCell({ variable, column }: { variable: SDTMVariableDraft; column: VariableMatrixColumn }) {
+  const matchingVlm = column.whereClause
+    ? variable.value_level_metadata.filter((vlm) => canonicalWhereClause(vlm.where_clause) === canonicalWhereClause(column.whereClause ?? ""))
+    : [];
   const references = column.whereClause
-    ? variable.value_level_metadata.filter((vlm) => vlm.where_clause.trim() === column.whereClause).flatMap((vlm) => vlm.sources).filter((source) => source.dataset === column.dataset)
+    ? matchingVlm.flatMap((vlm) => vlm.sources).filter((source) => source.dataset === column.dataset)
     : variable.sources.filter((source) => source.dataset === column.dataset);
+  const assigned = matchingVlm.find((vlm) => !vlm.sources.length && allowsSourcelessVlmOrigin(vlm.origin));
+  if (!references.length && assigned) return <span><span className="block font-bold text-amber-300">Assigned / derived</span><span className="mt-1 block max-w-56 truncate text-[10px] text-zinc-600">{assigned.mapping_expression}</span></span>;
   if (!references.length) return <span className="text-zinc-700">—</span>;
   return <span className="space-y-1">{references.map((reference, index) => <span key={`${reference.variable}-${reference.role}-${index}`} className="block"><span className="font-mono font-bold text-zinc-200">{reference.variable || "[variable]"}</span><span className="ml-2 text-[10px] text-zinc-600">{reference.role.replace("_", " ")}</span></span>)}</span>;
 }
@@ -309,8 +357,35 @@ export function normalizeVariable(value: SDTMVariableDraft): SDTMVariableDraft {
   return { ...value, mapping_type: validMappingType(value.mapping_type) ? value.mapping_type : "direct", sources: arrayValue<SDTMSourceReference>(value.sources).map((item) => ({ dataset: stringValue(item.dataset, ""), variable: stringValue(item.variable, ""), role: roles.includes(item.role) ? item.role : "value" })), controlled_terms: arrayValue<string>(value.controlled_terms), value_level_metadata: arrayValue<SDTMValueLevelMetadataDraft>(value.value_level_metadata).map((item) => ({ ...item, data_type: item.data_type === "Num" ? "Num" : "Char", sources: arrayValue<SDTMSourceReference>(item.sources), controlled_terms: arrayValue<string>(item.controlled_terms) })) };
 }
 
+export function vlmMatrixIssues(domain: string, variables: SDTMVariableDraft[]): string[] {
+  const issues: string[] = [];
+  const findingSuffixes = ["TESTCD", "TEST", "ORRES", "ORRESU", "STRESC", "STRESN", "STRESU", "STNRLO", "STNRHI", "NRIND", "ORNRLO", "ORNRHI"];
+  const wideFinding = variables.some((variable) => variable.name.endsWith("ORRES") && variable.mapping_type === "transpose" && variable.sources.length > 1);
+  const required = variables.filter((variable) => variable.sources.length > 1 && (variable.mapping_type === "transpose" || (wideFinding && findingSuffixes.some((suffix) => variable.name.endsWith(suffix)))));
+  let expectedConditions: Set<string> | null = null;
+  for (const variable of required) {
+    const label = `${domain}.${variable.name}`;
+    if (!variable.value_level_metadata.length) { issues.push(`${label} has multi-source transpose lineage and needs VLM cells.`); continue; }
+    const conditions = variable.value_level_metadata.map((item) => canonicalWhereClause(item.where_clause)).filter(Boolean);
+    if (conditions.length !== variable.value_level_metadata.length) issues.push(`${label} has a VLM cell without a where clause.`);
+    if (new Set(conditions).size !== conditions.length) issues.push(`${label} has duplicate VLM conditions.`);
+    const covered = new Set(variable.value_level_metadata.flatMap((item) => item.sources).map(sourceIdentity));
+    const missing = variable.sources.filter((source) => !covered.has(sourceIdentity(source)));
+    if (missing.length) issues.push(`${label} has source lineage outside its VLM cells: ${missing.map((source) => `${source.dataset}.${source.variable}`).join(", ")}.`);
+    variable.value_level_metadata.forEach((item, index) => {
+      if (!item.label.trim()) issues.push(`${label} VLM ${index + 1} needs a label.`);
+      if (!item.mapping_expression.trim()) issues.push(`${label} VLM ${index + 1} needs mapping logic.`);
+      if (!item.sources.length && !allowsSourcelessVlmOrigin(item.origin)) issues.push(`${label} VLM ${index + 1} needs source lineage or an assigned/derived origin.`);
+      if (!item.sources.length && (!item.mapping_expression.trim() || item.mapping_expression.trim().toLowerCase() === "direct")) issues.push(`${label} VLM ${index + 1} needs explicit assignment or derivation logic.`);
+    });
+    if (expectedConditions === null && conditions.length) expectedConditions = new Set(conditions);
+    else if (expectedConditions && (conditions.some((item) => !expectedConditions!.has(item)) || expectedConditions.size !== conditions.length)) issues.push(`${label} VLM conditions do not align with the other transposed variables in ${domain}.`);
+  }
+  return issues;
+}
+
 function normalizeStep(step: SDTMRecordStep): SDTMRecordStep { return { ...operationDefaults(step.operation), ...step, operation: operations.includes(step.operation) ? step.operation : "read", inputs: arrayValue<string>(step.inputs), column_alignment: arrayValue<SDTMStackColumn>(step.column_alignment), join_keys: arrayValue<SDTMJoinKey>(step.join_keys), id_variables: arrayValue<string>(step.id_variables), value_variables: arrayValue<string>(step.value_variables), transpose_values: arrayValue<SDTMTransposeValue>(step.transpose_values), keys: arrayValue<string>(step.keys), order_by: arrayValue<string>(step.order_by), group_by: arrayValue<string>(step.group_by), aggregations: arrayValue<SDTMAggregation>(step.aggregations), review_notes: arrayValue<string>(step.review_notes) }; }
-function newVlm(): SDTMValueLevelMetadataDraft { return { where_clause: "", label: "", data_type: "Char", origin: "CRF", mapping_expression: "", sources: [], controlled_terms: [] }; }
+function newVlm(whereClause = "", dataset = ""): SDTMValueLevelMetadataDraft { return { where_clause: whereClause, label: "", data_type: "Char", origin: "CRF", mapping_expression: "", sources: dataset ? [{ dataset, variable: "", role: "value" }] : [], controlled_terms: [] }; }
 function newRecordStep(operation: SDTMRecordOperation, index: number, allowed: string[], prior: SDTMRecordStep[]): SDTMRecordStep { const stepId = `${operation}_${index}`; const defaults = operationDefaults(operation); return { ...defaults, step_id: stepId, operation, description: `Review ${operation} operation`, output: stepId, source_dataset: operation === "read" ? allowed.find((source) => !prior.some((item) => item.source_dataset === source)) ?? allowed[0] ?? null : null, inputs: operation !== "read" && prior.length ? [prior.at(-1)!.step_id] : [] }; }
 function operationDefaults(operation: SDTMRecordOperation): SDTMRecordStep { return { step_id: "", operation, description: "", output: "", inputs: [], source_dataset: null, column_alignment: [], left: null, right: null, join_type: operation === "join" ? "left" : null, join_keys: [], cardinality: operation === "join" ? "many_to_one" : null, id_variables: [], value_variables: [], name_variable: null, value_variable: null, transpose_values: [], condition: null, sas_condition: null, keys: [], order_by: [], keep: "first", group_by: [], aggregations: [], review_notes: [] }; }
 function StepInputs({ value, options, onChange, label }: { value: string[]; options: string[]; onChange: (value: string[]) => void; label: string }) { return <div><EditorLabel>{label}</EditorLabel><div className="flex flex-wrap gap-2">{options.map((option) => <label key={option} className={`rounded-md border px-2 py-1.5 text-xs ${value.includes(option) ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 text-zinc-500"}`}><input type="checkbox" checked={value.includes(option)} onChange={(event) => onChange(event.target.checked ? [...value, option] : value.filter((item) => item !== option))} className="mr-2" />{option}</label>)}</div></div>; }
@@ -325,3 +400,6 @@ function stringValue(value: unknown, fallback: string): string { return typeof v
 function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function validMappingType(value: unknown): value is SDTMMappingType { return typeof value === "string" && ["direct", "assigned", "derived", "coalesce", "lookup", "transpose", "aggregate"].includes(value); }
+function canonicalWhereClause(value: string): string { return value.trim().toUpperCase().replace(/\s+/g, "").replace(/"/g, "'"); }
+function sourceIdentity(source: SDTMSourceReference): string { return `${source.dataset.toUpperCase()}|${source.variable.toUpperCase()}`; }
+function allowsSourcelessVlmOrigin(value: string): boolean { const normalized = value.trim().toLowerCase(); return ["assigned", "derived", "protocol", "system", "sponsor"].some((token) => normalized.includes(token)); }

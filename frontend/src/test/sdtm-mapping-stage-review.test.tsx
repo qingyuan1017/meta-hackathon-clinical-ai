@@ -143,6 +143,7 @@ describe("SDTM mapping review gates", () => {
   });
 
   it("adds separate matrix columns for stack sources and value-level source slices", () => {
+    const onChange = vi.fn();
     const sourceWithVs = {
       ...source,
       datasets: [
@@ -174,7 +175,7 @@ describe("SDTM mapping review gates", () => {
         { where_clause: "VSTESTCD = 'TEMP'", label: "Temperature", data_type: "Num", origin: "CRF", mapping_expression: "Direct", sources: [{ dataset: "VS_WEIGHT", variable: "RESULT", role: "value" }], controlled_terms: [] },
       ],
     };
-    render(<SDTMVariableMappingReview value={{ source_spec: sourceWithVs, domain_mapping: domainWithVs, variable_mapping: variableWithSlices }} onChange={vi.fn()} onApprove={vi.fn()} saving={false} />);
+    const { rerender } = render(<SDTMVariableMappingReview value={{ source_spec: sourceWithVs, domain_mapping: domainWithVs, variable_mapping: variableWithSlices }} onChange={onChange} onApprove={vi.fn()} saving={false} />);
 
     const matrix = screen.getByRole("table");
     expect(within(matrix).getAllByText("VS_HEIGHT")).toHaveLength(2);
@@ -183,6 +184,24 @@ describe("SDTM mapping review gates", () => {
     expect(within(matrix).getByText("VSTESTCD = 'HEIGHT'")).toBeInTheDocument();
     expect(within(matrix).getByText("VSTESTCD = 'WEIGHT'")).toBeInTheDocument();
     expect(within(matrix).getByText("VSTESTCD = 'TEMP'")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add VLM column" }));
+    expect(screen.getByRole("dialog", { name: "Add shared VLM column" })).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "VLM source dataset" }), { target: { value: "VS_WEIGHT" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "VLM where clause" }), { target: { value: "VSTESTCD = 'PULSE'" } });
+    expect(screen.getByRole("checkbox", { name: "Include VSORRES in VLM column" })).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Create VLM column" }));
+    const withPulse = onChange.mock.calls.at(-1)![0];
+    expect(withPulse.variable_mapping.datasets[0].variables[0].value_level_metadata).toEqual(expect.arrayContaining([
+      expect.objectContaining({ where_clause: "VSTESTCD = 'PULSE'", sources: [{ dataset: "VS_WEIGHT", variable: "", role: "value" }] }),
+    ]));
+
+    rerender(<SDTMVariableMappingReview value={withPulse} onChange={onChange} onApprove={vi.fn()} saving={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Remove VLM column VS_WEIGHT VSTESTCD = 'PULSE'" }));
+    const withoutPulse = onChange.mock.calls.at(-1)![0];
+    expect(withoutPulse.variable_mapping.datasets[0].variables[0].value_level_metadata).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ where_clause: "VSTESTCD = 'PULSE'" }),
+    ]));
   });
 
   it("allows a source to be reviewed as intentionally not mapped", () => {
