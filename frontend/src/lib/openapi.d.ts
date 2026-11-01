@@ -375,6 +375,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/sdtm-domain-reruns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rerun Completed Sdtm Domain
+         * @description Propose a variable/VLM or rule refresh for one completed SDTM domain.
+         */
+        post: operations["rerun_completed_sdtm_domain_api_v1_jobs__job_id__sdtm_domain_reruns_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/sdtm-executions": {
         parameters: {
             query?: never;
@@ -1057,7 +1077,7 @@ export interface components {
             /** Completed At */
             completed_at: string | null;
             /** Review Stage */
-            review_stage?: ("edc_source" | "domain_mapping" | "variable_mapping" | "tlf_inventory" | "tlf_shell" | "tlf_programming") | null;
+            review_stage?: ("edc_source" | "domain_mapping" | "variable_mapping" | "variable_mapping_domain" | "rule_augmentation_domain" | "tlf_inventory" | "tlf_shell" | "tlf_programming") | null;
             /** Result */
             result?: {
                 [key: string]: unknown;
@@ -1356,6 +1376,16 @@ export interface components {
         /** SDTMDomainMappingUpdate */
         SDTMDomainMappingUpdate: {
             domain_mapping: components["schemas"]["SDTMDomainMappingPlan"];
+        };
+        /** SDTMDomainRerunRequest */
+        SDTMDomainRerunRequest: {
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "variable_mapping" | "rule_augmentation";
+            /** Domain */
+            domain: string;
         };
         /** SDTMInputManifest */
         SDTMInputManifest: {
@@ -2764,6 +2794,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SDTMVariableMappingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rerun_completed_sdtm_domain_api_v1_jobs__job_id__sdtm_domain_reruns_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SDTMDomainRerunRequest"];
             };
         };
         responses: {
