@@ -1351,7 +1351,7 @@ export interface components {
              * @default direct
              * @enum {string}
              */
-            relationship: "direct" | "split" | "merge" | "derived";
+            relationship: "direct" | "stack" | "join" | "split" | "derived";
             /** Rationale */
             rationale: string;
         };
