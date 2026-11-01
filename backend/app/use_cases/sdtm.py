@@ -139,7 +139,9 @@ class SDTMUseCase(ClinicalUseCase):
                     "Stage 1 of 3: consider every raw/SDTM source dataset. Map applicable sources to target "
                     "SDTM datasets/domains, and place sources that should not contribute to SDTM in "
                     "unmapped_datasets with a specific rationale. Do not force a mapping merely to cover the "
-                    "inventory. Do not perform variable mapping or code generation. Return a draft for human review."
+                    "inventory. Classify row-appending sources as stack and keyed column-adding sources as join; "
+                    "never use an ambiguous generic merge. Do not perform variable mapping or code generation. "
+                    "Return a draft for human review."
                 ),
                 source=self._domain_mapping_source(source_spec, context_inputs),
                 options=agent_options,
@@ -1133,11 +1135,34 @@ class SDTMUseCase(ClinicalUseCase):
                 "A source dataset cannot be both mapped and marked not mapped: "
                 f"{', '.join(conflicting)}."
             )
+        mappings_by_target: dict[str, list[Any]] = {}
+        targets_by_source: dict[str, set[str]] = {}
+        for item in mapping.domain_mappings:
+            mappings_by_target.setdefault(item.target_domain.upper(), []).append(item)
+            targets_by_source.setdefault(item.source_dataset.upper(), set()).add(item.target_domain.upper())
         for item in mapping.domain_mappings:
             source_dataset = sources.get(item.source_dataset.upper())
             if source_dataset and item.source_type != source_dataset.source_type:
                 problems.append(
                     f"{item.source_dataset} source type must remain {source_dataset.source_type}, not {item.source_type}."
+                )
+            if item.relationship == "split" and len(targets_by_source[item.source_dataset.upper()]) < 2:
+                problems.append(
+                    f"{item.source_dataset} is marked split but maps only to {item.target_domain}; "
+                    "split requires one source to feed multiple target domains."
+                )
+        for target_domain, target_mappings in mappings_by_target.items():
+            stack_sources = [item.source_dataset for item in target_mappings if item.relationship == "stack"]
+            direct_sources = [item.source_dataset for item in target_mappings if item.relationship == "direct"]
+            if len(stack_sources) == 1:
+                problems.append(
+                    f"{target_domain} has only one stack source ({stack_sources[0]}); "
+                    "mark every appended source as stack."
+                )
+            if len(direct_sources) > 1:
+                problems.append(
+                    f"{target_domain} has multiple direct sources ({', '.join(direct_sources)}); "
+                    "classify row appends as stack or key-based column additions as join."
                 )
         for item in mapping.unmapped_datasets:
             if not item.rationale.strip():
@@ -1153,8 +1178,10 @@ class SDTMUseCase(ClinicalUseCase):
     ) -> None:
         problems = verify_result("sdtm-variable-mapping", mapping)
         mapped_sources: dict[str, set[str]] = {}
+        relationships: dict[str, set[str]] = {}
         for item in domain_mapping.domain_mappings:
             mapped_sources.setdefault(item.target_domain.upper(), set()).add(item.source_dataset.upper())
+            relationships.setdefault(item.target_domain.upper(), set()).add(item.relationship)
         dataset_domains = {dataset.domain.upper() for dataset in mapping.datasets}
         target_domains = set(mapped_sources)
         missing = sorted(target_domains - dataset_domains)
@@ -1170,6 +1197,14 @@ class SDTMUseCase(ClinicalUseCase):
         for dataset in mapping.datasets:
             allowed_sources = mapped_sources.get(dataset.domain.upper(), set())
             SDTMUseCase._validate_record_plan(dataset.domain, dataset.record_plan, allowed_sources, problems)
+            operations = {step.operation for step in dataset.record_plan.steps}
+            required_operations = relationships.get(dataset.domain.upper(), set()) & {"stack", "join"}
+            missing_operations = sorted(required_operations - operations)
+            if missing_operations:
+                problems.append(
+                    f"{dataset.domain} domain relationships require record-plan operation(s): "
+                    f"{', '.join(missing_operations)}."
+                )
             for variable in dataset.variables:
                 SDTMUseCase._validate_source_references(
                     f"{dataset.domain}.{variable.name}", variable.sources, allowed_sources, known_sources, problems

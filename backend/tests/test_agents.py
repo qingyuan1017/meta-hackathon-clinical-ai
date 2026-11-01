@@ -93,6 +93,46 @@ def test_sdtm_domain_mapping_accepts_reviewed_not_mapped_sources() -> None:
         SDTMUseCase.validate_domain_mapping(source_spec, conflicting)
 
 
+def test_sdtm_domain_mapping_distinguishes_stack_join_and_rejects_merge() -> None:
+    source_spec = EDCSourceSpecification.model_validate(
+        {
+            "study_name": "SYN-LB",
+            "datasets": [
+                {
+                    "name": name,
+                    "label": label,
+                    "variables": [{"name": "USUBJID", "label": "Subject", "provenance": {"file": "edc.json"}}],
+                    "provenance": {"file": "edc.json"},
+                }
+                for name, label in (("LB_HEMA", "Hematology"), ("LB_CHEM", "Chemistry"))
+            ],
+        }
+    )
+    stacked = SDTMDomainMappingPlan.model_validate(
+        {
+            "study_name": "SYN-LB",
+            "domain_mappings": [
+                {"source_dataset": "LB_HEMA", "target_domain": "LB", "relationship": "stack", "rationale": "Append hematology rows"},
+                {"source_dataset": "LB_CHEM", "target_domain": "LB", "relationship": "stack", "rationale": "Append chemistry rows"},
+            ],
+        }
+    )
+    SDTMUseCase.validate_domain_mapping(source_spec, stacked)
+
+    incomplete_stack = stacked.model_dump(mode="json")
+    incomplete_stack["domain_mappings"][0]["relationship"] = "direct"
+    with pytest.raises(ValueError, match="only one stack source"):
+        SDTMUseCase.validate_domain_mapping(
+            source_spec,
+            SDTMDomainMappingPlan.model_validate(incomplete_stack),
+        )
+
+    legacy_merge = stacked.model_dump(mode="json")
+    legacy_merge["domain_mappings"][0]["relationship"] = "merge"
+    with pytest.raises(ValueError, match="relationship"):
+        SDTMDomainMappingPlan.model_validate(legacy_merge)
+
+
 def test_sdtm_variable_mapping_accepts_assigned_values_without_raw_sources() -> None:
     source_spec = EDCSourceSpecification.model_validate(
         {
@@ -187,8 +227,8 @@ def test_sdtm_variable_mapping_validates_multi_source_lineage_and_ordered_record
         {
             "study_name": "SYN-MULTI",
             "domain_mappings": [
-                {"source_dataset": "RAW_AE", "target_domain": "AE", "relationship": "merge", "rationale": "AE stream"},
-                {"source_dataset": "RAW_SAE", "target_domain": "AE", "relationship": "merge", "rationale": "SAE stream"},
+                {"source_dataset": "RAW_AE", "target_domain": "AE", "relationship": "stack", "rationale": "AE stream"},
+                {"source_dataset": "RAW_SAE", "target_domain": "AE", "relationship": "stack", "rationale": "SAE stream"},
             ],
         }
     )
@@ -223,6 +263,13 @@ def test_sdtm_variable_mapping_validates_multi_source_lineage_and_ordered_record
     }
     mapping = SDTMVariableMappingPlan.model_validate(payload)
     SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, mapping)
+
+    joined_domain_payload = domain_mapping.model_dump(mode="json")
+    joined_domain_payload["domain_mappings"][0]["relationship"] = "direct"
+    joined_domain_payload["domain_mappings"][1]["relationship"] = "join"
+    joined_domain_mapping = SDTMDomainMappingPlan.model_validate(joined_domain_payload)
+    with pytest.raises(ValueError, match="require record-plan operation.*join"):
+        SDTMUseCase.validate_variable_mapping(source_spec, joined_domain_mapping, mapping)
 
     invalid_payload = mapping.model_dump(mode="json")
     invalid_payload["datasets"][0]["record_plan"]["steps"][0]["inputs"] = ["stack"]

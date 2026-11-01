@@ -11,7 +11,7 @@ class SDTMDomainMapping(BaseModel):
     source_dataset: str = Field(description="Raw or existing-SDTM source dataset identifier")
     source_type: Literal["raw", "sdtm"] = "raw"
     target_domain: str = Field(description="Target SDTM dataset/domain identifier, such as DM or VS")
-    relationship: Literal["direct", "split", "merge", "derived"] = "direct"
+    relationship: Literal["direct", "stack", "join", "split", "derived"] = "direct"
     rationale: str
 
 
