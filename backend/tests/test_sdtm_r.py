@@ -36,6 +36,11 @@ def test_normalize_r_mapping_expression_accepts_pure_rhs(source: str, expected: 
         'obj$run()',
         'dplyr::mutate(A = 1)',
         'ifelse(is.na(A), A, B',
+        "AETERM is not null",
+        "SubjectID is not missing",
+        "A and B",
+        "A ne B",
+        "PRYN1 indicates no procedures occurred",
     ],
 )
 def test_normalize_r_mapping_expression_rejects_unsafe_or_non_rhs_code(source: str) -> None:

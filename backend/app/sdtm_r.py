@@ -80,6 +80,16 @@ _CALL_PATTERN = re.compile(
 )
 _MEMBER_CALL_PATTERN = re.compile(r"\$\s*[A-Za-z.][A-Za-z0-9._]*\s*\(")
 _BACKTICK_IDENTIFIER = re.compile(r"[A-Za-z_.][A-Za-z0-9._]*")
+_PSEUDO_R_PATTERNS = (
+    (re.compile(r"\bis\s+(?:not\s+)?null\b", re.I), "uses SQL-style null syntax; use is.na()"),
+    (re.compile(r"\bis\s+(?:not\s+)?missing\b", re.I), "uses prose missing-value syntax; use is.na()"),
+    (re.compile(r"\b(?:and|or)\b", re.I), "uses a word boolean operator; use & or |"),
+    (re.compile(r"\b(?:eq|ne)\b", re.I), "uses a SAS-style comparison operator; use == or !="),
+    (
+        re.compile(r"\b(?:indicates?|confirmed?|reviewed?|occurred)\b", re.I),
+        "contains narrative review text instead of executable logic",
+    ),
+)
 
 
 def normalize_r_mapping_expression(value: str) -> str:
@@ -102,6 +112,9 @@ def normalize_r_mapping_expression(value: str) -> str:
         raise ValueError("R mapping expression cannot access non-exported namespace members.")
     if _MEMBER_CALL_PATTERN.search(masked):
         raise ValueError("R mapping expression cannot invoke a function through a dynamic object member.")
+    for pattern, message in _PSEUDO_R_PATTERNS:
+        if pattern.search(masked):
+            raise ValueError(f"R mapping expression {message}.")
 
     _validate_balanced_delimiters(masked)
     for match in _CALL_PATTERN.finditer(masked):

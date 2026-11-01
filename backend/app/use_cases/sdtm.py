@@ -15,6 +15,8 @@ from ..artifacts import render_sdtm
 from ..csdrg import render_csdrg
 from ..edc_normalization import EDCJSONNormalization, normalize_edc_json
 from ..parsers import chunk_text, parse_edc_source, parse_source
+from ..sdtm_r import normalize_r_mapping_expression
+from ..sdtm_sas import normalize_sas_filter_expression
 from ..schemas import (
     EDCSourceSpecification,
     SDTMDomainMappingPlan,
@@ -213,7 +215,26 @@ class SDTMUseCase(ClinicalUseCase):
                 review_stage="variable_mapping",
             )
 
-        self._approved_variable_mapping(context.options, source_spec, domain_mapping)
+        raw_variable_mapping = context.options.get("sdtm_variable_mapping")
+        if not isinstance(raw_variable_mapping, dict):
+            raise ValueError("SDTM generation requires an approved variable and value-level mapping.")
+        variable_mapping = SDTMVariableMappingPlan.model_validate(raw_variable_mapping)
+        try:
+            self.validate_variable_mapping(source_spec, domain_mapping, variable_mapping)
+        except ValueError as exc:
+            return GeneratedContent(
+                value=SDTMVariableMappingReview(
+                    source_spec=source_spec,
+                    domain_mapping=domain_mapping,
+                    variable_mapping=variable_mapping,
+                ),
+                warnings=[
+                    "The previously approved variable mapping no longer satisfies the executable record-plan "
+                    "contract. It was preserved and reopened for human correction; rule augmentation was not run.",
+                    str(exc),
+                ],
+                review_stage="variable_mapping",
+            )
         return None
 
     async def _generate_variable_mapping_batches(
@@ -301,7 +322,9 @@ class SDTMUseCase(ClinicalUseCase):
                     "ordered record_plan step. Give every variable and VLM cell all of its approved raw source "
                     "references with explicit roles. Assigned constants have no sources; derived variables retain "
                     "every contributing source. When no blank CRF is supplied, leave crf_source_label null. Do not "
-                    "generate R or SAS code."
+                    "generate target-variable R or SAS code. Every filter condition must be one executable, safe R "
+                    "boolean expression and every sas_condition must be one executable SAS boolean expression; "
+                    "never put prose or pseudocode in either field."
                 ),
                 source=self._variable_mapping_source(
                     target_domain=target_domain,
@@ -1124,10 +1147,18 @@ class SDTMUseCase(ClinicalUseCase):
                 len(step.inputs) != 1 or not step.value_variables or not step.name_variable or not step.value_variable
             ):
                 problems.append(f"{label} transpose operation needs one input, value variables, name variable, and value variable.")
-            elif operation == "filter" and (
-                len(step.inputs) != 1 or not step.condition or not step.sas_condition
-            ):
-                problems.append(f"{label} filter operation needs one input plus reviewed R and SAS conditions.")
+            elif operation == "filter":
+                if len(step.inputs) != 1 or not step.condition or not step.sas_condition:
+                    problems.append(f"{label} filter operation needs one input plus reviewed R and SAS conditions.")
+                elif step.condition:
+                    try:
+                        normalize_r_mapping_expression(step.condition)
+                    except ValueError as exc:
+                        problems.append(f"{label} has an invalid executable R condition: {exc}")
+                    try:
+                        normalize_sas_filter_expression(step.sas_condition or "")
+                    except ValueError as exc:
+                        problems.append(f"{label} has an invalid executable SAS condition: {exc}")
             elif operation == "deduplicate" and (len(step.inputs) != 1 or not step.keys):
                 problems.append(f"{label} deduplicate operation needs one input and keys.")
             elif operation == "aggregate" and (

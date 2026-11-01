@@ -230,6 +230,176 @@ def test_sdtm_variable_mapping_validates_multi_source_lineage_and_ordered_record
         SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid)
 
 
+def test_sdtm_variable_mapping_requires_executable_r_filter_conditions() -> None:
+    source_spec = EDCSourceSpecification.model_validate(
+        {
+            "study_name": "SYN-FILTER",
+            "datasets": [
+                {
+                    "name": "RAW_AE",
+                    "label": "Adverse events",
+                    "variables": [
+                        {
+                            "name": "AETERM",
+                            "label": "Reported term",
+                            "provenance": {"file": "edc.json"},
+                        }
+                    ],
+                    "provenance": {"file": "edc.json"},
+                }
+            ],
+        }
+    )
+    domain_mapping = SDTMDomainMappingPlan.model_validate(
+        {
+            "study_name": "SYN-FILTER",
+            "domain_mappings": [
+                {"source_dataset": "RAW_AE", "target_domain": "AE", "rationale": "Events"}
+            ],
+        }
+    )
+    payload = {
+        "study_name": "SYN-FILTER",
+        "datasets": [
+            {
+                "domain": "AE",
+                "description": "Adverse events",
+                "record_plan": {
+                    "steps": [
+                        {
+                            "step_id": "read_ae",
+                            "operation": "read",
+                            "description": "Read events",
+                            "output": "ae_source",
+                            "source_dataset": "RAW_AE",
+                        },
+                        {
+                            "step_id": "filter_ae",
+                            "operation": "filter",
+                            "description": "Keep reported events",
+                            "output": "ae_filtered",
+                            "inputs": ["read_ae"],
+                            "condition": "AETERM is not null and trim(AETERM) != ''",
+                            "sas_condition": "not missing(AETERM)",
+                        },
+                    ],
+                    "output_step": "filter_ae",
+                },
+                "variables": [
+                    {
+                        "name": "AETERM",
+                        "label": "Reported term",
+                        "sources": [{"dataset": "RAW_AE", "variable": "AETERM"}],
+                    }
+                ],
+            }
+        ],
+    }
+
+    invalid = SDTMVariableMappingPlan.model_validate(payload)
+    with pytest.raises(ValueError, match="AE record step filter_ae has an invalid executable R condition"):
+        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid)
+
+    payload["datasets"][0]["record_plan"]["steps"][1]["condition"] = (
+        '!is.na(.data[["AETERM"]]) & trimws(.data[["AETERM"]]) != ""'
+    )
+    payload["datasets"][0]["record_plan"]["steps"][1]["sas_condition"] = "where not missing(AETERM)"
+    invalid_sas = SDTMVariableMappingPlan.model_validate(payload)
+    with pytest.raises(ValueError, match="AE record step filter_ae has an invalid executable SAS condition"):
+        SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, invalid_sas)
+
+    payload["datasets"][0]["record_plan"]["steps"][1]["sas_condition"] = "not missing(AETERM)"
+    valid = SDTMVariableMappingPlan.model_validate(payload)
+    SDTMUseCase.validate_variable_mapping(source_spec, domain_mapping, valid)
+
+
+async def test_sdtm_prepare_review_reopens_legacy_mapping_with_invalid_filter(tmp_path) -> None:
+    edc = tmp_path / "edc.json"
+    edc.write_text("{}", encoding="utf-8")
+    source_spec = {
+        "study_name": "SYN-LEGACY",
+        "datasets": [
+            {
+                "name": "RAW_AE",
+                "label": "Adverse events",
+                "variables": [
+                    {
+                        "name": "AETERM",
+                        "label": "Reported term",
+                        "provenance": {"file": "edc.json"},
+                    }
+                ],
+                "provenance": {"file": "edc.json"},
+            }
+        ],
+    }
+    domain_mapping = {
+        "study_name": "SYN-LEGACY",
+        "domain_mappings": [
+            {"source_dataset": "RAW_AE", "target_domain": "AE", "rationale": "Events"}
+        ],
+    }
+    variable_mapping = {
+        "study_name": "SYN-LEGACY",
+        "datasets": [
+            {
+                "domain": "AE",
+                "description": "Adverse events",
+                "record_plan": {
+                    "steps": [
+                        {
+                            "step_id": "read_ae",
+                            "operation": "read",
+                            "description": "Read events",
+                            "output": "ae_source",
+                            "source_dataset": "RAW_AE",
+                        },
+                        {
+                            "step_id": "filter_ae",
+                            "operation": "filter",
+                            "description": "Keep reported events",
+                            "output": "ae_filtered",
+                            "inputs": ["read_ae"],
+                            "condition": "AETERM is not null",
+                            "sas_condition": "not missing(AETERM)",
+                        },
+                    ],
+                    "output_step": "filter_ae",
+                },
+                "variables": [
+                    {
+                        "name": "AETERM",
+                        "label": "Reported term",
+                        "sources": [{"dataset": "RAW_AE", "variable": "AETERM"}],
+                    }
+                ],
+            }
+        ],
+    }
+
+    review = await SDTMUseCase().prepare_review(
+        UseCaseContext(
+            inputs=[edc],
+            options={
+                "edc_source_spec": source_spec,
+                "sdtm_domain_mapping": domain_mapping,
+                "sdtm_variable_mapping": variable_mapping,
+            },
+            ai=SimpleNamespace(),
+            settings=agent_settings(),
+            agent_progress_path=tmp_path / "agent" / "progress.json",
+        )
+    )
+
+    assert review is not None
+    assert review.review_stage == "variable_mapping"
+    review_payload = review.value.model_dump(mode="json")
+    assert review_payload["variable_mapping"]["datasets"][0]["record_plan"]["steps"][1]["condition"] == (
+        "AETERM is not null"
+    )
+    assert any("preserved and reopened" in warning for warning in review.warnings)
+
+
 def test_sdtm_domain_revision_preserves_only_unchanged_variable_batches() -> None:
     previous = SDTMDomainMappingPlan.model_validate({
         "study_name": "SYN-101",
