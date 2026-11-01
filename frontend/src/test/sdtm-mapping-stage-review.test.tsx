@@ -103,6 +103,7 @@ describe("SDTM mapping review gates", () => {
     const dmAssumptions = screen.getByRole("region", { name: "DM assumptions" });
     expect(within(dmAssumptions).getByRole("group", { name: "DM assumptions panel" })).not.toHaveAttribute("open");
     expect(dmDecisions.parentElement).toBe(dmAssumptions.parentElement);
+    expect(dmDecisions.compareDocumentPosition(screen.getByText("Variable & VLM mapping matrix")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(dmDecisions).getByText("DM decision")).toBeInTheDocument();
     expect(within(dmDecisions).queryByText("DM assumption")).not.toBeInTheDocument();
     expect(within(dmAssumptions).getByText("DM assumption")).toBeInTheDocument();

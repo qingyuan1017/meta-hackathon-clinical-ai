@@ -198,10 +198,7 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
         <label><EditorLabel>Structure</EditorLabel><input value={active.structure} onChange={(event) => updateDataset(plan, active.domain, update, "structure", event.target.value)} className={inputClass} /></label>
         <Button type="button" variant="outline" className="mt-5" onClick={() => update((next) => { const dataset = next.datasets.find((item) => item.domain === active.domain); if (dataset) dataset.variables.push(newSourceVariable("NEWVAR", allowedSources[0] ?? "")); })}><Plus size={14} />Variable</Button>
       </div>
-      <div className="space-y-4 p-4">
-        <VariableMappingMatrix variables={active.variables} inventory={envelope.source_spec.datasets} allowedDatasets={allowedSources} sourceRelationships={envelope.domain_mapping.domain_mappings.filter((item) => item.target_domain === active.domain).map((item) => ({ dataset: item.source_dataset, relationship: item.relationship }))} domain={active.domain} proposalOperations={activeProposalOperations} onChange={(variables) => updateDataset(plan, active.domain, update, "variables", variables)} />
-      </div>
-      {(activeAssumptions.length > 0 || activeUnresolved.length > 0) && <div className="border-t border-white/10 p-4"><RevisionDecisionPanel
+      {(activeAssumptions.length > 0 || activeUnresolved.length > 0) && <div className="border-b border-white/10 p-4"><RevisionDecisionPanel
         result={{ assumptions: activeAssumptions, unresolved_mappings: activeUnresolved }}
         events={feedbackEvents}
         title={`${active.domain} feedback decisions`}
@@ -210,6 +207,9 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
         onlyMatchedFeedback
         collapsedByDefault
       /></div>}
+      <div className="space-y-4 p-4">
+        <VariableMappingMatrix variables={active.variables} inventory={envelope.source_spec.datasets} allowedDatasets={allowedSources} sourceRelationships={envelope.domain_mapping.domain_mappings.filter((item) => item.target_domain === active.domain).map((item) => ({ dataset: item.source_dataset, relationship: item.relationship }))} domain={active.domain} proposalOperations={activeProposalOperations} onChange={(variables) => updateDataset(plan, active.domain, update, "variables", variables)} />
+      </div>
     </section>}
     <ApprovalBar issues={issues} error={error} saving={saving} readyText="Every approved domain has a reviewable variable matrix." actionText="Approve mappings and generate rules/code" onApprove={() => onApprove(plan)} />
   </div>;
