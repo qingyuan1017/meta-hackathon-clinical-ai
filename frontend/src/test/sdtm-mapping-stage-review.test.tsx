@@ -72,11 +72,11 @@ describe("SDTM mapping review gates", () => {
     expect(onReturn).toHaveBeenCalledOnce();
   });
 
-  it("shows only the active domain's owned mapping comments", () => {
+  it("shows stage-wide decisions before domain selection and only the active domain's decisions", () => {
     const owned = {
       ...variable,
-      assumptions: ["DM assumption", "AE assumption"],
-      unresolved_mappings: ["DM decision", "AE decision"],
+      assumptions: ["Stage assumption", "DM assumption", "AE assumption"],
+      unresolved_mappings: ["Stage decision", "DM decision", "AE decision"],
       datasets: [
         { ...variable.datasets[0], review_assumptions: ["DM assumption"], review_unresolved_mappings: ["DM decision"] },
         { domain: "AE", description: "Adverse Events", structure: "One record per event", key_variables: ["USUBJID", "AESEQ"], review_assumptions: ["AE assumption"], review_unresolved_mappings: ["AE decision"], variables: [{ name: "AETERM", label: "Reported Term", data_type: "Char", mapping_type: "direct", sources: [{ dataset: "RAW_DM", variable: "AGE", role: "value" }], origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] },
@@ -84,22 +84,22 @@ describe("SDTM mapping review gates", () => {
     };
     render(<SDTMVariableMappingReview value={{ source_spec: source, domain_mapping: domain, variable_mapping: owned }} onChange={vi.fn()} onApprove={vi.fn()} saving={false} />);
 
-    expect(screen.getByText("DM mapping assumptions")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("DM assumption")).toBeInTheDocument();
-    expect(screen.queryByText("Unresolved mappings — one per line")).not.toBeInTheDocument();
-    expect(screen.queryByDisplayValue("DM decision")).not.toBeInTheDocument();
-    expect(screen.queryByDisplayValue("AE assumption")).not.toBeInTheDocument();
+    const stageDecisions = screen.getByRole("region", { name: "Stage-wide feedback decisions" });
+    expect(within(stageDecisions).getByText("Stage decision")).toBeInTheDocument();
+    expect(within(stageDecisions).getByText("Stage assumption")).toBeInTheDocument();
+    expect(stageDecisions.compareDocumentPosition(screen.getByRole("button", { name: "DM" })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("textbox", { name: "Assumptions — one per line" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Unresolved mappings — one per line" })).not.toBeInTheDocument();
     const dmDecisions = screen.getByRole("region", { name: "DM feedback decisions" });
     expect(within(dmDecisions).getByText("DM decision")).toBeInTheDocument();
+    expect(within(dmDecisions).getByText("DM assumption")).toBeInTheDocument();
     expect(within(dmDecisions).queryByText("AE decision")).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "AE feedback decisions" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "AE" }));
-    expect(screen.getByText("AE mapping assumptions")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("AE assumption")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("AE decision")).not.toBeInTheDocument();
     expect(screen.queryByDisplayValue("DM assumption")).not.toBeInTheDocument();
     const aeDecisions = screen.getByRole("region", { name: "AE feedback decisions" });
     expect(within(aeDecisions).getByText("AE decision")).toBeInTheDocument();
+    expect(within(aeDecisions).getByText("AE assumption")).toBeInTheDocument();
     expect(within(aeDecisions).queryByText("DM decision")).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "DM feedback decisions" })).not.toBeInTheDocument();
   });
