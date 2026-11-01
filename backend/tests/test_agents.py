@@ -1561,6 +1561,19 @@ async def test_sdtm_parallel_domain_agents_retry_only_transiently_failed_domain(
     }
 
 
+def test_sdtm_domain_retry_recognizes_timeout_nested_in_task_group() -> None:
+    wrapped = ExceptionGroup(
+        "unhandled errors in a TaskGroup",
+        [RuntimeError("domain request failed")],
+    )
+    wrapped.exceptions[0].__cause__ = TimeoutError("Request timed out.")
+
+    assert SDTMUseCase._is_retryable_domain_error(wrapped) is True
+    assert SDTMUseCase._is_retryable_domain_error(
+        ExceptionGroup("unhandled errors in a TaskGroup", [ValueError("invalid mapping")])
+    ) is False
+
+
 async def test_completed_variable_domain_rerun_also_refreshes_only_its_rules(tmp_path, monkeypatch) -> None:
     source_spec = EDCSourceSpecification.model_validate({
         "study_name": "SYN-RERUN",

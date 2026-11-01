@@ -516,11 +516,6 @@ class SDTMUseCase(ClinicalUseCase):
 
     @staticmethod
     def _is_retryable_domain_error(exc: BaseException) -> bool:
-        status_code = getattr(exc, "status_code", None)
-        if isinstance(status_code, int) and (status_code == 429 or status_code >= 500):
-            return True
-        name = type(exc).__name__.casefold()
-        message = " ".join(str(exc).split()).casefold()
         retryable_markers = (
             "timeout",
             "timed out",
@@ -532,7 +527,29 @@ class SDTMUseCase(ClinicalUseCase):
             "temporarily unavailable",
             "service unavailable",
         )
-        return any(marker in name or marker in message for marker in retryable_markers)
+        pending: list[BaseException] = [exc]
+        visited: set[int] = set()
+        while pending:
+            current = pending.pop()
+            if id(current) in visited:
+                continue
+            visited.add(id(current))
+            status_code = getattr(current, "status_code", None)
+            if isinstance(status_code, int) and (status_code == 429 or status_code >= 500):
+                return True
+            name = type(current).__name__.casefold()
+            message = " ".join(str(current).split()).casefold()
+            if any(marker in name or marker in message for marker in retryable_markers):
+                return True
+            if isinstance(current, BaseExceptionGroup):
+                pending.extend(current.exceptions)
+            cause = current.__cause__
+            context = current.__context__
+            if cause is not None:
+                pending.append(cause)
+            if context is not None:
+                pending.append(context)
+        return False
 
     @staticmethod
     def _record_domain_retry(
