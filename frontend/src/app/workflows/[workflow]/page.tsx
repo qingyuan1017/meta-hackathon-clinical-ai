@@ -58,7 +58,7 @@ export default function WorkflowPage() {
           <Link href="/" className="focus-ring text-sm font-medium text-zinc-500 hover:text-white">All modules</Link>
         </div>
       </div>
-      <div className="mt-7 grid items-start gap-7 xl:grid-cols-[260px_minmax(0,1fr)] 2xl:grid-cols-[240px_minmax(0,1fr)_380px]">
+      <div className="mt-7 grid items-start gap-7 xl:grid-cols-[260px_minmax(0,1fr)]">
         <aside>
           <div className="rounded-xl border border-white/10 bg-[#18181b] p-5 shadow-sm">
             <div className="grid h-10 w-10 place-items-center rounded-lg bg-clinical-500/15 text-violet-300"><Icon size={19} /></div>

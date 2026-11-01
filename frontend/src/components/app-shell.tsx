@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useState } from "react";
-import { ChevronDown, FlaskConical, Menu, PanelLeftClose, X } from "lucide-react";
+import { ChevronDown, FlaskConical, Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { ConfigStatus } from "@/components/config-status";
 import { workspaceGroups } from "@/lib/workflows";
 import { cn } from "@/lib/utils";
@@ -62,9 +62,10 @@ function Brand() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[272px_minmax(0,1fr)]">
-      <aside className="hidden h-screen flex-col border-r border-white/10 bg-[#0d0d0f] px-4 py-5 lg:sticky lg:top-0 lg:flex">
+    <div className={cn("min-h-screen lg:grid", sidebarOpen ? "lg:grid-cols-[272px_minmax(0,1fr)]" : "lg:grid-cols-[minmax(0,1fr)]")}>
+      <aside className={cn("h-screen flex-col border-r border-white/10 bg-[#0d0d0f] px-4 py-5 lg:sticky lg:top-0", sidebarOpen ? "hidden lg:flex" : "hidden")}>
         <div className="px-2"><Brand /></div>
         <div className="mt-7 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-3">
           <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-zinc-500">Workspace</p>
@@ -81,10 +82,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="min-w-0">
         <header className="sticky top-0 z-40 flex h-16 items-center justify-between border-b border-white/10 bg-[#111113]/90 px-4 backdrop-blur-xl lg:px-8">
           <div className="lg:hidden"><Brand /></div>
-          <div className="hidden items-center gap-2 text-sm text-zinc-400 lg:flex">
-            <PanelLeftClose size={16} />
-            <span>Clinical development workspace</span>
-          </div>
+          <button
+            type="button"
+            aria-label={sidebarOpen ? "Collapse navigation sidebar" : "Expand navigation sidebar"}
+            aria-expanded={sidebarOpen}
+            onClick={() => setSidebarOpen((value) => !value)}
+            className="focus-ring hidden items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-400 transition hover:bg-white/[0.05] hover:text-white lg:flex"
+          >
+            {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
+            <span>{sidebarOpen ? "Collapse workspace navigation" : "Expand workspace navigation"}</span>
+          </button>
           <div className="hidden items-center gap-2 text-xs font-medium text-zinc-400 sm:flex">
             <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
             Local artifact environment
