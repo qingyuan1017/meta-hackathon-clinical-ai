@@ -323,7 +323,7 @@ def _list_identity(*values: list[Any]) -> str | None:
     items = [item for value in values for item in value]
     if not items or not all(isinstance(item, dict) for item in items):
         return None
-    for key in ("domain", "name", "source_dataset", "output_id", "variable", "finding_id", "where_clause"):
+    for key in ("domain", "name", "source_dataset", "output_id", "rule_id", "variable", "finding_id", "where_clause"):
         if all(key in item and item[key] not in (None, "") for item in items):
             for value in values:
                 keys = [str(item[key]).upper() for item in value]

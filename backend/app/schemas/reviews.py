@@ -111,6 +111,16 @@ class SDTMVariableMappingUpdate(BaseModel):
     variable_mapping: SDTMVariableMappingPlan
 
 
+class SDTMDomainRerunRequest(BaseModel):
+    stage: Literal["variable_mapping", "rule_augmentation"]
+    domain: str = Field(min_length=2, max_length=8)
+
+    @field_validator("domain")
+    @classmethod
+    def normalize_domain(cls, value: str) -> str:
+        return value.strip().upper()
+
+
 class TLFShellPlanUpdate(BaseModel):
     shell_plan: TLFAnalysisPlan
 

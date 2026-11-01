@@ -16,6 +16,8 @@ from app.models import Artifact, Job
 from app.schemas import StudySummary
 from app.review_patches import build_patch_record, new_patch_request, public_patch, result_revision, write_patch_record
 from app.schemas.reviews import ReviewScope
+from app.sdtm_workbench import read_state, write_state
+from app.workflows import WorkflowResult
 
 
 def _record_plan(domain: str, source_dataset: str) -> dict:
@@ -34,6 +36,24 @@ def _record_plan(domain: str, source_dataset: str) -> dict:
 
 def _source(dataset: str, variable: str, role: str = "value") -> dict:
     return {"dataset": dataset, "variable": variable, "role": role}
+
+
+def _completed_sdtm_plan() -> dict:
+    return {
+        "study_name": "SYN-RERUN",
+        "domain_mappings": [
+            {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "DM source"},
+            {"source_dataset": "RAW_AE", "target_domain": "AE", "rationale": "AE source"},
+        ],
+        "datasets": [
+            {"domain": "DM", "description": "Demographics", "record_plan": _record_plan("DM", "RAW_DM"), "variables": [{"name": "AGE", "label": "Age", "data_type": "Num", "sources": [_source("RAW_DM", "AGE")]}]},
+            {"domain": "AE", "description": "Adverse events", "record_plan": _record_plan("AE", "RAW_AE"), "variables": [{"name": "AETERM", "label": "Term", "data_type": "Char", "sources": [_source("RAW_AE", "AETERM")]}]},
+        ],
+        "rule_augmentations": [
+            {"rule_id": "DM-AGE", "target_domain": "DM", "target_variable": "AGE", "description": "Copy age", "logic": "Direct", "r_expression": '.data[["AGE"]]', "sas_expression": "AGE"},
+            {"rule_id": "AE-AETERM", "target_domain": "AE", "target_variable": "AETERM", "description": "Copy term", "logic": "Direct", "r_expression": '.data[["AETERM"]]', "sas_expression": "AETERM"},
+        ],
+    }
 
 
 def test_health_does_not_expose_secret() -> None:
@@ -995,6 +1015,135 @@ def test_scoped_review_patch_conflict_is_not_applied() -> None:
                 session.delete(stored)
                 session.commit()
         shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
+def test_completed_sdtm_domain_rerun_is_queued_without_removing_current_result(monkeypatch) -> None:
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key, settings.meta_model = "test", "test-model"
+    queued: list[str] = []
+    monkeypatch.setattr(runner, "enqueue_sdtm_domain_rerun", queued.append)
+    baseline = _completed_sdtm_plan()
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm", title="Completed SDTM", status="succeeded",
+            options_json="{}", input_files_json="[]", result_json=json.dumps(baseline),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/sdtm-domain-reruns",
+                json={"stage": "variable_mapping", "domain": "ae"},
+            )
+        assert response.status_code == 202, response.text
+        payload = response.json()
+        assert payload["status"] == "queued"
+        assert payload["result"] == baseline
+        assert queued == [job_id]
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            request = json.loads(stored.options_json)["_sdtm_domain_rerun_request"]
+            assert request["stage"] == "variable_mapping_domain"
+            assert request["rerun_stage"] == "variable_mapping"
+            assert request["target_domain"] == "AE"
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
+def test_approved_completed_domain_rerun_rebuilds_artifacts_and_resets_evidence(monkeypatch) -> None:
+    baseline = _completed_sdtm_plan()
+    proposed = json.loads(json.dumps(baseline))
+    proposed["rule_augmentations"][1]["description"] = "Normalize reported term"
+    request = new_patch_request(
+        stage="rule_augmentation_domain",
+        message="Regenerate AE rules.",
+        scope=ReviewScope(target_domains=["AE"]),
+        baseline=baseline,
+    )
+    request.update({"rerun_stage": "rule_augmentation", "target_domain": "AE"})
+    record = build_patch_record(request, baseline, proposed)
+
+    def fake_render(_service, workflow, *, result, inputs, options, output_dir):
+        assert workflow == "sdtm"
+        assert result["datasets"][0]["domain"] == "DM"
+        output_dir.mkdir(parents=True)
+        mapping = output_dir / "sdtm-mapping.json"
+        program = output_dir / "build-ae.R"
+        mapping.write_text(json.dumps(result), encoding="utf-8")
+        program.write_text("# regenerated AE program\n", encoding="utf-8")
+        return WorkflowResult(result=result, paths=[mapping, program], warnings=[])
+
+    monkeypatch.setattr("app.main.WorkflowService.render_revision", fake_render)
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm", title="Approved domain rerun", status="review_required",
+            options_json=json.dumps({
+                "_review_stage": "rule_augmentation_domain",
+                "_pending_review_patch": public_patch(record),
+            }),
+            input_files_json="[]", result_json=json.dumps(baseline),
+        )
+        session.add(job)
+        session.flush()
+        job_dir = settings.jobs_dir / job.id
+        original = job_dir / "output" / "original.txt"
+        original.parent.mkdir(parents=True, exist_ok=True)
+        original.write_text("approved baseline", encoding="utf-8")
+        job.artifacts.append(Artifact(**artifact_record(original, job_dir)))
+        session.commit()
+        job_id = job.id
+    state = read_state(job_dir)
+    state.lifecycle.program_generation = "completed"
+    state.lifecycle.execution = "passed"
+    state.lifecycle.validation = "passed"
+    state.lifecycle.submission_readiness = "ready"
+    write_state(job_dir, state)
+    write_patch_record(job_dir, record)
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/feedback/{request['transaction_id']}/decision",
+                json={
+                    "approved": True,
+                    "expected_revision": result_revision(baseline),
+                    "current_result": baseline,
+                    "reviewer": "Domain reviewer",
+                },
+            )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["status"] == "succeeded"
+        assert payload["result"]["rule_augmentations"][1]["description"] == "Normalize reported term"
+        assert payload["result"]["datasets"][0]["domain"] == "DM"
+        assert payload["result"]["datasets"][0]["variables"][0]["sources"] == baseline["datasets"][0]["variables"][0]["sources"]
+        assert not (job_dir / "output" / "original.txt").exists()
+        assert (job_dir / "output" / "build-ae.R").is_file()
+        current_state = read_state(job_dir)
+        assert current_state.lifecycle.execution == "not_run"
+        assert current_state.lifecycle.validation == "not_run"
+        assert current_state.lifecycle.submission_readiness == "blocked"
+        assert "historical" in " ".join(current_state.limitations)
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            options = json.loads(stored.options_json)
+            assert "_review_stage" not in options
+            assert options["sdtm_variable_mapping"]["datasets"][1]["domain"] == "AE"
+        assert (job_dir / "reviews" / request["transaction_id"] / "approved.json").is_file()
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 def test_voice_guidance_is_transcribed_for_review_without_storing_audio(monkeypatch) -> None:

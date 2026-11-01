@@ -6,8 +6,9 @@ from app.jobs import JobRunner, sanitize_error
 from app.models import Job
 from app.workflows import WorkflowResult
 from app.review_patches import new_patch_request
-from app.schemas import TLFInventoryPlan
+from app.schemas import SDTMPlan, TLFInventoryPlan
 from app.schemas.reviews import ReviewScope
+from app.use_cases.base import GeneratedContent
 from app.use_cases.sdtm import SDTMUseCase
 
 
@@ -150,3 +151,76 @@ def test_sanitize_error_unwraps_nested_exception_groups() -> None:
     )
 
     assert sanitize_error(error) == "JSON schema exceeds the maximum nesting depth of 10 levels"
+
+
+async def test_completed_sdtm_domain_rerun_builds_review_patch_without_replacing_baseline(tmp_path, monkeypatch) -> None:
+    baseline = SDTMPlan.model_validate({
+        "study_name": "SYN-RERUN",
+        "domain_mappings": [
+            {"source_dataset": "RAW_DM", "target_domain": "DM", "rationale": "DM source"},
+            {"source_dataset": "RAW_AE", "target_domain": "AE", "rationale": "AE source"},
+        ],
+        "datasets": [
+            {
+                "domain": "DM", "description": "Demographics",
+                "record_plan": {"steps": [{"step_id": "read-dm", "operation": "read", "description": "Read DM", "output": "dm", "source_dataset": "RAW_DM"}], "output_step": "read-dm"},
+                "variables": [{"name": "AGE", "label": "Age", "data_type": "Num", "sources": [{"dataset": "RAW_DM", "variable": "AGE", "role": "value"}]}],
+            },
+            {
+                "domain": "AE", "description": "Adverse events",
+                "record_plan": {"steps": [{"step_id": "read-ae", "operation": "read", "description": "Read AE", "output": "ae", "source_dataset": "RAW_AE"}], "output_step": "read-ae"},
+                "variables": [{"name": "AETERM", "label": "Term", "data_type": "Char", "sources": [{"dataset": "RAW_AE", "variable": "AETERM", "role": "value"}]}],
+            },
+        ],
+        "rule_augmentations": [
+            {"rule_id": "DM-AGE", "target_domain": "DM", "target_variable": "AGE", "description": "Copy", "logic": "Direct", "r_expression": '.data[["AGE"]]', "sas_expression": "AGE"},
+            {"rule_id": "AE-AETERM", "target_domain": "AE", "target_variable": "AETERM", "description": "Copy", "logic": "Direct", "r_expression": '.data[["AETERM"]]', "sas_expression": "AETERM"},
+        ],
+    })
+    proposed = baseline.model_copy(deep=True)
+    proposed.rule_augmentations[1].description = "Normalize the reported term"
+    request = new_patch_request(
+        stage="rule_augmentation_domain",
+        message="Regenerate AE rules.",
+        scope=ReviewScope(target_domains=["AE"]),
+        baseline=baseline.model_dump(mode="json"),
+    )
+    request.update({"rerun_stage": "rule_augmentation", "target_domain": "AE"})
+
+    async def fake_regenerate(_self, _context, **kwargs):
+        assert kwargs["stage"] == "rule_augmentation"
+        assert kwargs["target_domain"] == "AE"
+        return GeneratedContent(value=proposed, warnings=["AE rules regenerated"])
+
+    monkeypatch.setattr("app.jobs.SDTMUseCase.regenerate_completed_domain", fake_regenerate)
+    monkeypatch.setattr("app.jobs.get_settings", lambda: SimpleNamespace(jobs_dir=tmp_path, meta_api_key="test", meta_api_base_url="http://example.invalid", ai_timeout_seconds=1))
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm", title="Domain rerun", status="queued",
+            options_json=json.dumps({"_sdtm_domain_rerun_request": request}),
+            input_files_json="[]", result_json=baseline.model_dump_json(),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    try:
+        await JobRunner().run_sdtm_domain_rerun(job_id)
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            assert stored is not None
+            assert stored.status == "review_required"
+            assert json.loads(stored.result_json) == baseline.model_dump(mode="json")
+            options = json.loads(stored.options_json)
+            assert options["_review_stage"] == "rule_augmentation_domain"
+            patch = options["_pending_review_patch"]
+            assert patch["operations"] == [{
+                "path": "/rule_augmentations/rule_id=AE-AETERM/description",
+                "before": "Copy",
+                "after": "Normalize the reported term",
+            }]
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()

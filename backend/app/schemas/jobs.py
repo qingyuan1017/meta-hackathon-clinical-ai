@@ -23,6 +23,8 @@ class JobRead(BaseModel):
         "edc_source",
         "domain_mapping",
         "variable_mapping",
+        "variable_mapping_domain",
+        "rule_augmentation_domain",
         "tlf_inventory",
         "tlf_shell",
         "tlf_programming",

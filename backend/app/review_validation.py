@@ -4,6 +4,7 @@ from .agents.runtime import verify_result
 from .schemas import (
     EDCSourceSpecification,
     SDTMDomainMappingReview,
+    SDTMPlan,
     SDTMVariableMappingReview,
     TLFAnalysisPlan,
     TLFInventoryPlan,
@@ -29,6 +30,10 @@ def validate_review_result(workflow: str, stage: str, value: dict, options: dict
         SDTMUseCase.validate_domain_mapping(review.source_spec, review.domain_mapping)
         SDTMUseCase.validate_variable_mapping(review.source_spec, review.domain_mapping, review.variable_mapping)
         return review.model_dump(mode="json")
+    if workflow == "sdtm" and stage in {"variable_mapping_domain", "rule_augmentation_domain"}:
+        plan = SDTMPlan.model_validate(value)
+        validated = SDTMUseCase().validate_result(plan.model_dump(mode="json"))
+        return validated.model_dump(mode="json")
     if workflow == "tlf" and stage == "tlf_inventory":
         plan = TLFInventoryPlan.model_validate(value)
         TLFUseCase.validate_inventory_plan(plan)

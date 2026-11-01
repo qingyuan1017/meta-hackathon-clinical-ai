@@ -22,19 +22,29 @@ def build_csdrg(job_dir: Path, plan: SDTMPlan) -> CSDRGDocument:
     validations = list_validations(job_dir)
     approved = [finding for record in validations for finding in record.findings if finding.approved_at is not None and finding.explanation]
     raw_names = ", ".join(item.logical_name for item in state.inputs.raw_datasets) or "None supplied"
+    current_execution_evidence = bool(attempts) and state.lifecycle.execution in {"passed", "failed", "review_required"}
     execution_body = (
         f"Generated R was executed in the isolated runner. {len(attempts)} immutable attempt(s) are recorded; latest status: {attempts[-1].status}."
-        if attempts else
-        "Generated R and SAS programs were not executed against raw study datasets. No execution evidence is available."
+        if current_execution_evidence else
+        (
+            f"The current generated R and SAS programs have not been executed against raw study datasets. "
+            f"{len(attempts)} prior immutable attempt(s) are retained as historical evidence for earlier programs."
+            if attempts else
+            "Generated R and SAS programs were not executed against raw study datasets. No execution evidence is available."
+        )
     )
-    execution_todos = [] if attempts and attempts[-1].status == "passed" else ["Execute the approved R program against the intended synthetic/de-identified raw datasets and review all output checks."]
-    if validations:
+    execution_todos = [] if current_execution_evidence and attempts[-1].status == "passed" else ["Execute the approved R program against the intended synthetic/de-identified raw datasets and review all output checks."]
+    current_validation_evidence = bool(validations) and state.lifecycle.validation != "not_run"
+    if current_validation_evidence:
         validation_body = "\n".join(f"{record.provider} {record.provider_version}: {record.status}; {len(record.findings)} finding(s)." for record in validations)
+    elif validations:
+        validation_body = f"No standards validation applies to the current programs. {len(validations)} prior validation record(s) are retained as historical evidence for earlier programs."
     else:
         validation_body = "External standards validation was not run and no validation report was imported. Internal execution checks, if any, are not a substitute for standards validation."
-    validation_todos = [] if validations else ["Run a qualified external validator or import a supported Pinnacle 21 report, then review and disposition its findings."]
-    explanation_text = "\n".join(f"{item.rule_id} ({item.dataset or 'general'}): {item.explanation} — approved by {item.reviewer} at {item.approved_at.isoformat()}" for item in approved) or "No reviewer-approved finding explanations are available."
-    unresolved = [finding for record in validations for finding in record.findings if finding.finding_status == "open"]
+    validation_todos = [] if current_validation_evidence else ["Run a qualified external validator or import a supported Pinnacle 21 report, then review and disposition its findings."]
+    current_approved = approved if current_validation_evidence else []
+    explanation_text = "\n".join(f"{item.rule_id} ({item.dataset or 'general'}): {item.explanation} — approved by {item.reviewer} at {item.approved_at.isoformat()}" for item in current_approved) or "No reviewer-approved finding explanations are available for the current programs."
+    unresolved = [finding for record in validations for finding in record.findings if finding.finding_status == "open"] if current_validation_evidence else []
     sections = [
         CSDRGSection(heading="1. Study and submission overview", body=f"Study: {plan.study_name}. This draft supports review and evidence collection; it does not certify conformance or submission readiness."),
         CSDRGSection(heading="2. Standards and controlled terminology", body=f"Planned standard: {plan.standard}; metadata exchange: {plan.define_standard}. Controlled terminology versions are retained from imported validation evidence when reported.", todos=["Confirm the exact SDTMIG, SDTM, and controlled terminology package versions with the study team."]),

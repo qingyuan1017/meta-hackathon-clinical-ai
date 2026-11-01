@@ -41,8 +41,10 @@ from .schemas import (
     JobResultUpdate,
     ReviewPatchDecision,
     ReviewFeedbackUpdate,
+    ReviewScope,
     ReviewScopeProposal,
     ReviewScopeProposalRequest,
+    SDTMDomainRerunRequest,
     SDTMDomainMappingUpdate,
     SDTMDomainMappingPlan,
     SDTMDomainMappingReview,
@@ -600,6 +602,10 @@ async def decide_review_patch(
         current = validate_review_result(job.workflow, str(pending.get("stage")), decision.current_result, options)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    completed_domain_rerun = str(pending.get("stage")) in {
+        "variable_mapping_domain",
+        "rule_augmentation_domain",
+    }
     now = datetime.now(timezone.utc).isoformat()
     if decision.approved:
         merged, conflicts = three_way_merge(record["baseline"], current, record["proposed"])
@@ -617,25 +623,36 @@ async def decide_review_patch(
             merged = validate_review_result(job.workflow, str(record["stage"]), merged, options)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        job.result_json = json.dumps(merged, ensure_ascii=False)
         record.update({"status": "approved", "conflicts": [], "decided_at": now, "reviewer": decision.reviewer})
-        output_summary = "The scoped patch was approved and merged; untouched paths were preserved."
+        if completed_domain_rerun:
+            options = _clear_review_patch_options(options, transaction_id, clear_stage=True)
+            _apply_completed_sdtm_domain_rerun(job, merged, options, db)
+            output_summary = (
+                "The domain rerun was approved; untouched domains were preserved and all deterministic artifacts "
+                "were rebuilt. Execution and validation evidence for the prior programs remains historical only."
+            )
+        else:
+            job.result_json = json.dumps(merged, ensure_ascii=False)
+            output_summary = "The scoped patch was approved and merged; untouched paths were preserved."
     else:
         job.result_json = json.dumps(current, ensure_ascii=False)
         record.update({"status": "rejected", "conflicts": [], "decided_at": now, "reviewer": decision.reviewer})
-        output_summary = "The scoped patch was rejected; the current draft was not changed."
+        if completed_domain_rerun:
+            job.status = "succeeded"
+            job.completed_at = datetime.now(timezone.utc)
+            job.warnings_json = json.dumps(
+                [DISCLAIMER, "The domain rerun proposal was rejected; the approved result and artifacts were preserved."],
+                ensure_ascii=False,
+            )
+            state = read_state(settings.jobs_dir / job.id)
+            state.lifecycle.program_generation = "completed"
+            state.lifecycle.submission_readiness = "blocked"
+            write_state(settings.jobs_dir / job.id, state)
+            output_summary = "The domain rerun was rejected; the approved result and existing artifacts were preserved."
+        else:
+            output_summary = "The scoped patch was rejected; the current draft was not changed."
     write_patch_record(settings.jobs_dir / job.id, record)
-    remaining_feedback = [
-        item for item in options.get("review_feedback", [])
-        if not isinstance(item, dict) or item.get("transaction_id") != transaction_id
-    ]
-    if remaining_feedback:
-        options["review_feedback"] = remaining_feedback
-    else:
-        options.pop("review_feedback", None)
-    options.pop("_pending_review_patch", None)
-    options.pop("_review_patch_request", None)
-    options.pop("_review_revision_result", None)
+    options = _clear_review_patch_options(options, transaction_id, clear_stage=completed_domain_rerun)
     job.options_json = json.dumps(options, ensure_ascii=False)
     job.updated_at = datetime.now(timezone.utc)
     _append_patch_decision_event(job, record, output_summary)
@@ -958,6 +975,71 @@ async def approve_sdtm_variable_mapping(
     options.pop("_sdtm_variable_mapping_reconcile", None)
     options["sdtm_variable_mapping"] = update.variable_mapping.model_dump(mode="json")
     return _resume_sdtm_review(job, options, db)
+
+
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-domain-reruns",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def rerun_completed_sdtm_domain(
+    job_id: str,
+    update: SDTMDomainRerunRequest,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    """Propose a variable/VLM or rule refresh for one completed SDTM domain."""
+
+    if not settings.meta_configured:
+        raise HTTPException(status_code=503, detail="Meta API key and model are not configured.")
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    options = json.loads(job.options_json)
+    _ensure_no_pending_review_patch(options)
+    if job.workflow != "sdtm" or job.status != "succeeded" or not job.result_json:
+        raise HTTPException(status_code=409, detail="A completed SDTM job is required for a domain rerun.")
+    try:
+        baseline_raw = json.loads(job.result_json)
+        baseline = SDTMPlan.model_validate(baseline_raw)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail="The completed SDTM result is unavailable or invalid.") from exc
+    if not isinstance(baseline_raw, dict):
+        raise HTTPException(status_code=409, detail="The completed SDTM result is unavailable or invalid.")
+    domains = {dataset.domain.upper() for dataset in baseline.datasets}
+    if update.domain not in domains:
+        raise HTTPException(status_code=422, detail=f"The completed SDTM plan does not contain domain {update.domain}.")
+
+    review_stage = "variable_mapping_domain" if update.stage == "variable_mapping" else "rule_augmentation_domain"
+    message = (
+        f"Regenerate {update.domain} variable and value-level mappings and refresh dependent {update.domain} rules."
+        if update.stage == "variable_mapping"
+        else f"Regenerate rule augmentation for {update.domain}."
+    )
+    request = new_patch_request(
+        stage=review_stage,
+        message=message,
+        scope=ReviewScope(target_domains=[update.domain]),
+        baseline=baseline_raw,
+    )
+    request["rerun_stage"] = update.stage
+    request["target_domain"] = update.domain
+    options["_sdtm_domain_rerun_request"] = request
+    job.options_json = json.dumps(options, ensure_ascii=False)
+    job.status = "queued"
+    job.error = None
+    job.completed_at = None
+    job.updated_at = datetime.now(timezone.utc)
+    write_patch_record(settings.jobs_dir / job.id, {**request, "baseline": baseline_raw})
+    progress_path = settings.jobs_dir / job.id / "agent" / "progress.json"
+    progress_path.unlink(missing_ok=True)
+    state = read_state(settings.jobs_dir / job.id)
+    state.lifecycle.program_generation = "running"
+    state.lifecycle.submission_readiness = "blocked"
+    write_state(settings.jobs_dir / job.id, state)
+    db.commit()
+    db.refresh(job)
+    runner.enqueue_sdtm_domain_rerun(job.id)
+    return _job_read(job)
 
 
 @app.get(
@@ -1493,6 +1575,127 @@ def _default_title(workflow: str, options: dict) -> str:
     return workflow.replace("-", " ").title()
 
 
+def _clear_review_patch_options(options: dict, transaction_id: str, *, clear_stage: bool = False) -> dict:
+    cleaned = dict(options)
+    remaining_feedback = [
+        item for item in cleaned.get("review_feedback", [])
+        if not isinstance(item, dict) or item.get("transaction_id") != transaction_id
+    ]
+    if remaining_feedback:
+        cleaned["review_feedback"] = remaining_feedback
+    else:
+        cleaned.pop("review_feedback", None)
+    for key in (
+        "_pending_review_patch",
+        "_review_patch_request",
+        "_review_revision_result",
+        "_sdtm_domain_rerun_request",
+    ):
+        cleaned.pop(key, None)
+    if clear_stage:
+        cleaned.pop("_review_stage", None)
+    return cleaned
+
+
+def _apply_completed_sdtm_domain_rerun(
+    job: Job,
+    result: dict,
+    options: dict,
+    db: Session,
+) -> None:
+    """Render and atomically install a human-approved completed-job domain rerun."""
+
+    plan = SDTMPlan.model_validate(result)
+    job_dir = settings.jobs_dir / job.id
+    inputs = [(job_dir / "input" / name).resolve() for name in json.loads(job.input_files_json)]
+    next_output = job_dir / f"output-next-{uuid4()}"
+    current_output = job_dir / "output"
+    backup_output = job_dir / f"output-backup-{uuid4()}"
+    prior_state = read_state(job_dir)
+    current_state = prior_state.model_copy(deep=True)
+    current_state.lifecycle.program_generation = "completed"
+    current_state.lifecycle.execution = "not_run"
+    current_state.lifecycle.validation = "not_run"
+    current_state.lifecycle.submission_readiness = "blocked"
+    limitation = (
+        "The approved mapping changed after a domain rerun; prior execution and validation records are historical "
+        "and do not establish evidence for the current programs."
+    )
+    if limitation not in current_state.limitations:
+        current_state.limitations.append(limitation)
+    write_state(job_dir, current_state)
+    try:
+        rendered = WorkflowService().render_revision(
+            "sdtm",
+            result=plan.model_dump(mode="json"),
+            inputs=inputs,
+            options=options,
+            output_dir=next_output,
+        )
+    except Exception as exc:
+        write_state(job_dir, prior_state)
+        shutil.rmtree(next_output, ignore_errors=True)
+        detail = getattr(exc, "errors", lambda: str(exc))()
+        raise HTTPException(status_code=422, detail=detail) from exc
+
+    try:
+        if current_output.exists():
+            current_output.rename(backup_output)
+        next_output.rename(current_output)
+        for artifact in list(job.artifacts):
+            if artifact.relative_path.startswith("output/"):
+                job.artifacts.remove(artifact)
+        db.flush()
+        for old_path in rendered.paths:
+            final_path = current_output / old_path.relative_to(next_output)
+            job.artifacts.append(Artifact(**artifact_record(final_path, job_dir)))
+        variable_mapping = SDTMVariableMappingPlan(
+            study_name=plan.study_name,
+            standard=plan.standard,
+            define_standard=plan.define_standard,
+            datasets=plan.datasets,
+            assumptions=plan.assumptions,
+            unresolved_mappings=plan.unresolved_mappings,
+        )
+        domain_mapping = SDTMDomainMappingPlan(
+            study_name=plan.study_name,
+            standard=plan.standard,
+            domain_mappings=plan.domain_mappings,
+            unmapped_datasets=plan.unmapped_datasets,
+        )
+        options["sdtm_variable_mapping"] = variable_mapping.model_dump(mode="json")
+        options["sdtm_domain_mapping"] = domain_mapping.model_dump(mode="json")
+        job.options_json = json.dumps(options, ensure_ascii=False)
+        job.result_json = json.dumps(rendered.result, ensure_ascii=False)
+        job.warnings_json = json.dumps(
+            [
+                DISCLAIMER,
+                "A human-approved domain rerun was merged and all deterministic artifacts were regenerated.",
+                limitation,
+                *rendered.warnings,
+            ],
+            ensure_ascii=False,
+        )
+        job.status = "succeeded"
+        job.error = None
+        job.completed_at = datetime.now(timezone.utc)
+        job.updated_at = job.completed_at
+        _upsert_artifact(job, refresh_evidence_manifest(job_dir), job_dir)
+        _upsert_artifact(job, refresh_evidence_bundle(job_dir), job_dir)
+        db.commit()
+        db.refresh(job)
+    except Exception:
+        db.rollback()
+        write_state(job_dir, prior_state)
+        shutil.rmtree(current_output, ignore_errors=True)
+        if backup_output.exists():
+            backup_output.rename(current_output)
+        raise
+    finally:
+        shutil.rmtree(next_output, ignore_errors=True)
+        shutil.rmtree(backup_output, ignore_errors=True)
+
+
 def _job_read(job: Job, include_result: bool = True) -> JobRead:
     result = json.loads(job.result_json) if include_result and job.result_json else None
     warnings = json.loads(job.warnings_json or "[]") if include_result else []
@@ -1503,6 +1706,8 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
         "edc_source",
         "domain_mapping",
         "variable_mapping",
+        "variable_mapping_domain",
+        "rule_augmentation_domain",
         "tlf_inventory",
         "tlf_shell",
         "tlf_programming",
@@ -1585,7 +1790,11 @@ def _reject_review_identifiers(serialized: str, label: str) -> None:
 
 
 def _ensure_no_pending_review_patch(options: dict) -> None:
-    if options.get("_pending_review_patch") or options.get("_review_patch_request"):
+    if (
+        options.get("_pending_review_patch")
+        or options.get("_review_patch_request")
+        or options.get("_sdtm_domain_rerun_request")
+    ):
         raise HTTPException(
             status_code=409,
             detail="Approve or reject the current scoped revision before approving this review stage.",

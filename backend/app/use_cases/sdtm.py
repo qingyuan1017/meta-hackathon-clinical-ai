@@ -816,12 +816,110 @@ class SDTMUseCase(ClinicalUseCase):
             warnings.append("Blank CRF was not supplied; annotated-crf.pdf was not generated.")
         return GeneratedContent(value=result, warnings=list(dict.fromkeys(warnings)))
 
+    async def regenerate_completed_domain(
+        self,
+        context: UseCaseContext,
+        *,
+        baseline: SDTMPlan,
+        stage: str,
+        target_domain: str,
+    ) -> GeneratedContent:
+        """Regenerate one completed SDTM domain while preserving every other approved domain."""
+
+        domain = target_domain.upper()
+        baseline_domains = {dataset.domain.upper() for dataset in baseline.datasets}
+        if domain not in baseline_domains:
+            raise ValueError(f"Completed SDTM plan does not contain target domain {domain}.")
+        if stage not in {"variable_mapping", "rule_augmentation"}:
+            raise ValueError(f"Unsupported completed SDTM domain rerun stage {stage}.")
+
+        crf, edc = self._workflow_inputs(context.inputs)
+        source_spec = self._approved_source_spec(context.options)
+        domain_mapping = SDTMDomainMappingPlan(
+            study_name=baseline.study_name,
+            standard=baseline.standard,
+            domain_mappings=baseline.domain_mappings,
+            unmapped_datasets=baseline.unmapped_datasets,
+        )
+        self.validate_domain_mapping(source_spec, domain_mapping)
+        baseline_variable_mapping = SDTMVariableMappingPlan(
+            study_name=baseline.study_name,
+            standard=baseline.standard,
+            define_standard=baseline.define_standard,
+            datasets=baseline.datasets,
+            assumptions=baseline.assumptions,
+            unresolved_mappings=baseline.unresolved_mappings,
+        )
+        variable_mapping = baseline_variable_mapping
+        warnings: list[str] = []
+
+        if stage == "variable_mapping":
+            generated, variable_warnings = await self._generate_variable_mapping_batches(
+                context,
+                source_spec=source_spec,
+                domain_mapping=domain_mapping,
+                context_inputs=self._mapping_context_inputs(context, crf, edc),
+                crf=crf,
+                agent_options=self._agent_options(context.options),
+                stage_count=len(self.descriptor.stages),
+                target_domains=[domain],
+            )
+            variable_mapping = self.reconcile_variable_mapping(
+                domain_mapping,
+                baseline=baseline_variable_mapping,
+                generated=generated,
+                preserve_domains=[item for item in baseline_domains if item != domain],
+            )
+            self.validate_variable_mapping(source_spec, domain_mapping, variable_mapping)
+            warnings.extend(variable_warnings)
+
+        rule_plan, rule_warnings = await self._generate_rule_batches(
+            context,
+            domain_mapping=domain_mapping,
+            variable_mapping=variable_mapping,
+            target_domains=[domain],
+        )
+        replacement_rules = sorted(
+            rule_plan.rule_augmentations,
+            key=lambda rule: rule.target_variable.upper(),
+        )
+        existing_rules_by_domain: dict[str, list[Any]] = {}
+        for rule in baseline.rule_augmentations:
+            existing_rules_by_domain.setdefault(rule.target_domain.upper(), []).append(rule)
+        merged_rules = []
+        for dataset in variable_mapping.datasets:
+            dataset_domain = dataset.domain.upper()
+            merged_rules.extend(
+                replacement_rules
+                if dataset_domain == domain
+                else existing_rules_by_domain.get(dataset_domain, [])
+            )
+        proposed = SDTMPlan(
+            study_name=baseline.study_name,
+            standard=variable_mapping.standard,
+            define_standard=variable_mapping.define_standard,
+            datasets=variable_mapping.datasets,
+            domain_mappings=baseline.domain_mappings,
+            unmapped_datasets=baseline.unmapped_datasets,
+            rule_augmentations=merged_rules,
+            assumptions=list(dict.fromkeys([*variable_mapping.assumptions, *rule_plan.assumptions])),
+            unresolved_mappings=list(
+                dict.fromkeys([*variable_mapping.unresolved_mappings, *rule_plan.unresolved_mappings])
+            ),
+        )
+        validated = self.validate_result(proposed.model_dump(mode="json"))
+        return GeneratedContent(
+            value=validated,
+            warnings=list(dict.fromkeys([*warnings, *rule_warnings, *self.result_warnings(validated)])),
+        )
+
     async def _generate_rule_batches(
         self,
         context: UseCaseContext,
         *,
         domain_mapping: SDTMDomainMappingPlan,
         variable_mapping: SDTMVariableMappingPlan,
+        target_domains: list[str] | None = None,
     ) -> tuple[SDTMRuleAugmentationPlan, list[str]]:
         variable_rules = []
         assumptions: list[str] = []
@@ -831,7 +929,14 @@ class SDTMUseCase(ClinicalUseCase):
         stage_count = len(self.descriptor.stages)
 
         datasets_by_domain = {dataset.domain.upper(): dataset for dataset in variable_mapping.datasets}
-        target_domains = list(datasets_by_domain)
+        requested_domains = (
+            list(datasets_by_domain)
+            if target_domains is None
+            else list(dict.fromkeys(item.upper() for item in target_domains))
+        )
+        unknown_domains = sorted(set(requested_domains) - set(datasets_by_domain))
+        if unknown_domains:
+            raise ValueError(f"Rule augmentation requested unknown target domains: {', '.join(unknown_domains)}.")
 
         async def generate_domain(
             target_domain: str,
@@ -877,7 +982,7 @@ class SDTMUseCase(ClinicalUseCase):
 
         outcomes = await self._run_parallel_domain_agents(
             context,
-            target_domains=target_domains,
+            target_domains=requested_domains,
             stage=self.descriptor.stages[2],
             stage_index=3,
             stage_count=stage_count,
@@ -885,7 +990,7 @@ class SDTMUseCase(ClinicalUseCase):
             generate=generate_domain,
         )
 
-        for target_domain, outcome in zip(target_domains, outcomes, strict=True):
+        for target_domain, outcome in zip(requested_domains, outcomes, strict=True):
             dataset = datasets_by_domain[target_domain]
             batch_plan = cast(SDTMRuleAugmentationPlan, outcome.value)
             self._validate_rule_batch(target_domain, dataset, batch_plan)

@@ -7,18 +7,19 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
-
+from .ai import MetaAIClient
 from .artifacts import artifact_record
 from .config import get_settings
 from .db import SessionLocal
 from .models import Artifact, Job
-from .schemas import DISCLAIMER
+from .schemas import DISCLAIMER, SDTMPlan
 from .sdtm_workbench import read_state, write_state
 from .sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
 from .review_patches import build_patch_record, public_patch, scope_candidate, write_patch_record
 from .schemas.reviews import ReviewScope
 from .review_validation import validate_review_result
+from .use_cases.base import UseCaseContext
+from .use_cases.sdtm import SDTMUseCase
 from .workflows import WorkflowService
 
 
@@ -33,6 +34,100 @@ class JobRunner:
         task = asyncio.create_task(self.run(job_id), name=f"job-{job_id}")
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
+
+    def enqueue_sdtm_domain_rerun(self, job_id: str) -> None:
+        task = asyncio.create_task(self.run_sdtm_domain_rerun(job_id), name=f"sdtm-domain-rerun-{job_id}")
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def run_sdtm_domain_rerun(self, job_id: str) -> None:
+        """Generate a completed-job domain proposal without replacing approved artifacts."""
+
+        settings = get_settings()
+        with SessionLocal() as session:
+            job = session.get(Job, job_id)
+            if job is None:
+                return
+            options = json.loads(job.options_json)
+            request = options.get("_sdtm_domain_rerun_request")
+            baseline_raw = json.loads(job.result_json) if job.result_json else None
+            if not isinstance(request, dict) or not isinstance(baseline_raw, dict):
+                return
+            job.status = "running"
+            job.updated_at = datetime.now(timezone.utc)
+            session.commit()
+            input_names = json.loads(job.input_files_json)
+
+        job_dir = settings.jobs_dir / job_id
+        inputs = [(job_dir / "input" / name).resolve() for name in input_names]
+        try:
+            baseline = SDTMPlan.model_validate(baseline_raw)
+            generated = await SDTMUseCase().regenerate_completed_domain(
+                UseCaseContext(
+                    inputs=inputs,
+                    options=options,
+                    ai=MetaAIClient(settings),
+                    settings=settings,
+                    agent_progress_path=job_dir / "agent" / "progress.json",
+                ),
+                baseline=baseline,
+                stage=str(request["rerun_stage"]),
+                target_domain=str(request["target_domain"]),
+            )
+            proposed = generated.value.model_dump(mode="json")
+            patch_record = build_patch_record(request, baseline_raw, proposed)
+            write_patch_record(job_dir, patch_record)
+            with SessionLocal() as session:
+                job = session.get(Job, job_id)
+                if job is None:
+                    return
+                saved_options = json.loads(job.options_json)
+                saved_options.pop("_sdtm_domain_rerun_request", None)
+                saved_options["_pending_review_patch"] = public_patch(patch_record)
+                saved_options["_review_stage"] = str(request["stage"])
+                job.options_json = json.dumps(saved_options, ensure_ascii=False)
+                job.warnings_json = json.dumps(
+                    [
+                        DISCLAIMER,
+                        *generated.warnings,
+                        f"A domain-scoped {request['rerun_stage'].replace('_', ' ')} proposal for {request['target_domain']} is awaiting human approval; current artifacts remain unchanged.",
+                    ],
+                    ensure_ascii=False,
+                )
+                job.status = "review_required"
+                job.error = None
+                job.completed_at = None
+                job.updated_at = datetime.now(timezone.utc)
+                session.commit()
+            state = read_state(job_dir)
+            state.lifecycle.program_generation = "review_required"
+            state.lifecycle.submission_readiness = "blocked"
+            write_state(job_dir, state)
+        except Exception as exc:
+            logger.exception("SDTM domain rerun %s failed", job_id)
+            safe_error = sanitize_error(exc)
+            with SessionLocal() as session:
+                job = session.get(Job, job_id)
+                if job is None:
+                    return
+                saved_options = json.loads(job.options_json)
+                saved_options.pop("_sdtm_domain_rerun_request", None)
+                saved_options.pop("_review_stage", None)
+                job.options_json = json.dumps(saved_options, ensure_ascii=False)
+                existing_warnings = json.loads(job.warnings_json or "[]")
+                job.warnings_json = json.dumps(
+                    [*existing_warnings, f"Domain rerun failed; the approved result and artifacts were preserved: {safe_error}"],
+                    ensure_ascii=False,
+                )
+                job.status = "succeeded"
+                job.error = None
+                job.completed_at = datetime.now(timezone.utc)
+                job.updated_at = job.completed_at
+                session.commit()
+            state = read_state(job_dir)
+            state.lifecycle.program_generation = "completed"
+            state.lifecycle.submission_readiness = "blocked"
+            write_state(job_dir, state)
 
     async def run(self, job_id: str) -> None:
         settings = get_settings()
