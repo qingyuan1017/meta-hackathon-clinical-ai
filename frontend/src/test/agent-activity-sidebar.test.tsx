@@ -52,12 +52,30 @@ afterEach(() => {
 });
 
 describe("AgentActivitySidebar", () => {
+  it("starts collapsed and supports drawer and full-screen history views", async () => {
+    vi.spyOn(api, "agentProgress").mockResolvedValue(progress);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><AgentActivitySidebar job={job} /></ReviewDraftProvider></QueryClientProvider>);
+
+    expect(screen.queryByRole("dialog", { name: "Agent activity history" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Agent history" }));
+    expect(screen.getByRole("dialog", { name: "Agent activity history" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "View agent history full screen" }));
+    expect(screen.getByRole("button", { name: "Exit full screen agent history" })).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Collapse agent history" }));
+    expect(screen.queryByRole("dialog", { name: "Agent activity history" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Agent history" })).toBeInTheDocument();
+  });
+
   it("submits human guidance as a stage revision without approval", async () => {
     vi.spyOn(api, "agentProgress").mockResolvedValue(progress);
     const submit = vi.spyOn(api, "submitReviewFeedback").mockResolvedValue({ ...job, status: "queued", review_stage: null });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><AgentActivitySidebar job={job} /></ReviewDraftProvider></QueryClientProvider>);
 
+    fireEvent.click(screen.getByRole("button", { name: "Agent history" }));
     const inputs = await screen.findAllByLabelText("Review guidance for the agent");
     fireEvent.change(inputs[0], { target: { value: "Use the Safety population for every AE output." } });
     fireEvent.click(screen.getAllByRole("checkbox")[0]);
@@ -106,6 +124,7 @@ describe("AgentActivitySidebar", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={job.id}><AgentActivitySidebar job={job} /></ReviewDraftProvider></QueryClientProvider>);
 
+    fireEvent.click(screen.getByRole("button", { name: "Agent history" }));
     fireEvent.click((await screen.findAllByRole("button", { name: "Start voice input" }))[0]);
     const stop = await screen.findByRole("button", { name: "Stop voice input" });
     fireEvent.click(stop);

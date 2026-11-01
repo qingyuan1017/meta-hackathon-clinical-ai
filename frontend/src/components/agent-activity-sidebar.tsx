@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Mic, MicOff, PanelRightClose, PanelRightOpen, Send } from "lucide-react";
+import { LoaderCircle, Maximize2, Mic, MicOff, Minimize2, PanelRightClose, PanelRightOpen, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { convertRecordingToWav } from "@/lib/audio";
 import { useReviewDraft } from "@/lib/review-draft-context";
@@ -11,8 +11,8 @@ import { AgentTurnTimeline } from "./agent-turn-timeline";
 import { StatusBadge } from "./status-badge";
 
 export function AgentActivitySidebar({ job }: { job: Job }) {
-  const shouldStartOpen = job.status === "queued" || job.status === "running" || job.status === "review_required";
-  const [drawerOpen, setDrawerOpen] = useState(shouldStartOpen);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [fullScreen, setFullScreen] = useState(false);
   const [message, setMessage] = useState("");
   const queryClient = useQueryClient();
   const { currentResult } = useReviewDraft();
@@ -36,10 +36,24 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
     },
   });
 
-  useEffect(() => setDrawerOpen(shouldStartOpen), [job.id, shouldStartOpen]);
+  useEffect(() => {
+    setDrawerOpen(false);
+    setFullScreen(false);
+  }, [job.id]);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (fullScreen) setFullScreen(false);
+      else setDrawerOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [drawerOpen, fullScreen]);
 
   const content = query.data
-    ? <AgentTurnTimeline progress={query.data} result={job.result} warnings={job.warnings} compact />
+    ? <AgentTurnTimeline progress={query.data} result={job.result} warnings={job.warnings} compact={!fullScreen} />
     : <div className="grid min-h-48 place-items-center rounded-lg border border-dashed border-white/15 px-4 text-center text-xs leading-5 text-zinc-500">
         {query.isError ? `Agent trace unavailable: ${query.error.message}` : "Loading agent activity…"}
       </div>;
@@ -57,32 +71,33 @@ export function AgentActivitySidebar({ job }: { job: Job }) {
 
   return (
     <>
-      <aside className="sticky top-4 hidden max-h-[calc(100vh-2rem)] min-w-0 overflow-hidden rounded-xl border border-white/10 bg-[#18181b] shadow-sm 2xl:flex 2xl:flex-col" aria-label="Agent activity">
-        <div className="border-b border-white/[0.08]"><ActivityHeader job={job} turnCount={query.data?.events.length} /></div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">{content}</div>
-        {composer}
-      </aside>
-
-      <button
-        type="button"
-        onClick={() => setDrawerOpen(true)}
-        aria-expanded={drawerOpen}
-        className="focus-ring fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-600 px-4 py-3 text-sm font-bold text-white shadow-2xl 2xl:hidden"
-      >
-        <PanelRightOpen size={17} /> Agent activity
-      </button>
+      {!drawerOpen && (
+        <button
+          type="button"
+          onClick={() => setDrawerOpen(true)}
+          aria-expanded={false}
+          className="focus-ring fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-600 px-4 py-3 text-sm font-bold text-white shadow-2xl transition hover:bg-violet-500"
+        >
+          <PanelRightOpen size={17} /> Agent history
+        </button>
+      )}
 
       {drawerOpen && (
-        <div className="fixed inset-0 z-50 2xl:hidden" role="dialog" aria-modal="true" aria-label="Agent activity">
-          <button type="button" aria-label="Dismiss agent activity overlay" onClick={() => setDrawerOpen(false)} className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-          <aside className="absolute inset-y-0 right-0 flex w-[min(94vw,32rem)] flex-col border-l border-white/10 bg-[#18181b] shadow-2xl">
+        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Agent activity history">
+          {!fullScreen && <button type="button" aria-label="Dismiss agent history overlay" onClick={() => setDrawerOpen(false)} className="absolute inset-0 bg-black/70 backdrop-blur-sm" />}
+          <aside className={fullScreen ? "absolute inset-0 flex flex-col bg-[#18181b]" : "absolute inset-y-0 right-0 flex w-[min(94vw,32rem)] flex-col border-l border-white/10 bg-[#18181b] shadow-2xl"}>
             <div className="flex items-start justify-between gap-3 border-b border-white/[0.08]">
               <ActivityHeader job={job} turnCount={query.data?.events.length} />
-              <button type="button" onClick={() => setDrawerOpen(false)} className="focus-ring mr-3 mt-3 grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white" aria-label="Close agent activity">
-                <PanelRightClose size={18} />
-              </button>
+              <div className="mr-3 mt-3 flex shrink-0 items-center gap-2">
+                <button type="button" onClick={() => setFullScreen((value) => !value)} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white" aria-label={fullScreen ? "Exit full screen agent history" : "View agent history full screen"} aria-pressed={fullScreen}>
+                  {fullScreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+                </button>
+                <button type="button" onClick={() => { setDrawerOpen(false); setFullScreen(false); }} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white" aria-label="Collapse agent history">
+                  <PanelRightClose size={18} />
+                </button>
+              </div>
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-3">{content}</div>
+            <div className={fullScreen ? "min-h-0 flex-1 overflow-y-auto p-5 lg:p-8" : "min-h-0 flex-1 overflow-y-auto p-3"}>{content}</div>
             {composer}
           </aside>
         </div>
