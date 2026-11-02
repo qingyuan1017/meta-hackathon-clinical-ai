@@ -12,6 +12,7 @@ from ..agents import AgentOutcome, ClinicalAgentRunner
 from ..agents.runtime import verify_result
 from ..agents.sdtm import SOURCE_NORMALIZATION_AGENT, STAGE_AGENTS
 from ..artifacts import render_sdtm
+from ..sdtm_submission import refresh_submission_package
 from ..csdrg import render_csdrg
 from ..edc_normalization import EDCJSONNormalization, normalize_edc_json
 from ..parsers import chunk_text, parse_edc_source, parse_source
@@ -1258,6 +1259,7 @@ class SDTMUseCase(ClinicalUseCase):
             *render_sdtm(cast(SDTMPlan, result), crf, output_dir, normalize_languages(options.get("languages"))),
         ]
         paths.extend(render_csdrg(output_dir.parent, cast(SDTMPlan, result), output_dir))
+        paths.append(refresh_submission_package(output_dir.parent, cast(SDTMPlan, result), output_dir))
         return paths
 
     @staticmethod

@@ -91,6 +91,7 @@ from .sdtm_validation import (
 )
 from .csdrg import build_csdrg, render_csdrg, render_csdrg_document
 from .sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
+from .sdtm_submission import refresh_submission_package
 from .review_patches import (
     load_patch_record,
     new_patch_request,
@@ -1330,6 +1331,9 @@ def update_csdrg(job_id: str, document: CSDRGDocument, db: Session = Depends(get
     document.generated_at = datetime.now(timezone.utc)
     for path in render_csdrg_document(document, job_dir / "output"):
         _upsert_artifact(job, path, job_dir)
+    _upsert_artifact(job, refresh_submission_package(job_dir, plan), job_dir)
+    _upsert_artifact(job, refresh_evidence_manifest(job_dir), job_dir)
+    _upsert_artifact(job, refresh_evidence_bundle(job_dir), job_dir)
     db.commit()
     return document
 
@@ -1819,6 +1823,7 @@ def _refresh_csdrg_artifacts(job: Job, db: Session) -> None:
     plan = SDTMPlan.model_validate(json.loads(job.result_json))
     for path in render_csdrg(job_dir, plan):
         _upsert_artifact(job, path, job_dir)
+    _upsert_artifact(job, refresh_submission_package(job_dir, plan), job_dir)
     _upsert_artifact(job, refresh_evidence_manifest(job_dir), job_dir)
     _upsert_artifact(job, refresh_evidence_bundle(job_dir), job_dir)
     db.flush()

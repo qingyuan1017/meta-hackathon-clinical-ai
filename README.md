@@ -80,6 +80,8 @@ Pinnacle 21 report import is the dependable integration path. The optional CLI p
 
 The cumulative `sdtm/evidence-manifest.json` and refreshed bundle preserve input hashes, attempts, outputs, validation records, finding decisions, artifact hashes, limitations, and human approvals. Rebuilding current artifacts does not delete earlier execution or validation evidence.
 
+The separate `sdtm-submission-package.zip` download uses a submission-oriented layout: generated XPTs from the current passed execution in `data/`; Define-XML, cSDRG, and the aCRF when available in `define/`; original uploaded CSV/XPT inputs in `raw/`; approved mapping/source specifications in `spec/`; and current per-domain R and export-only SAS programs in `program/`. All five folders are present even when an optional category is unavailable, and `package-manifest.json` records every omission. The package-specific Define-XML links to `../data/*.xpt` and `acrf.pdf`. Raw rows remain excluded from the separate audit-evidence bundle.
+
 #### SDTM runner and optional validator configuration
 
 | Variable | Purpose |
