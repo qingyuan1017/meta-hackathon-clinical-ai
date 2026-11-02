@@ -1458,6 +1458,25 @@ export interface components {
             source_label?: string;
             /** Text rendered in the aCRF mapping box; blank uses DOMAIN.VARIABLE */
             mapping_text?: string;
+            /** Optional manually positioned PDF page */
+            page?: number | null;
+            /** Optional manual left coordinate in PDF points */
+            x?: number | null;
+            /** Optional manual top coordinate in PDF points */
+            y?: number | null;
+        };
+        SDTMACRFPosition: {
+            page: number;
+            x: number;
+            y: number;
+        };
+        SDTMDomainACRFAnnotation: {
+            /** @default true */
+            enabled?: boolean;
+            /** Domain-level annotation text; blank uses the domain code */
+            text?: string;
+            /** Optional per-page dragged positions */
+            positions?: components["schemas"]["SDTMACRFPosition"][];
         };
         SDTMVariable: {
             /** Name */
@@ -1538,6 +1557,7 @@ export interface components {
             acrf_text_color?: string;
             /** @default #EBF2FF */
             acrf_fill_color?: string;
+            acrf_domain_annotation?: components["schemas"]["SDTMDomainACRFAnnotation"];
             /** Variables */
             variables: components["schemas"]["SDTMVariable"][];
             /**

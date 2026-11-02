@@ -72,6 +72,9 @@ export interface SDTMValueLevelMetadataDraft {
 export interface SDTMACRFAnnotationDraft {
   source_label: string;
   mapping_text: string;
+  page?: number | null;
+  x?: number | null;
+  y?: number | null;
 }
 
 export interface SDTMVariableDraft {
@@ -510,8 +513,10 @@ export function normalizeRecordPlan(value: unknown): SDTMRecordPlan {
 }
 
 export function normalizeVariable(value: SDTMVariableDraft): SDTMVariableDraft {
-  return { ...value, acrf_annotations: arrayValue<SDTMACRFAnnotationDraft>(value.acrf_annotations).map((item) => ({ source_label: stringValue(item.source_label, ""), mapping_text: stringValue(item.mapping_text, "") })), mapping_type: validMappingType(value.mapping_type) ? value.mapping_type : "direct", sources: arrayValue<SDTMSourceReference>(value.sources).map((item) => ({ dataset: stringValue(item.dataset, ""), variable: stringValue(item.variable, ""), role: roles.includes(item.role) ? item.role : "value" })), controlled_terms: arrayValue<string>(value.controlled_terms), value_level_metadata: arrayValue<SDTMValueLevelMetadataDraft>(value.value_level_metadata).map((item) => ({ ...item, data_type: item.data_type === "Num" ? "Num" : "Char", sources: arrayValue<SDTMSourceReference>(item.sources), controlled_terms: arrayValue<string>(item.controlled_terms) })) };
+  return { ...value, acrf_annotations: arrayValue<SDTMACRFAnnotationDraft>(value.acrf_annotations).map((item) => ({ source_label: stringValue(item.source_label, ""), mapping_text: stringValue(item.mapping_text, ""), ...(finiteNumberOrNull(item.page) != null && finiteNumberOrNull(item.x) != null && finiteNumberOrNull(item.y) != null ? { page: item.page, x: item.x, y: item.y } : {}) })), mapping_type: validMappingType(value.mapping_type) ? value.mapping_type : "direct", sources: arrayValue<SDTMSourceReference>(value.sources).map((item) => ({ dataset: stringValue(item.dataset, ""), variable: stringValue(item.variable, ""), role: roles.includes(item.role) ? item.role : "value" })), controlled_terms: arrayValue<string>(value.controlled_terms), value_level_metadata: arrayValue<SDTMValueLevelMetadataDraft>(value.value_level_metadata).map((item) => ({ ...item, data_type: item.data_type === "Num" ? "Num" : "Char", sources: arrayValue<SDTMSourceReference>(item.sources), controlled_terms: arrayValue<string>(item.controlled_terms) })) };
 }
+
+function finiteNumberOrNull(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
 
 export function vlmMatrixIssues(domain: string, variables: SDTMVariableDraft[]): string[] {
   const issues: string[] = [];

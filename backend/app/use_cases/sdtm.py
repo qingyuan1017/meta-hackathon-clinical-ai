@@ -328,8 +328,9 @@ class SDTMUseCase(ClinicalUseCase):
                     "set across slice-dependent variables and put test code, test name, result, unit, standard result, "
                     "standard unit, range, and flag sources in their own target-variable VLM cells; every multi-source "
                     "transpose variable must distribute all of its sources into those cells. When a blank CRF is "
-                    "supplied, put every exact question label in repeatable acrf_annotations and default mapping_text "
-                    "to DOMAIN.VARIABLE; otherwise leave acrf_annotations empty and crf_source_label null. Do not "
+                    "supplied, put every exact question label in repeatable acrf_annotations, default mapping_text "
+                    "to DOMAIN.VARIABLE, and leave manual page/x/y unset; otherwise leave acrf_annotations empty and "
+                    "crf_source_label null. Domain labels and no-domain annotations are reviewer-owned. Do not "
                     "generate record-construction steps or target-variable R/SAS code; record preparation belongs "
                     "to the rule/code stage."
                 ),

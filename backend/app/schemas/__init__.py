@@ -45,10 +45,13 @@ from .reviews import (
 )
 from .sdtm import (
     SDTMACRFAnnotation,
+    SDTMACRFPosition,
     SDTMDataset,
     SDTMDomainRecordPlan,
     SDTMDomainMapping,
     SDTMDomainMappingPlan,
+    SDTMDomainACRFAnnotation,
+    SDTMFreeACRFAnnotation,
     SDTMDomainMappingReview,
     SDTMAggregation,
     SDTMJoinKey,
@@ -152,6 +155,9 @@ __all__ = [
     "SDTMDomainRerunRequest",
     "SDTMAggregation",
     "SDTMACRFAnnotation",
+    "SDTMACRFPosition",
+    "SDTMDomainACRFAnnotation",
+    "SDTMFreeACRFAnnotation",
     "SDTMJoinKey",
     "ExecutionAttempt",
     "ExecutionAttemptList",
