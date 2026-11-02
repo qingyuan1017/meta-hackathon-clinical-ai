@@ -4,15 +4,15 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "focus-ring inline-flex items-center justify-center gap-2 rounded-lg text-sm font-bold transition disabled:pointer-events-none disabled:opacity-45",
+  "focus-ring inline-flex items-center justify-center gap-2 rounded-md text-sm font-semibold transition disabled:pointer-events-none disabled:opacity-45",
   {
     variants: {
       variant: {
-        default: "bg-zinc-100 px-4 py-2.5 text-zinc-950 shadow-sm hover:bg-white",
-        clinical: "bg-clinical-600 px-4 py-2.5 text-white shadow-sm hover:bg-clinical-700",
-        outline: "border border-white/15 bg-white/[0.03] px-4 py-2.5 text-zinc-200 hover:bg-white/[0.08]",
-        ghost: "px-3 py-2 text-zinc-400 hover:bg-white/[0.06] hover:text-white",
-        danger: "border border-rose-500/20 bg-rose-500/10 px-3 py-2 text-rose-300 hover:bg-rose-500/20",
+        default: "bg-slate-900 px-4 py-2.5 text-white shadow-sm hover:bg-slate-800",
+        clinical: "bg-[#173f3b] px-4 py-2.5 text-white shadow-sm hover:bg-[#20574f]",
+        outline: "border border-slate-300 bg-white px-4 py-2.5 text-slate-700 hover:bg-slate-50",
+        ghost: "px-3 py-2 text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+        danger: "border border-rose-300 bg-rose-50 px-3 py-2 text-rose-700 hover:bg-rose-100",
       },
       size: { default: "h-10", sm: "h-8 text-xs", lg: "h-12 px-6" },
     },

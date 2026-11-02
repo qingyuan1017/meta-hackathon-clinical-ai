@@ -1,86 +1,111 @@
 import Link from "next/link";
-import { ArrowUpRight, Bot, Download, FolderClock, ShieldCheck, Sparkles } from "lucide-react";
+import { ArrowRight, BookOpenCheck, Clock3, Download, FolderKanban, ShieldCheck } from "lucide-react";
 import { ConfigStatus } from "@/components/config-status";
 import { ExperimentalBadge } from "@/components/experimental-badge";
 import { workflowById, workspaceGroups } from "@/lib/workflows";
 import { API_URL } from "@/lib/api";
 
 const groupCopy = {
-  biostats: "Interpret study intent and create controlled clinical drafts.",
-  "data-management": "Translate protocol requirements into collection-ready designs.",
-  "stats-programming": "Plan standards-based datasets and analysis displays.",
+  biostats: "Study design, protocol interpretation, and controlled document authoring.",
+  "data-management": "Collection design and study documentation for data operations.",
+  "stats-programming": "Standards-based tabulation, analysis displays, and programming assets.",
 };
 
-const summaryCards = [
-  { icon: Bot, value: "5", label: "Specialist agents" },
-  { icon: FolderClock, value: "Local", label: "Persistent job history" },
-  { icon: ShieldCheck, value: "Required", label: "De-identified data" },
+const summaryItems = [
+  { icon: FolderKanban, value: "6", label: "Configured workstreams" },
+  { icon: Clock3, value: "Local", label: "Run history" },
+  { icon: ShieldCheck, value: "Required", label: "De-identification" },
 ];
+
+const sampleFiles = [
+  ["synthetic-protocol.md", "Protocol", "Markdown"],
+  ["blank-crf.pdf", "Blank CRF", "PDF"],
+  ["edc-specification.json", "EDC specification", "JSON"],
+  ["synthetic-sap.md", "Analysis plan", "Markdown"],
+  ["adam-metadata.json", "ADaM metadata", "JSON"],
+  ["sdtm-demo-edc.json", "SDTM DM/AE EDC", "JSON"],
+  ["sdtm-raw-dm.csv", "Raw DM", "CSV"],
+  ["sdtm-raw-ae.csv", "Raw AE", "CSV"],
+  ["sdtm-raw-ae-mismatch.csv", "Raw AE mismatch", "CSV"],
+  ["pinnacle21-demo-report.csv", "P21 report fixture", "CSV"],
+] as const;
 
 export default function HomePage() {
   return (
-    <div className="mx-auto max-w-[1440px] px-5 py-8 lg:px-10 lg:py-10">
-      <section className="flex flex-col justify-between gap-6 border-b border-white/10 pb-8 xl:flex-row xl:items-end">
+    <div className="mx-auto max-w-[1440px] px-5 py-8 lg:px-10 lg:py-12">
+      <section className="grid gap-8 border-b border-slate-300 pb-9 xl:grid-cols-[minmax(0,1fr)_360px] xl:items-end">
         <div>
-          <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-clinical-700"><Sparkles size={14} /> Clinical AI workspace</p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-[-0.035em] text-white sm:text-4xl">Build reviewable clinical artifacts.</h1>
-          <p className="mt-3 max-w-2xl text-sm leading-6 text-zinc-400">Choose a functional area to run a specialist agent, review its structured result, and export deterministic draft artifacts.</p>
+          <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#b6533c]">Clinical development / Overview</p>
+          <h1 className="editorial-title mt-4 max-w-3xl text-4xl leading-[1.05] text-[#17201f] sm:text-5xl">Clinical artifact workspace</h1>
+          <p className="mt-4 max-w-2xl text-[15px] leading-7 text-slate-600">Prepare, review, and export study artifacts across biostatistics, data management, and statistical programming.</p>
         </div>
-        <div className="w-full xl:w-[340px]"><ConfigStatus /></div>
+        <ConfigStatus />
       </section>
 
-      <section className="mt-8 grid gap-3 sm:grid-cols-3" aria-label="Workspace summary">
-        {summaryCards.map(({ icon: Icon, value, label }) => (
-          <div key={label} className="flex items-center gap-4 rounded-xl border border-white/10 bg-white/[0.035] px-5 py-4 shadow-sm">
-            <span className="grid h-9 w-9 place-items-center rounded-lg bg-clinical-500/15 text-violet-300"><Icon size={17} /></span>
-            <div><p className="text-sm font-semibold text-zinc-100">{value}</p><p className="text-xs text-zinc-500">{label}</p></div>
+      <section className="grid border-b border-slate-300 sm:grid-cols-3" aria-label="Workspace summary">
+        {summaryItems.map(({ icon: Icon, value, label }, index) => (
+          <div key={label} className={`flex items-center gap-4 py-5 sm:px-5 ${index > 0 ? "border-t border-slate-300 sm:border-l sm:border-t-0" : ""}`}>
+            <Icon size={18} strokeWidth={1.7} className="text-[#1f6b62]" />
+            <div><p className="text-sm font-semibold text-slate-900">{value}</p><p className="mt-0.5 text-xs text-slate-500">{label}</p></div>
           </div>
         ))}
       </section>
 
-      <section className="mt-10" aria-labelledby="workspaces-heading">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Functional areas</p>
-          <h2 id="workspaces-heading" className="mt-1 text-xl font-semibold tracking-tight text-zinc-100">Clinical development modules</h2>
-          <p className="mt-2 text-sm text-zinc-500">Each module keeps its own generation history, review queue, and artifacts together.</p>
+      <section className="mt-11" aria-labelledby="workspaces-heading">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">Workstreams</p>
+            <h2 id="workspaces-heading" className="mt-2 text-xl font-semibold tracking-tight text-slate-900">Start with a functional area</h2>
+          </div>
+          <p className="max-w-md text-sm leading-6 text-slate-500">Each workstream keeps its inputs, review stages, run history, and exports together.</p>
         </div>
-        <div className="mt-5 grid gap-4 xl:grid-cols-3">
+
+        <div className="mt-6 overflow-hidden border-y border-slate-300 bg-[#fffefa] lg:grid lg:grid-cols-3">
           {workspaceGroups.map((group, groupIndex) => (
-            <div key={group.id} className="overflow-hidden rounded-xl border border-white/10 bg-[#18181b] shadow-sm">
-              <div className="border-b border-white/[0.08] px-5 py-5">
-                <div className="flex items-center justify-between"><span className="text-xs font-semibold text-clinical-700">0{groupIndex + 1}</span><span className="h-2 w-2 rounded-full bg-clinical-500" /></div>
-                <h3 className="mt-5 text-lg font-semibold text-zinc-100">{group.title}</h3>
-                <p className="mt-2 min-h-10 text-sm leading-5 text-zinc-400">{groupCopy[group.id]}</p>
+            <section key={group.id} className={`p-5 lg:p-6 ${groupIndex > 0 ? "border-t border-slate-300 lg:border-l lg:border-t-0" : ""}`}>
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <span className="font-mono text-[10px] font-bold text-[#b6533c]">0{groupIndex + 1}</span>
+                  <h3 className="mt-3 text-lg font-semibold text-slate-900">{group.title}</h3>
+                </div>
+                <span className="mt-1 h-2 w-2 bg-[#1f6b62]" />
               </div>
-              <div className="p-2">
+              <p className="mt-2 min-h-12 text-sm leading-6 text-slate-500">{groupCopy[group.id]}</p>
+              <div className="mt-5 border-t border-slate-200 pt-2">
                 {group.items.map((item) => {
                   const Icon = item.icon;
                   const experimental = workflowById[item.workflow].experimental;
                   return (
-                    <Link key={item.label} href={item.href} aria-label={experimental ? `${item.label} (Experimental)` : item.label} className="focus-ring group flex items-center justify-between rounded-lg px-3 py-3 transition hover:bg-white/[0.05]">
-                      <span className="flex min-w-0 items-center gap-3 text-sm font-medium text-zinc-200"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-white/10 bg-white/[0.03] text-zinc-400"><Icon size={15} /></span><span>{item.label}</span>{experimental && <ExperimentalBadge compact />}</span>
-                      <ArrowUpRight size={15} className="shrink-0 text-zinc-400 transition group-hover:text-clinical-600" />
+                    <Link key={item.label} href={item.href} aria-label={experimental ? `${item.label} (Experimental)` : item.label} className="focus-ring group -mx-2 flex items-center justify-between rounded-md px-2 py-3 transition hover:bg-[#eef4f1]">
+                      <span className="flex min-w-0 items-center gap-3 text-sm font-semibold text-slate-800"><Icon size={16} strokeWidth={1.8} className="shrink-0 text-[#1f6b62]" /><span>{item.label}</span>{experimental && <ExperimentalBadge compact />}</span>
+                      <ArrowRight size={15} className="shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-[#b6533c]" />
                     </Link>
                   );
                 })}
               </div>
-            </div>
+            </section>
           ))}
         </div>
       </section>
 
-      <div className="mt-10">
-        <section className="rounded-xl border border-white/10 bg-[#18181b] p-5 text-white shadow-sm" aria-labelledby="samples-heading">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-violet-300">Safe starting points</p>
-          <h2 id="samples-heading" className="mt-2 text-lg font-semibold">Synthetic sample inputs</h2>
-          <p className="mt-2 text-sm leading-5 text-zinc-400">Fictional files for exercising every workflow without sensitive data.</p>
-          <div className="mt-5 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
-            {[["synthetic-protocol.md", "Protocol"], ["blank-crf.pdf", "Blank CRF"], ["edc-specification.json", "EDC spec"], ["synthetic-sap.md", "SAP"], ["adam-metadata.json", "ADaM"], ["sdtm-demo-edc.json", "SDTM DM/AE EDC"], ["sdtm-raw-dm.csv", "Raw DM"], ["sdtm-raw-ae.csv", "Raw AE"], ["sdtm-raw-ae-mismatch.csv", "Raw AE mismatch"], ["pinnacle21-demo-report.csv", "P21 report fixture"]].map(([file, label]) => (
-              <a key={file} href={`${API_URL}/api/v1/samples/${file}`} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2.5 text-xs font-medium text-zinc-200 transition hover:bg-white/10"><Download size={13} />{label}</a>
-            ))}
+      <section className="mt-12 border border-slate-300 bg-[#fffefa]" aria-labelledby="samples-heading">
+        <div className="grid gap-5 border-b border-slate-300 p-5 sm:grid-cols-[1fr_auto] sm:items-end lg:p-6">
+          <div>
+            <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.18em] text-[#1f6b62]"><BookOpenCheck size={14} /> Reference library</p>
+            <h2 id="samples-heading" className="mt-2 text-lg font-semibold text-slate-900">Synthetic sample inputs</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-500">Fictional source files for testing a workstream without sensitive data.</p>
           </div>
-        </section>
-      </div>
+          <span className="text-xs font-medium text-slate-400">{sampleFiles.length} files</span>
+        </div>
+        <div className="grid sm:grid-cols-2 xl:grid-cols-5">
+          {sampleFiles.map(([file, label, format], index) => (
+            <a key={file} href={`${API_URL}/api/v1/samples/${file}`} className={`focus-ring group flex min-h-20 items-center justify-between gap-3 p-4 transition hover:bg-[#eef4f1] ${index > 0 ? "border-t border-slate-200 sm:border-t-0" : ""} ${index % 2 === 1 ? "sm:border-l" : ""} ${index >= 2 ? "sm:border-t" : ""} xl:border-l xl:border-t-0 ${index >= 5 ? "xl:border-t" : ""}`}>
+              <span><span className="block text-sm font-semibold text-slate-800">{label}</span><span className="mt-1 block text-[10px] font-bold uppercase tracking-wider text-slate-400">{format}</span></span>
+              <Download size={15} className="shrink-0 text-slate-400 group-hover:text-[#1f6b62]" />
+            </a>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

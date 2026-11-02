@@ -35,8 +35,8 @@ export function ReviewPatchPanel({ job, domain, summaryOnly = false }: { job: Jo
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="flex items-center gap-2 text-sm font-extrabold text-amber-100"><GitCompareArrows size={17} />{completedDomainRerun ? "Domain rerun awaiting approval" : "Scoped revision awaiting decision"}</p>
-          <p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-300">{patch.message}</p>
-          <p className="mt-1 text-[11px] text-zinc-500">{patch.operations.length} changed path(s) across {operationGroups.length} domain section(s). Unlisted paths remain locked to the current draft.</p>
+          <p className="mt-1 max-w-3xl text-xs leading-5 text-slate-700">{patch.message}</p>
+          <p className="mt-1 text-[11px] text-slate-500">{patch.operations.length} changed path(s) across {operationGroups.length} domain section(s). Unlisted paths remain locked to the current draft.</p>
         </div>
         <span className="rounded-full border border-amber-400/20 bg-amber-400/10 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-amber-200">{patch.stage.replaceAll("_", " ")}</span>
       </div>
@@ -45,9 +45,9 @@ export function ReviewPatchPanel({ job, domain, summaryOnly = false }: { job: Jo
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button type="button" variant="clinical" disabled={mutation.isPending || !job.result_revision} onClick={() => mutation.mutate(true)}><Check size={15} />{completedDomainRerun ? "Approve rerun and rebuild" : "Accept all domain sections"}</Button>
         <Button type="button" variant="outline" disabled={mutation.isPending || !job.result_revision} onClick={() => mutation.mutate(false)}><X size={15} />{completedDomainRerun ? "Reject rerun" : "Reject all domain sections"}</Button>
-        <span className="text-[11px] text-zinc-500">{completedDomainRerun ? "Approval applies the complete proposal, rebuilds all derived artifacts, and makes prior execution and validation evidence historical." : "The patch is one transaction; this decision covers every domain section and does not approve the stage."}</span>
+        <span className="text-[11px] text-slate-500">{completedDomainRerun ? "Approval applies the complete proposal, rebuilds all derived artifacts, and makes prior execution and validation evidence historical." : "The patch is one transaction; this decision covers every domain section and does not approve the stage."}</span>
       </div>
-      {mutation.error && <p className="mt-3 rounded-lg border border-rose-500/20 bg-rose-500/10 p-2 text-xs text-rose-300">{mutation.error.message}</p>}
+      {mutation.error && <p className="mt-3 rounded-lg border border-rose-500/20 bg-rose-500/10 p-2 text-xs text-rose-700">{mutation.error.message}</p>}
     </section>
   );
 }
@@ -59,14 +59,14 @@ function asRecord(value: unknown): Record<string, unknown> {
 interface OperationGroup { domain: string; operations: ReviewPatchOperation[]; }
 
 function DomainPatchSection({ group }: { group: OperationGroup }) {
-  return <section className="overflow-hidden rounded-xl border border-violet-400/20 bg-black/15" aria-label={`${group.domain} feedback decision`}>
-    <header className="flex items-center justify-between border-b border-white/10 bg-violet-500/[0.07] px-3 py-2.5">
-      <div><p className="font-mono text-xs font-black text-violet-200">{group.domain}</p><p className="mt-0.5 text-[10px] text-zinc-500">Feedback decision · {group.operations.length} changed path(s)</p></div>
-      <span className="rounded-full border border-violet-400/20 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-violet-300">{group.domain === "General" ? "Stage-wide" : group.domain === "Not mapped" ? "Source disposition" : "SDTM domain"}</span>
+  return <section className="overflow-hidden rounded-xl border border-teal-400/20 bg-slate-50" aria-label={`${group.domain} feedback decision`}>
+    <header className="flex items-center justify-between border-b border-slate-200 bg-teal-500/[0.07] px-3 py-2.5">
+      <div><p className="font-mono text-xs font-black text-teal-800">{group.domain}</p><p className="mt-0.5 text-[10px] text-slate-500">Feedback decision · {group.operations.length} changed path(s)</p></div>
+      <span className="rounded-full border border-teal-400/20 px-2 py-1 text-[9px] font-black uppercase tracking-wider text-teal-700">{group.domain === "General" ? "Stage-wide" : group.domain === "Not mapped" ? "Source disposition" : "SDTM domain"}</span>
     </header>
     <div className="space-y-2 p-3">{group.operations.map((operation, index) => (
-      <article key={`${operation.path}-${index}`} className="rounded-lg border border-white/10 bg-black/20 p-3">
-        <p className="break-all font-mono text-[11px] font-bold text-violet-200">{operation.path}</p>
+      <article key={`${operation.path}-${index}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <p className="break-all font-mono text-[11px] font-bold text-teal-800">{operation.path}</p>
         <div className="mt-2 grid gap-2 md:grid-cols-2">
           <PatchValue label="Current" value={operation.before} tone="text-rose-200" />
           <PatchValue label="Proposed" value={operation.after} tone="text-emerald-200" />
@@ -127,5 +127,5 @@ function decodePointer(value: string): string { return value.replaceAll("~1", "/
 
 function PatchValue({ label, value, tone }: { label: string; value: unknown; tone: string }) {
   const rendered = value === undefined ? "Not present" : JSON.stringify(value, null, 2);
-  return <div><p className="text-[10px] font-black uppercase tracking-wider text-zinc-500">{label}</p><pre className={`mt-1 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-2 text-[11px] ${tone}`}>{rendered}</pre></div>;
+  return <div><p className="text-[10px] font-black uppercase tracking-wider text-slate-500">{label}</p><pre className={`mt-1 max-h-36 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-100 p-2 text-[11px] ${tone}`}>{rendered}</pre></div>;
 }

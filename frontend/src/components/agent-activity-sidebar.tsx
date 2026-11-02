@@ -107,7 +107,7 @@ export function AgentActivitySidebar({ job, onOpenChange }: { job: Job; onOpenCh
 
   const content = query.data
     ? <AgentTurnTimeline progress={query.data} result={job.result} warnings={job.warnings} compact={!fullScreen} />
-    : <div className="grid min-h-48 place-items-center rounded-lg border border-dashed border-white/15 px-4 text-center text-xs leading-5 text-zinc-500">
+    : <div className="grid min-h-48 place-items-center rounded-lg border border-dashed border-slate-300 px-4 text-center text-xs leading-5 text-slate-500">
         {query.isError ? `Agent trace unavailable: ${query.error.message}` : "Loading agent activity…"}
       </div>;
   const composer = job.status === "review_required" && !job.review_patch ? (
@@ -141,7 +141,7 @@ export function AgentActivitySidebar({ job, onOpenChange }: { job: Job; onOpenCh
           type="button"
           onClick={() => updateDrawerOpen(true)}
           aria-expanded={false}
-          className="focus-ring fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full border border-violet-400/30 bg-violet-600 px-4 py-3 text-sm font-bold text-white shadow-2xl transition hover:bg-violet-500"
+          className="focus-ring fixed bottom-5 right-5 z-40 inline-flex items-center gap-2 rounded-full border border-teal-400/30 bg-teal-600 px-4 py-3 text-sm font-bold text-white shadow-2xl transition hover:bg-teal-500"
         >
           <PanelRightOpen size={17} /> Agent history
         </button>
@@ -155,16 +155,16 @@ export function AgentActivitySidebar({ job, onOpenChange }: { job: Job; onOpenCh
             aria-modal={fullScreen ? true : undefined}
             aria-label="Agent activity history"
             className={fullScreen
-              ? "fixed inset-0 z-50 flex flex-col bg-[#18181b]"
-              : "fixed inset-y-0 right-0 z-50 flex w-[min(94vw,32rem)] flex-col border-l border-white/10 bg-[#18181b] shadow-2xl 2xl:sticky 2xl:top-4 2xl:z-auto 2xl:h-[calc(100vh-2rem)] 2xl:w-auto 2xl:rounded-xl 2xl:border 2xl:shadow-sm"}
+              ? "fixed inset-0 z-50 flex flex-col bg-white"
+              : "fixed inset-y-0 right-0 z-50 flex w-[min(94vw,32rem)] flex-col border-l border-slate-200 bg-white shadow-2xl 2xl:sticky 2xl:top-4 2xl:z-auto 2xl:h-[calc(100vh-2rem)] 2xl:w-auto 2xl:rounded-xl 2xl:border 2xl:shadow-sm"}
           >
-            <div className="flex items-start justify-between gap-3 border-b border-white/[0.08]">
+            <div className="flex items-start justify-between gap-3 border-b border-slate-200">
               <ActivityHeader job={job} turnCount={query.data?.events.length} />
               <div className="mr-3 mt-3 flex shrink-0 items-center gap-2">
-                <button type="button" onClick={() => setFullScreen((value) => !value)} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white" aria-label={fullScreen ? "Exit full screen agent history" : "View agent history full screen"} aria-pressed={fullScreen}>
+                <button type="button" onClick={() => setFullScreen((value) => !value)} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900" aria-label={fullScreen ? "Exit full screen agent history" : "View agent history full screen"} aria-pressed={fullScreen}>
                   {fullScreen ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
                 </button>
-                <button type="button" onClick={() => { updateDrawerOpen(false); setFullScreen(false); }} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white" aria-label="Collapse agent history">
+                <button type="button" onClick={() => { updateDrawerOpen(false); setFullScreen(false); }} className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-slate-200 text-slate-600 transition hover:bg-slate-100 hover:text-slate-900" aria-label="Collapse agent history">
                   <PanelRightClose size={18} />
                 </button>
               </div>
@@ -193,10 +193,10 @@ function CompletedSDTMRevisionComposer({ job, currentResult, context, message, o
   useEffect(() => setScope(completedRevisionScope(context)), [context.domain, context.surface, context.variable]);
   const hasScope = scope.paths.length > 0 || scope.source_datasets.length > 0 || scope.target_domains.length > 0 || scope.variables.length > 0;
   const canSubmit = Boolean(message.trim()) && hasScope && !submitting;
-  return <form className="border-t border-white/[0.08] bg-[#151518] p-3" onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(scope); }}>
-    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300">Guide this revision</p>
-    <p className="mt-1 text-xs font-bold text-zinc-200">{context.label}</p>
-    <p className="mt-1 text-[11px] leading-4 text-zinc-500">The active tab and selected domain determine the agent and revision scope. Change the selection in the workspace to target something else.</p>
+  return <form className="border-t border-slate-200 bg-slate-50 p-3" onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(scope); }}>
+    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-teal-700">Guide this revision</p>
+    <p className="mt-1 text-xs font-bold text-slate-800">{context.label}</p>
+    <p className="mt-1 text-[11px] leading-4 text-slate-500">The active tab and selected domain determine the agent and revision scope. Change the selection in the workspace to target something else.</p>
     <VoiceGuidanceInput jobId={job.id} message={message} onMessageChange={onMessageChange} submitting={submitting} />
     <textarea
       aria-label="Review guidance for the agent"
@@ -205,17 +205,17 @@ function CompletedSDTMRevisionComposer({ job, currentResult, context, message, o
       rows={4}
       maxLength={4000}
       placeholder="Describe the change for the current selection."
-      className="focus-ring mt-2 w-full resize-y rounded-lg border border-white/10 bg-[#0d0d0f] px-3 py-2 text-xs leading-5 text-zinc-200 placeholder:text-zinc-600"
+      className="focus-ring mt-2 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-800 placeholder:text-slate-400"
     />
     <CompletedRevisionScopePicker context={context} currentResult={currentResult} scope={scope} onChange={setScope} />
     <div className="mt-2 flex items-center justify-between gap-3">
-      <span className={`text-[10px] ${hasScope ? "text-emerald-300" : "text-amber-300"}`}>{hasScope ? `Scope confirmed · ${message.length}/4000` : "Select a scope before submitting"}</span>
-      <button type="submit" disabled={!canSubmit} className="focus-ring inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">
+      <span className={`text-[10px] ${hasScope ? "text-emerald-700" : "text-amber-800"}`}>{hasScope ? `Scope confirmed · ${message.length}/4000` : "Select a scope before submitting"}</span>
+      <button type="submit" disabled={!canSubmit} className="focus-ring inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-40">
         {submitting ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}
         {submitting ? "Agent is revising…" : producesDraft ? "Draft revision" : "Generate proposal"}
       </button>
     </div>
-    {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{error}</p>}
+    {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-700">{error}</p>}
     <p className="mt-2 text-[10px] leading-4 text-amber-200/70">{producesDraft ? "The cSDRG draft will appear in the existing editor for review and saving." : "Approved artifacts remain active until the proposal is accepted."}</p>
   </form>;
 }
@@ -243,15 +243,15 @@ function CompletedRevisionScopePicker({ context, currentResult, scope, onChange 
   const selectedVariable = scope.variables[0]?.variable ?? "";
   const selectedFields = scope.variables[0]?.fields ?? [];
   const fieldLockAvailable = context.surface === "variable_mapping" || context.surface === "acrf" || context.surface === "define_xml";
-  return <div className="mt-2 grid gap-2 rounded-lg border border-white/10 bg-black/15 p-2">
-    <div><p className="text-[10px] font-bold text-zinc-400">Affected target domain</p><p className="mt-1 rounded-md border border-violet-400/20 bg-violet-500/[0.08] px-2 py-1.5 font-mono text-[11px] font-bold text-violet-200">{domain}</p></div>
-    {variables.length > 0 && <label className="text-[10px] font-bold text-zinc-400">Narrow to one variable<select aria-label="Affected target variable" value={selectedVariable} onChange={(event) => onChange(event.target.value ? { ...emptyScope(), variables: [{ domain, variable: event.target.value, fields: [] }] } : { ...emptyScope(), target_domains: [domain] })} className={scopeInput}><option value="">Entire {domain} domain</option>{variables.map((item) => <option key={String(item.name)}>{String(item.name)}</option>)}</select></label>}
-    {selectedVariable && fieldLockAvailable && <div><p className="text-[10px] font-bold text-zinc-400">Optional field lock</p><div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-auto">{variableFields.map((field) => <label key={field} className="flex items-center gap-1 rounded border border-white/10 px-1.5 py-1 text-[9px] text-zinc-400"><input type="checkbox" checked={selectedFields.includes(field)} onChange={() => { const fields = selectedFields.includes(field) ? selectedFields.filter((item) => item !== field) : [...selectedFields, field]; onChange({ ...emptyScope(), variables: [{ domain, variable: selectedVariable, fields }] }); }} />{field}</label>)}</div><p className="mt-1 text-[9px] text-zinc-600">No checked fields means the full variable row and its dependent rule are in scope.</p></div>}
+  return <div className="mt-2 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+    <div><p className="text-[10px] font-bold text-slate-600">Affected target domain</p><p className="mt-1 rounded-md border border-teal-400/20 bg-teal-500/[0.08] px-2 py-1.5 font-mono text-[11px] font-bold text-teal-800">{domain}</p></div>
+    {variables.length > 0 && <label className="text-[10px] font-bold text-slate-600">Narrow to one variable<select aria-label="Affected target variable" value={selectedVariable} onChange={(event) => onChange(event.target.value ? { ...emptyScope(), variables: [{ domain, variable: event.target.value, fields: [] }] } : { ...emptyScope(), target_domains: [domain] })} className={scopeInput}><option value="">Entire {domain} domain</option>{variables.map((item) => <option key={String(item.name)}>{String(item.name)}</option>)}</select></label>}
+    {selectedVariable && fieldLockAvailable && <div><p className="text-[10px] font-bold text-slate-600">Optional field lock</p><div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-auto">{variableFields.map((field) => <label key={field} className="flex items-center gap-1 rounded border border-slate-200 px-1.5 py-1 text-[9px] text-slate-600"><input type="checkbox" checked={selectedFields.includes(field)} onChange={() => { const fields = selectedFields.includes(field) ? selectedFields.filter((item) => item !== field) : [...selectedFields, field]; onChange({ ...emptyScope(), variables: [{ domain, variable: selectedVariable, fields }] }); }} />{field}</label>)}</div><p className="mt-1 text-[9px] text-slate-400">No checked fields means the full variable row and its dependent rule are in scope.</p></div>}
   </div>;
 }
 
 function FixedScope({ label, value }: { label: string; value: string }) {
-  return <div className="mt-2 rounded-lg border border-white/10 bg-black/15 p-2"><p className="text-[10px] font-bold text-zinc-400">{label}</p><p className="mt-1 text-[10px] leading-4 text-zinc-300">{value}</p></div>;
+  return <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2"><p className="text-[10px] font-bold text-slate-600">{label}</p><p className="mt-1 text-[10px] leading-4 text-slate-700">{value}</p></div>;
 }
 
 function VoiceGuidanceInput({ jobId, message, onMessageChange, submitting }: { jobId: string; message: string; onMessageChange: (value: string) => void; submitting: boolean }) {
@@ -338,15 +338,15 @@ function VoiceGuidanceInput({ jobId, message, onMessageChange, submitting }: { j
   const seconds = String(elapsedSeconds % 60).padStart(2, "0");
   return <>
     <div className="mt-2 flex items-center gap-2">
-      <button type="button" onClick={voiceState === "recording" ? stopVoiceInput : startVoiceInput} disabled={!voiceSupported || voiceState === "requesting" || voiceState === "transcribing" || submitting} aria-label={voiceState === "recording" ? "Stop voice input" : "Start voice input"} aria-pressed={voiceState === "recording"} className={`focus-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40 ${voiceState === "recording" ? "border-rose-400/40 bg-rose-500/15 text-rose-200" : "border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]"}`}>
+      <button type="button" onClick={voiceState === "recording" ? stopVoiceInput : startVoiceInput} disabled={!voiceSupported || voiceState === "requesting" || voiceState === "transcribing" || submitting} aria-label={voiceState === "recording" ? "Stop voice input" : "Start voice input"} aria-pressed={voiceState === "recording"} className={`focus-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40 ${voiceState === "recording" ? "border-rose-400/40 bg-rose-500/15 text-rose-200" : "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"}`}>
         {voiceState === "requesting" || voiceState === "transcribing" ? <LoaderCircle size={14} className="animate-spin" /> : voiceState === "recording" ? <MicOff size={14} /> : <Mic size={14} />}
         {voiceState === "requesting" ? "Opening mic…" : voiceState === "transcribing" ? "Transcribing…" : voiceState === "recording" ? `Stop ${minutes}:${seconds}` : "Voice input"}
       </button>
-      <span className="text-[10px] leading-4 text-zinc-600">Meta Muse adds editable text; it never auto-submits.</span>
+      <span className="text-[10px] leading-4 text-slate-400">Meta Muse adds editable text; it never auto-submits.</span>
     </div>
-    {!voiceSupported && <p className="mt-1.5 text-[10px] leading-4 text-amber-300/80">Voice input is unavailable in this browser.</p>}
-    {voiceError && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{voiceError}</p>}
-    <p className="mt-2 text-[10px] leading-4 text-zinc-600">Record synthetic or de-identified guidance only. Audio is sent to the configured Meta Model API and is not stored by this workbench.</p>
+    {!voiceSupported && <p className="mt-1.5 text-[10px] leading-4 text-amber-800/80">Voice input is unavailable in this browser.</p>}
+    {voiceError && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-700">{voiceError}</p>}
+    <p className="mt-2 text-[10px] leading-4 text-slate-400">Record synthetic or de-identified guidance only. Audio is sent to the configured Meta Model API and is not stored by this workbench.</p>
   </>;
 }
 
@@ -363,11 +363,11 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
   useEffect(() => { if (!message) setScope(emptyScope()); }, [message]);
   return (
     <form
-      className="border-t border-white/[0.08] bg-[#151518] p-3"
+      className="border-t border-slate-200 bg-slate-50 p-3"
       onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(scope); }}
     >
-      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300">Guide this revision</p>
-      <p className="mt-1 text-[11px] leading-4 text-zinc-500">Ask the agent to revise {stage}. This does not approve or advance the workflow.</p>
+      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-teal-700">Guide this revision</p>
+      <p className="mt-1 text-[11px] leading-4 text-slate-500">Ask the agent to revise {stage}. This does not approve or advance the workflow.</p>
       <VoiceGuidanceInput jobId={job.id} message={message} onMessageChange={onMessageChange} submitting={submitting} />
       <textarea
         aria-label="Review guidance for the agent"
@@ -376,23 +376,23 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
         rows={3}
         maxLength={4000}
         placeholder="Example: Use the Safety population for every adverse-event output and keep unsupported decisions as TODOs."
-        className="focus-ring mt-2 w-full resize-y rounded-lg border border-white/10 bg-[#0d0d0f] px-3 py-2 text-xs leading-5 text-zinc-200 placeholder:text-zinc-600"
+        className="focus-ring mt-2 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-800 placeholder:text-slate-400"
       />
       <ScopePicker job={job} currentResult={currentResult} scope={scope} onChange={setScope} />
       <div className="mt-2 flex items-center justify-between gap-2">
-        <button type="button" disabled={!message.trim() || scopeMutation.isPending} onClick={() => scopeMutation.mutate()} className="focus-ring rounded-md border border-white/10 px-2.5 py-1.5 text-[10px] font-bold text-zinc-300 disabled:opacity-40">{scopeMutation.isPending ? "Finding scope…" : "Suggest scope from comment"}</button>
-        <span className={`text-[10px] ${hasScope ? "text-emerald-300" : "text-amber-300"}`}>{hasScope ? "Scope confirmed" : "Select a scope before submitting"}</span>
+        <button type="button" disabled={!message.trim() || scopeMutation.isPending} onClick={() => scopeMutation.mutate()} className="focus-ring rounded-md border border-slate-200 px-2.5 py-1.5 text-[10px] font-bold text-slate-700 disabled:opacity-40">{scopeMutation.isPending ? "Finding scope…" : "Suggest scope from comment"}</button>
+        <span className={`text-[10px] ${hasScope ? "text-emerald-700" : "text-amber-800"}`}>{hasScope ? "Scope confirmed" : "Select a scope before submitting"}</span>
       </div>
-      {scopeMutation.data && <p className="mt-1 text-[10px] leading-4 text-zinc-500">{scopeMutation.data.explanation} Confirm or adjust the selection.</p>}
-      {scopeMutation.error && <p className="mt-1 text-[10px] text-rose-300">{scopeMutation.error.message}</p>}
+      {scopeMutation.data && <p className="mt-1 text-[10px] leading-4 text-slate-500">{scopeMutation.data.explanation} Confirm or adjust the selection.</p>}
+      {scopeMutation.error && <p className="mt-1 text-[10px] text-rose-700">{scopeMutation.error.message}</p>}
       <div className="mt-2 flex items-center justify-between gap-3">
-        <span className="text-[10px] text-zinc-600">{message.length}/4000</span>
-        <button type="submit" disabled={!canSubmit} className="focus-ring inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">
+        <span className="text-[10px] text-slate-400">{message.length}/4000</span>
+        <button type="submit" disabled={!canSubmit} className="focus-ring inline-flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-40">
           {submitting ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}
           {submitting ? "Generating scoped patch…" : "Generate patch"}
         </button>
       </div>
-      {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{error}</p>}
+      {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-700">{error}</p>}
     </form>
   );
 }
@@ -413,10 +413,10 @@ function ScopePicker({ job, currentResult, scope, onChange }: { job: Job; curren
     const variables = asRecords(dataset?.variables);
     const selectedVariable = scope.variables[0]?.variable ?? "";
     const selectedFields = scope.variables[0]?.fields ?? [];
-    return <div className="mt-2 grid gap-2 rounded-lg border border-white/10 bg-black/15 p-2">
-      <label className="text-[10px] font-bold text-zinc-400">Affected target domain<select aria-label="Affected target domain" value={selectedDomain} onChange={(event) => onChange({ ...emptyScope(), target_domains: event.target.value ? [event.target.value] : [] })} className={scopeInput}><option value="">Select domain</option>{datasets.map((item) => <option key={String(item.domain)}>{String(item.domain)}</option>)}</select></label>
-      {selectedDomain && <label className="text-[10px] font-bold text-zinc-400">Narrow to one variable<select aria-label="Affected target variable" value={selectedVariable} onChange={(event) => onChange(event.target.value ? { ...emptyScope(), variables: [{ domain: selectedDomain, variable: event.target.value, fields: [] }] } : { ...emptyScope(), target_domains: [selectedDomain] })} className={scopeInput}><option value="">Entire {selectedDomain} domain</option>{variables.map((item) => <option key={String(item.name)}>{String(item.name)}</option>)}</select></label>}
-      {selectedVariable && <div><p className="text-[10px] font-bold text-zinc-400">Optional field lock</p><div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-auto">{variableFields.map((field) => <label key={field} className="flex items-center gap-1 rounded border border-white/10 px-1.5 py-1 text-[9px] text-zinc-400"><input type="checkbox" checked={selectedFields.includes(field)} onChange={() => { const fields = selectedFields.includes(field) ? selectedFields.filter((item) => item !== field) : [...selectedFields, field]; onChange({ ...emptyScope(), variables: [{ domain: selectedDomain, variable: selectedVariable, fields }] }); }} />{field}</label>)}</div><p className="mt-1 text-[9px] text-zinc-600">No checked fields means the full variable row is in scope.</p></div>}
+    return <div className="mt-2 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
+      <label className="text-[10px] font-bold text-slate-600">Affected target domain<select aria-label="Affected target domain" value={selectedDomain} onChange={(event) => onChange({ ...emptyScope(), target_domains: event.target.value ? [event.target.value] : [] })} className={scopeInput}><option value="">Select domain</option>{datasets.map((item) => <option key={String(item.domain)}>{String(item.domain)}</option>)}</select></label>
+      {selectedDomain && <label className="text-[10px] font-bold text-slate-600">Narrow to one variable<select aria-label="Affected target variable" value={selectedVariable} onChange={(event) => onChange(event.target.value ? { ...emptyScope(), variables: [{ domain: selectedDomain, variable: event.target.value, fields: [] }] } : { ...emptyScope(), target_domains: [selectedDomain] })} className={scopeInput}><option value="">Entire {selectedDomain} domain</option>{variables.map((item) => <option key={String(item.name)}>{String(item.name)}</option>)}</select></label>}
+      {selectedVariable && <div><p className="text-[10px] font-bold text-slate-600">Optional field lock</p><div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-auto">{variableFields.map((field) => <label key={field} className="flex items-center gap-1 rounded border border-slate-200 px-1.5 py-1 text-[9px] text-slate-600"><input type="checkbox" checked={selectedFields.includes(field)} onChange={() => { const fields = selectedFields.includes(field) ? selectedFields.filter((item) => item !== field) : [...selectedFields, field]; onChange({ ...emptyScope(), variables: [{ domain: selectedDomain, variable: selectedVariable, fields }] }); }} />{field}</label>)}</div><p className="mt-1 text-[9px] text-slate-400">No checked fields means the full variable row is in scope.</p></div>}
     </div>;
   }
   const choices = genericPathChoices(job, currentResult);
@@ -424,7 +424,7 @@ function ScopePicker({ job, currentResult, scope, onChange }: { job: Job; curren
 }
 
 function ScopeChecklist({ label, items, labels = {}, selected, onChange }: { label: string; items: string[]; labels?: Record<string, string>; selected: string[]; onChange: (items: string[]) => void }) {
-  return <div className="mt-2 rounded-lg border border-white/10 bg-black/15 p-2"><p className="text-[10px] font-bold text-zinc-400">{label}</p><div className="mt-1 max-h-28 space-y-1 overflow-auto">{items.map((item) => <label key={item} className="flex items-center gap-2 text-[10px] text-zinc-300"><input type="checkbox" checked={selected.includes(item)} onChange={() => onChange(selected.includes(item) ? selected.filter((value) => value !== item) : [...selected, item])} /><span>{labels[item] ?? item}</span></label>)}</div></div>;
+  return <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-2"><p className="text-[10px] font-bold text-slate-600">{label}</p><div className="mt-1 max-h-28 space-y-1 overflow-auto">{items.map((item) => <label key={item} className="flex items-center gap-2 text-[10px] text-slate-700"><input type="checkbox" checked={selected.includes(item)} onChange={() => onChange(selected.includes(item) ? selected.filter((value) => value !== item) : [...selected, item])} /><span>{labels[item] ?? item}</span></label>)}</div></div>;
 }
 
 function genericPathChoices(job: Job, current: Record<string, unknown>): Array<{ path: string; label: string }> {
@@ -471,7 +471,7 @@ function entitySelector(item: Record<string, unknown>, index: number): string {
   return String(index);
 }
 function escapePointer(value: string): string { return value.replaceAll("~", "~0").replaceAll("/", "~1"); }
-const scopeInput = "mt-1 w-full rounded-md border border-white/10 bg-[#0d0d0f] px-2 py-1.5 text-[11px] text-zinc-200";
+const scopeInput = "mt-1 w-full rounded-md border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-800";
 
 const REVIEW_STAGE_LABELS: Record<NonNullable<Job["review_stage"]>, string> = {
   edc_source: "EDC source specification",
@@ -488,9 +488,9 @@ const REVIEW_STAGE_LABELS: Record<NonNullable<Job["review_stage"]>, string> = {
 function ActivityHeader({ job, turnCount }: { job: Job; turnCount?: number }) {
   return (
     <div className="min-w-0 flex-1 px-4 py-4">
-      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-zinc-500">Agent activity</p>
+      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">Agent activity</p>
       <div className="mt-1 flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold text-zinc-100">Turns <span className="font-normal text-zinc-500">({turnCount ?? 0})</span></h2>
+        <h2 className="text-sm font-semibold text-slate-900">Turns <span className="font-normal text-slate-500">({turnCount ?? 0})</span></h2>
         <StatusBadge status={job.status} compact />
       </div>
     </div>
