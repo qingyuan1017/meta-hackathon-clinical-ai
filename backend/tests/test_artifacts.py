@@ -2,6 +2,7 @@ import json
 import zipfile
 
 import pytest
+import pymupdf as fitz
 from docx import Document
 from lxml import etree
 from openpyxl import load_workbook
@@ -201,6 +202,17 @@ def test_acrf_coverage_and_define_review_diagnostics(tmp_path) -> None:
     assert {"define.xml", "define.xsl", "define.html", "define-diagnostics.json", "annotated-crf.pdf", "acrf-annotations.json"} <= {path.name for path in paths}
     coverage = json.loads((tmp_path / "acrf-annotations.json").read_text(encoding="utf-8"))
     assert coverage["summary"] == {"matched": 0, "ambiguous": 1, "unmatched": 1}
+    age_annotation = next(item for item in coverage["annotations"] if item["variable"] == "AGE")
+    assert age_annotation["rendering"] == "textbox"
+    assert len(age_annotation["textbox"]) == 4
+    with fitz.open(tmp_path / "annotated-crf.pdf") as annotated_crf:
+        first_page = annotated_crf[0]
+        assert first_page.search_for("DM.AGE")
+        assert list(first_page.annots() or []) == []
+        assert first_page.get_drawings()
+        appendix_text = annotated_crf[-1].get_text("text")
+        assert "DRAFT - HACKATHON DEMONSTRATION ONLY" in appendix_text
+        assert "AMBIGUOUS: DM.AGE <- Age" in appendix_text
     diagnostics = json.loads((tmp_path / "define-diagnostics.json").read_text(encoding="utf-8"))
     assert diagnostics["well_formed"] is True
     assert diagnostics["internal_references_valid"] is True
