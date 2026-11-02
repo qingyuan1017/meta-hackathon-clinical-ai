@@ -327,7 +327,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
       {stage === "acrf" && (
         <DerivedArtifactReview
           title="Annotated CRF review"
-          description="Review the generated PDF, add or edit the CRF question text for target variables, remove mappings that should not appear, and rebuild the aCRF from the reviewed plan."
+          description="Review the generated PDF, add or edit the CRF question text for target variables, customize each annotation's font and colors, remove mappings that should not appear, and rebuild the aCRF from the reviewed plan."
           artifact={acrfArtifact ?? acrfDiagnostics}
           missingMessage="No aCRF was generated because this job did not include a blank CRF PDF. Start a new generation with a blank CRF to enable annotation review."
         >
@@ -335,9 +335,9 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
             pdf={acrfArtifact}
             diagnostics={acrfDiagnostics}
             plan={plan}
-            onLabelChange={(domain, variableName, label) => update((next) => {
+            onAnnotationChange={(domain, variableName, patch) => update((next) => {
               const variable = next.datasets.find((dataset) => dataset.domain === domain)?.variables.find((item) => item.name === variableName);
-              if (variable) variable.crf_source_label = label || null;
+              if (variable) Object.assign(variable, patch);
             })}
             onSave={() => onSave(plan)}
             saving={saving}
@@ -481,29 +481,34 @@ function DefineArtifactPreview({ xml, html, diagnostics }: { xml?: Artifact; htm
   return <div><div className="mb-3 flex gap-2" role="tablist" aria-label="Define-XML views">{(["styled", "raw", "diagnostics"] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={view === item} onClick={() => setView(item)} className={`rounded-lg px-3 py-2 text-xs font-bold capitalize ${view === item ? "bg-violet-500/15 text-violet-200" : "bg-white/[0.03] text-zinc-500"}`}>{item}</button>)}</div>{view === "styled" ? (html ? <iframe title="Styled Define-XML review" src={api.artifactPreviewUrl(html.download_url)} className="h-[48rem] w-full rounded-lg border border-white/10 bg-white" /> : <EmptyReview text="Styled Define-XML is unavailable." />) : query.isPending ? <EmptyReview text={`Loading Define-XML ${view} view…`} /> : query.isError ? <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">{query.error.message}</div> : <pre className="max-h-[48rem] overflow-auto rounded-lg border border-white/10 bg-[#09090b] p-4 font-mono text-xs leading-5 text-cyan-100"><code>{query.data}</code></pre>}</div>;
 }
 
-function ACRFArtifactReview({ pdf, diagnostics, plan, onLabelChange, onSave, saving, saveDisabled, error }: {
+type ACRFAnnotationPatch = Partial<Pick<SDTMVariableDraft, "crf_source_label" | "acrf_font_family" | "acrf_font_size" | "acrf_text_color" | "acrf_fill_color">>;
+
+const ACRF_FONT_FAMILIES = ["Helvetica", "Helvetica Bold", "Times", "Times Bold", "Courier", "Courier Bold"] as const;
+const DEFAULT_ACRF_STYLE = { font_family: "Helvetica", font_size: 8, text_color: "#141F3D", fill_color: "#EBF2FF" } as const;
+
+function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationChange, onSave, saving, saveDisabled, error }: {
   pdf?: Artifact;
   diagnostics?: Artifact;
   plan: SDTMPlanDraft;
-  onLabelChange: (domain: string, variable: string, label: string) => void;
+  onAnnotationChange: (domain: string, variable: string, patch: ACRFAnnotationPatch) => void;
   onSave: () => void;
   saving: boolean;
   saveDisabled: boolean;
   error?: string | null;
 }) {
   const query = useQuery({ queryKey: ["acrf-diagnostics", diagnostics?.id], queryFn: () => api.artifactText(diagnostics!.download_url), enabled: Boolean(diagnostics) });
-  let parsed: { status?: string; message?: string; annotations?: Array<{ domain: string; variable: string; status: string; page: number | null; label: string }> } = {};
+  let parsed: { status?: string; message?: string; annotations?: Array<{ domain: string; variable: string; status: string; page: number | null; label: string; style?: { font_family: string; font_size: number; text_color: string; fill_color: string } }> } = {};
   try { parsed = query.data ? JSON.parse(query.data) : {}; } catch { /* render unavailable diagnostics below */ }
   if (!pdf && parsed.status === "ocr_required") return <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.07] p-5 text-sm leading-6 text-amber-100">{parsed.message}</div>;
   if (!pdf) return <EmptyReview text="Annotated CRF output is unavailable." />;
   const savedAnnotations = new Map((parsed.annotations ?? []).map((item) => [`${item.domain}.${item.variable}`, item]));
   const variables = plan.datasets.flatMap((dataset) => dataset.variables.map((variable) => ({ domain: dataset.domain, variable })));
   const mappedCount = variables.filter(({ variable }) => Boolean(variable.crf_source_label?.trim())).length;
-  return <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+  return <div className="grid gap-4 xl:grid-cols-[430px_minmax(0,1fr)]">
     <aside className="flex max-h-[48rem] min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-black/20">
       <div className="border-b border-white/10 p-3">
         <div className="flex items-center justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-wider text-zinc-400">aCRF mappings</p><p className="mt-1 text-[11px] leading-4 text-zinc-600">{mappedCount} of {variables.length} target variables have question text.</p></div><Button type="button" variant="clinical" size="sm" onClick={onSave} disabled={saving || saveDisabled}><Save size={14} />{saving ? "Rebuilding…" : "Save & rebuild"}</Button></div>
-        <p className="mt-2 text-[10px] leading-4 text-zinc-600">Enter question text to add a mapping. Edit the text to move a textbox to a different question, or remove it to omit that target from the rebuilt aCRF.</p>
+        <p className="mt-2 text-[10px] leading-4 text-zinc-600">Enter question text to add a mapping. Choose its font, size, text color, and background color. Remove the mapping to omit that target from the rebuilt aCRF.</p>
         {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-300">{error}</p>}
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
@@ -511,15 +516,34 @@ function ACRFArtifactReview({ pdf, diagnostics, plan, onLabelChange, onSave, sav
           const key = `${domain}.${variable.name}`;
           const saved = savedAnnotations.get(key);
           const label = variable.crf_source_label ?? "";
-          const pending = label.trim() !== (saved?.label ?? "").trim();
+          const style = {
+            font_family: variable.acrf_font_family ?? DEFAULT_ACRF_STYLE.font_family,
+            font_size: variable.acrf_font_size ?? DEFAULT_ACRF_STYLE.font_size,
+            text_color: (variable.acrf_text_color ?? DEFAULT_ACRF_STYLE.text_color).toUpperCase(),
+            fill_color: (variable.acrf_fill_color ?? DEFAULT_ACRF_STYLE.fill_color).toUpperCase(),
+          };
+          const savedStyle = saved?.style ?? DEFAULT_ACRF_STYLE;
+          const pending = label.trim() !== (saved?.label ?? "").trim()
+            || style.font_family !== savedStyle.font_family
+            || style.font_size !== savedStyle.font_size
+            || style.text_color !== savedStyle.text_color.toUpperCase()
+            || style.fill_color !== savedStyle.fill_color.toUpperCase();
           const status = pending ? "pending rebuild" : saved?.status ?? (label.trim() ? "not reviewed" : "not added");
           const statusClass = pending ? "text-sky-300" : status === "matched" ? "text-emerald-300" : status === "ambiguous" ? "text-amber-300" : status === "not added" ? "text-zinc-600" : "text-rose-300";
           return <article key={key} className="rounded-lg border border-white/[0.08] bg-white/[0.02] p-2.5">
             <div className="flex items-center justify-between gap-2"><span className="font-mono text-xs font-bold text-zinc-200">{key}</span><span className={`text-[9px] font-black uppercase tracking-wider ${statusClass}`}>{status}</span></div>
-            <label className="mt-2 block"><span className="sr-only">CRF question text for {key}</span><input aria-label={`CRF question text for ${key}`} value={label} onChange={(event) => onLabelChange(domain, variable.name, event.target.value)} placeholder="Enter question text to add mapping" className={inputClass} /></label>
+            <label className="mt-2 block"><span className="sr-only">CRF question text for {key}</span><input aria-label={`CRF question text for ${key}`} value={label} onChange={(event) => onAnnotationChange(domain, variable.name, { crf_source_label: event.target.value || null })} placeholder="Enter question text to add mapping" className={inputClass} /></label>
+            <div className="mt-2 grid grid-cols-[minmax(0,1fr)_82px] gap-2">
+              <label><span className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-zinc-600">Font</span><select aria-label={`aCRF font for ${key}`} value={style.font_family} onChange={(event) => onAnnotationChange(domain, variable.name, { acrf_font_family: event.target.value as SDTMVariableDraft["acrf_font_family"] })} className={inputClass}>{ACRF_FONT_FAMILIES.map((font) => <option key={font}>{font}</option>)}</select></label>
+              <label><span className="mb-1 block text-[9px] font-bold uppercase tracking-wider text-zinc-600">Size</span><input aria-label={`aCRF font size for ${key}`} type="number" min={6} max={18} step={0.5} value={style.font_size} onChange={(event) => onAnnotationChange(domain, variable.name, { acrf_font_size: Math.min(18, Math.max(6, Number(event.target.value) || 8)) })} className={inputClass} /></label>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <label className="flex items-center gap-2 rounded-md border border-white/10 bg-[#101012] px-2 py-1.5"><input aria-label={`aCRF text color for ${key}`} type="color" value={style.text_color} onChange={(event) => onAnnotationChange(domain, variable.name, { acrf_text_color: event.target.value.toUpperCase() })} className="h-6 w-8 cursor-pointer rounded border-0 bg-transparent p-0" /><span><span className="block text-[9px] font-bold uppercase tracking-wider text-zinc-600">Text</span><span className="font-mono text-[10px] text-zinc-400">{style.text_color}</span></span></label>
+              <label className="flex items-center gap-2 rounded-md border border-white/10 bg-[#101012] px-2 py-1.5"><input aria-label={`aCRF background color for ${key}`} type="color" value={style.fill_color} onChange={(event) => onAnnotationChange(domain, variable.name, { acrf_fill_color: event.target.value.toUpperCase() })} className="h-6 w-8 cursor-pointer rounded border-0 bg-transparent p-0" /><span><span className="block text-[9px] font-bold uppercase tracking-wider text-zinc-600">Background</span><span className="font-mono text-[10px] text-zinc-400">{style.fill_color}</span></span></label>
+            </div>
             <div className="mt-2 flex items-center justify-between gap-2">
               <span className="text-[10px] text-zinc-600">{pending && saved?.page ? `Last build: page ${saved.page}` : saved?.page ? `Page ${saved.page}` : label.trim() ? "Save to locate this question" : "Not included in aCRF"}</span>
-              <div className="flex items-center gap-2">{saved?.page && !pending && <a href={`${api.artifactPreviewUrl(pdf.download_url)}#page=${saved.page}`} className="text-[10px] font-bold text-violet-300 hover:text-violet-200">View page</a>}<button type="button" aria-label={`Remove aCRF mapping for ${key}`} disabled={!label} onClick={() => onLabelChange(domain, variable.name, "")} className="rounded px-1.5 py-1 text-[10px] font-bold text-rose-300 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:text-zinc-700"><Trash2 size={12} className="mr-1 inline" />Remove</button></div>
+              <div className="flex items-center gap-2">{saved?.page && !pending && <a href={`${api.artifactPreviewUrl(pdf.download_url)}#page=${saved.page}`} className="text-[10px] font-bold text-violet-300 hover:text-violet-200">View page</a>}<button type="button" aria-label={`Remove aCRF mapping for ${key}`} disabled={!label} onClick={() => onAnnotationChange(domain, variable.name, { crf_source_label: null })} className="rounded px-1.5 py-1 text-[10px] font-bold text-rose-300 transition hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:text-zinc-700"><Trash2 size={12} className="mr-1 inline" />Remove</button></div>
             </div>
           </article>;
         })}

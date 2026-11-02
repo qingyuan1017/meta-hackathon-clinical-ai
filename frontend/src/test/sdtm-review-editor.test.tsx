@@ -88,8 +88,8 @@ describe("SDTMReviewEditor", () => {
     vi.spyOn(api, "artifactText").mockResolvedValue(JSON.stringify({
       status: "review_required",
       annotations: [
-        { domain: "DM", variable: "AGE", status: "matched", page: 1, label: "Age" },
-        { domain: "DM", variable: "SEX", status: "unmatched", page: null, label: "" },
+        { domain: "DM", variable: "AGE", status: "matched", page: 1, label: "Age", style: { font_family: "Helvetica", font_size: 8, text_color: "#141F3D", fill_color: "#EBF2FF" } },
+        { domain: "DM", variable: "SEX", status: "unmatched", page: null, label: "", style: { font_family: "Helvetica", font_size: 8, text_color: "#141F3D", fill_color: "#EBF2FF" } },
       ],
     }));
     const onChange = vi.fn();
@@ -109,6 +109,12 @@ describe("SDTMReviewEditor", () => {
     expect(screen.getByText("2 of 2 target variables have question text.")).toBeInTheDocument();
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ datasets: [expect.objectContaining({ variables: expect.arrayContaining([expect.objectContaining({ name: "SEX", crf_source_label: "Sex" })]) })] }));
 
+    fireEvent.change(screen.getByLabelText("aCRF font for DM.SEX"), { target: { value: "Times Bold" } });
+    fireEvent.change(screen.getByLabelText("aCRF font size for DM.SEX"), { target: { value: "11" } });
+    fireEvent.change(screen.getByLabelText("aCRF text color for DM.SEX"), { target: { value: "#aa1122" } });
+    fireEvent.change(screen.getByLabelText("aCRF background color for DM.SEX"), { target: { value: "#ccddff" } });
+    expect(screen.getByText("#AA1122")).toBeInTheDocument();
+
     fireEvent.change(screen.getByLabelText("CRF question text for DM.AGE"), { target: { value: "Age at screening" } });
     expect(screen.getByLabelText("CRF question text for DM.AGE")).toHaveValue("Age at screening");
     fireEvent.click(screen.getByRole("button", { name: "Remove aCRF mapping for DM.AGE" }));
@@ -118,7 +124,7 @@ describe("SDTMReviewEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save & rebuild" }));
     expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ datasets: [expect.objectContaining({ variables: expect.arrayContaining([
       expect.objectContaining({ name: "AGE", crf_source_label: null }),
-      expect.objectContaining({ name: "SEX", crf_source_label: "Sex" }),
+      expect.objectContaining({ name: "SEX", crf_source_label: "Sex", acrf_font_family: "Times Bold", acrf_font_size: 11, acrf_text_color: "#AA1122", acrf_fill_color: "#CCDDFF" }),
     ]) })] }));
   });
 });
