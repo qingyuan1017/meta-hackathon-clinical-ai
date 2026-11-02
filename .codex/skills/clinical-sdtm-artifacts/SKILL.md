@@ -7,6 +7,16 @@ description: Generate and revise draft SDTM mapping, Define-XML, annotated CRF, 
 
 Use `workbench_get_use_case("sdtm")` as the current contract. This workflow requires EDC JSON/XLSX. A blank CRF PDF is optional: include it to generate and review an aCRF, or omit it for mapping, Define-XML, and R/SAS code generation without an aCRF. Submission normally uses the web UI or multipart REST API rather than the text-only MCP submission tool.
 
+When running in Muse Code and the user identifies files on the Muse client machine, treat each path only as a client-side source. Never send a filesystem path to the Workbench server or ask the server to open it. After the user explicitly confirms that every file is synthetic or de-identified and contains no PHI, run the repository-local uploader from the repository root. The uploader reads the bytes on the client and sends a multipart request to the Workbench API:
+
+```powershell
+python scripts/submit_sdtm.py --metadata "C:\path\edc.json" --raw "C:\path\dm.csv" --crf "C:\path\blank-crf.pdf" --acknowledge-deidentified
+```
+
+For a hosted Workbench, add `--api-url "https://workbench.example.com/api/v1"`; if its reverse proxy accepts bearer authentication, set `WORKBENCH_API_TOKEN` in the Muse Code process environment rather than putting the token in a prompt or command. Use only the flags needed for the supplied files. `--metadata` accepts one or more required JSON/XLSX files; `--raw` accepts optional CSV/XPT datasets; `--crf` accepts one optional PDF; and `--validation-report` accepts one optional CSV/XLSX report. Never infer or add `--acknowledge-deidentified` without an explicit user confirmation. After submission, use the returned job id with the MCP or REST job-status endpoint and continue through the normal human review gates.
+
+If Muse Code itself runs on a remote machine that cannot read the user's files, a path cannot work. Direct the user to attach/upload the files through a client that can read them, such as the Workbench browser UI. Do not request a server-local path as a substitute.
+
 Before SDTM mapping, an intake agent normalizes the deterministically extracted JSON/XLSX into an `EDCSourceSpecification`. The job pauses in `review_required` until a user reviews dataset/variable identifiers, types, keys, codelists, form/question links, and file/sheet/row provenance and approves the complete source schema.
 
 After intake approval, the SDTM workflow runs three ordered stages:

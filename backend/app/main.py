@@ -159,7 +159,7 @@ app.add_middleware(
     allow_origins=[settings.frontend_origin],
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
