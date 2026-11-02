@@ -116,6 +116,24 @@ from .workflows import DOCUMENT_TYPES, WORKFLOWS, WorkflowService
 
 settings = get_settings()
 
+AGENT_TAG = "agent"
+USE_CASE_TAGS = tuple(USE_CASES)
+SDTM_TAG = "sdtm"
+TLF_TAG = "tlf"
+
+OPENAPI_TAGS = [
+    {
+        "name": use_case.descriptor.id,
+        "description": use_case.descriptor.description,
+    }
+    for use_case in USE_CASES.values()
+] + [
+    {
+        "name": AGENT_TAG,
+        "description": "Agent discovery, job lifecycle, review, progress, and artifact operations.",
+    },
+]
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -128,6 +146,7 @@ app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     description="Draft clinical artifact generation for synthetic or de-identified hackathon data.",
+    openapi_tags=OPENAPI_TAGS,
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -159,14 +178,22 @@ def health(db: Session = Depends(get_db)) -> HealthRead:
     )
 
 
-@app.get(f"{settings.api_prefix}/use-cases", response_model=list[UseCaseRead])
+@app.get(
+    f"{settings.api_prefix}/use-cases",
+    response_model=list[UseCaseRead],
+    tags=list(USE_CASE_TAGS),
+)
 def list_use_cases() -> list[UseCaseRead]:
     """Discover every supported skill/API use case from the shared registry."""
 
     return [UseCaseRead.model_validate(use_case.public_definition()) for use_case in USE_CASES.values()]
 
 
-@app.get(f"{settings.api_prefix}/use-cases/{{use_case_id}}", response_model=UseCaseRead)
+@app.get(
+    f"{settings.api_prefix}/use-cases/{{use_case_id}}",
+    response_model=UseCaseRead,
+    tags=list(USE_CASE_TAGS),
+)
 def read_use_case(use_case_id: str) -> UseCaseRead:
     try:
         use_case = get_use_case(use_case_id)
@@ -178,6 +205,7 @@ def read_use_case(use_case_id: str) -> UseCaseRead:
 @app.get(
     f"{settings.api_prefix}/standards/sdtm/datasets/{{domain}}",
     response_model=CDISCDatasetRead,
+    tags=[SDTM_TAG],
 )
 async def read_cdisc_sdtm_dataset(
     domain: str,
@@ -226,7 +254,7 @@ async def read_cdisc_sdtm_dataset(
     )
 
 
-@app.get(f"{settings.api_prefix}/agents", response_model=list[AgentRead])
+@app.get(f"{settings.api_prefix}/agents", response_model=list[AgentRead], tags=[AGENT_TAG])
 def list_agents() -> list[AgentRead]:
     """List the five tool-driven agents that execute the registered use cases."""
 
@@ -236,7 +264,11 @@ def list_agents() -> list[AgentRead]:
     ]
 
 
-@app.get(f"{settings.api_prefix}/agents/{{workflow}}", response_model=AgentRead)
+@app.get(
+    f"{settings.api_prefix}/agents/{{workflow}}",
+    response_model=AgentRead,
+    tags=[AGENT_TAG],
+)
 def read_agent(workflow: str) -> AgentRead:
     try:
         agent = get_agent(workflow)
@@ -272,7 +304,12 @@ def download_sample(sample_name: str) -> FileResponse:
     return FileResponse(path, filename=download_name)
 
 
-@app.post(f"{settings.api_prefix}/jobs/{{workflow}}", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
+@app.post(
+    f"{settings.api_prefix}/jobs/{{workflow}}",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG, *USE_CASE_TAGS],
+)
 async def create_job(
     workflow: str,
     options: str = Form("{}"),
@@ -380,7 +417,7 @@ async def create_job(
     return _job_read(job)
 
 
-@app.get(f"{settings.api_prefix}/jobs", response_model=JobList)
+@app.get(f"{settings.api_prefix}/jobs", response_model=JobList, tags=[AGENT_TAG])
 def list_jobs(
     workflow: str | None = None,
     job_status: str | None = Query(None, alias="status"),
@@ -404,7 +441,7 @@ def list_jobs(
     return JobList(items=[_job_read(job, include_result=False) for job in jobs], total=total, page=page, page_size=page_size)
 
 
-@app.get(f"{settings.api_prefix}/jobs/{{job_id}}", response_model=JobRead)
+@app.get(f"{settings.api_prefix}/jobs/{{job_id}}", response_model=JobRead, tags=[AGENT_TAG])
 def get_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     job = db.get(Job, job_id)
     if job is None:
@@ -412,7 +449,11 @@ def get_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     return _job_read(job)
 
 
-@app.get(f"{settings.api_prefix}/jobs/{{job_id}}/agent", response_model=AgentProgressRead)
+@app.get(
+    f"{settings.api_prefix}/jobs/{{job_id}}/agent",
+    response_model=AgentProgressRead,
+    tags=[AGENT_TAG],
+)
 def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentProgressRead:
     """Return a source-free summary of the specialist agent's persisted tool trace."""
 
@@ -488,6 +529,7 @@ def get_job_agent_progress(job_id: str, db: Session = Depends(get_db)) -> AgentP
     f"{settings.api_prefix}/jobs/{{job_id}}/feedback",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG],
 )
 async def submit_review_feedback(
     job_id: str,
@@ -558,6 +600,7 @@ async def submit_review_feedback(
 @app.post(
     f"{settings.api_prefix}/jobs/{{job_id}}/feedback/scope",
     response_model=ReviewScopeProposal,
+    tags=[AGENT_TAG],
 )
 async def propose_review_feedback_scope(
     job_id: str,
@@ -587,6 +630,7 @@ async def propose_review_feedback_scope(
 @app.post(
     f"{settings.api_prefix}/jobs/{{job_id}}/feedback/{{transaction_id}}/decision",
     response_model=JobRead,
+    tags=[AGENT_TAG],
 )
 async def decide_review_patch(
     job_id: str,
@@ -684,6 +728,7 @@ async def decide_review_patch(
 @app.post(
     f"{settings.api_prefix}/jobs/{{job_id}}/transcription",
     response_model=VoiceTranscriptionRead,
+    tags=[AGENT_TAG],
 )
 async def transcribe_review_guidance(
     job_id: str,
@@ -725,7 +770,12 @@ async def transcribe_review_guidance(
     )
 
 
-@app.post(f"{settings.api_prefix}/jobs/{{job_id}}/retry", response_model=JobRead, status_code=status.HTTP_202_ACCEPTED)
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/retry",
+    response_model=JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG],
+)
 async def retry_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     job = db.get(Job, job_id)
     if job is None:
@@ -843,6 +893,7 @@ def _recover_sdtm_render_failure(job: Job, db: Session) -> JobRead | None:
     f"{settings.api_prefix}/jobs/{{job_id}}/edc-source-spec",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 async def approve_edc_source_spec(
     job_id: str,
@@ -876,6 +927,7 @@ async def approve_edc_source_spec(
     f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-domain-mapping",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 async def approve_sdtm_domain_mapping(
     job_id: str,
@@ -921,6 +973,7 @@ async def approve_sdtm_domain_mapping(
 @app.post(
     f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-domain-mapping/reopen",
     response_model=JobRead,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 async def reopen_sdtm_domain_mapping(
     job_id: str,
@@ -972,6 +1025,7 @@ async def reopen_sdtm_domain_mapping(
     f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-variable-mapping",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 async def approve_sdtm_variable_mapping(
     job_id: str,
@@ -1003,6 +1057,7 @@ async def approve_sdtm_variable_mapping(
     f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-domain-reruns",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 async def rerun_completed_sdtm_domain(
     job_id: str,
@@ -1131,6 +1186,7 @@ async def rerun_completed_sdtm_domain(
 @app.get(
     f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-executions",
     response_model=ExecutionAttemptList,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 def read_sdtm_executions(job_id: str, db: Session = Depends(get_db)) -> ExecutionAttemptList:
     job = db.get(Job, job_id)
@@ -1144,6 +1200,7 @@ def read_sdtm_executions(job_id: str, db: Session = Depends(get_db)) -> Executio
 @app.put(
     f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-programs/{{domain}}/{{language}}",
     response_model=JobRead,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 def update_sdtm_program(
     job_id: str,
@@ -1242,6 +1299,7 @@ def update_sdtm_program(
     f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-executions",
     response_model=ExecutionAttempt,
     status_code=status.HTTP_201_CREATED,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 async def create_sdtm_execution(
     job_id: str,
@@ -1302,6 +1360,7 @@ async def create_sdtm_execution(
     f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-executions/{{attempt_id}}/repair",
     response_model=ExecutionAttempt,
     status_code=status.HTTP_201_CREATED,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 def review_and_run_sdtm_repair(
     job_id: str,
@@ -1382,7 +1441,11 @@ def review_and_run_sdtm_repair(
     return repaired
 
 
-@app.get(f"{settings.api_prefix}/jobs/{{job_id}}/validations", response_model=list[ValidationRecord])
+@app.get(
+    f"{settings.api_prefix}/jobs/{{job_id}}/validations",
+    response_model=list[ValidationRecord],
+    tags=[AGENT_TAG, SDTM_TAG],
+)
 def read_validations(job_id: str, db: Session = Depends(get_db)) -> list[ValidationRecord]:
     job = db.get(Job, job_id)
     if job is None:
@@ -1392,7 +1455,12 @@ def read_validations(job_id: str, db: Session = Depends(get_db)) -> list[Validat
     return list_validations(settings.jobs_dir / job_id)
 
 
-@app.post(f"{settings.api_prefix}/jobs/{{job_id}}/validations/import", response_model=ValidationRecord, status_code=status.HTTP_201_CREATED)
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/validations/import",
+    response_model=ValidationRecord,
+    status_code=status.HTTP_201_CREATED,
+    tags=[AGENT_TAG, SDTM_TAG],
+)
 async def import_validation_report(job_id: str, report: UploadFile | None = File(default=None), db: Session = Depends(get_db)) -> ValidationRecord:
     job = db.get(Job, job_id)
     if job is None:
@@ -1424,7 +1492,12 @@ async def import_validation_report(job_id: str, report: UploadFile | None = File
     return record
 
 
-@app.post(f"{settings.api_prefix}/jobs/{{job_id}}/validations/run", response_model=ValidationRecord, status_code=status.HTTP_201_CREATED)
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/validations/run",
+    response_model=ValidationRecord,
+    status_code=status.HTTP_201_CREATED,
+    tags=[AGENT_TAG, SDTM_TAG],
+)
 def run_validation(job_id: str, request: ValidationRunRequest, db: Session = Depends(get_db)) -> ValidationRecord:
     job = db.get(Job, job_id)
     if job is None:
@@ -1447,7 +1520,11 @@ def run_validation(job_id: str, request: ValidationRunRequest, db: Session = Dep
     return record
 
 
-@app.put(f"{settings.api_prefix}/jobs/{{job_id}}/validation-findings/{{finding_id}}", response_model=ValidationFinding)
+@app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/validation-findings/{{finding_id}}",
+    response_model=ValidationFinding,
+    tags=[AGENT_TAG, SDTM_TAG],
+)
 def update_validation_finding(job_id: str, finding_id: str, update: ValidationFindingUpdate, db: Session = Depends(get_db)) -> ValidationFinding:
     job = db.get(Job, job_id)
     if job is None:
@@ -1472,7 +1549,11 @@ def update_validation_finding(job_id: str, finding_id: str, update: ValidationFi
     return finding
 
 
-@app.put(f"{settings.api_prefix}/jobs/{{job_id}}/csdrg", response_model=CSDRGDocument)
+@app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/csdrg",
+    response_model=CSDRGDocument,
+    tags=[AGENT_TAG, SDTM_TAG],
+)
 def update_csdrg(job_id: str, document: CSDRGDocument, db: Session = Depends(get_db)) -> CSDRGDocument:
     job = db.get(Job, job_id)
     if job is None:
@@ -1510,6 +1591,7 @@ def update_csdrg(job_id: str, document: CSDRGDocument, db: Session = Depends(get
 @app.post(
     f"{settings.api_prefix}/jobs/{{job_id}}/csdrg/agent-revision",
     response_model=CSDRGDocument,
+    tags=[AGENT_TAG, SDTM_TAG],
 )
 async def revise_csdrg_with_agent(
     job_id: str,
@@ -1588,6 +1670,7 @@ async def revise_csdrg_with_agent(
     f"{settings.api_prefix}/jobs/{{job_id}}/tlf-inventory",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG, TLF_TAG],
 )
 async def approve_tlf_inventory(
     job_id: str,
@@ -1616,6 +1699,7 @@ async def approve_tlf_inventory(
     f"{settings.api_prefix}/jobs/{{job_id}}/tlf-shell",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG, TLF_TAG],
 )
 async def approve_tlf_shell(
     job_id: str,
@@ -1646,6 +1730,7 @@ async def approve_tlf_shell(
     f"{settings.api_prefix}/jobs/{{job_id}}/tlf-programming",
     response_model=JobRead,
     status_code=status.HTTP_202_ACCEPTED,
+    tags=[AGENT_TAG, TLF_TAG],
 )
 async def approve_tlf_programming(
     job_id: str,
@@ -1673,7 +1758,11 @@ async def approve_tlf_programming(
     return _resume_review(job, options, db)
 
 
-@app.put(f"{settings.api_prefix}/jobs/{{job_id}}/result", response_model=JobRead)
+@app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/result",
+    response_model=JobRead,
+    tags=[AGENT_TAG, *USE_CASE_TAGS],
+)
 def update_job_result(job_id: str, update: JobResultUpdate, db: Session = Depends(get_db)) -> JobRead:
     """Validate a human revision and deterministically rebuild all downloadable artifacts."""
 
@@ -1747,7 +1836,10 @@ def update_job_result(job_id: str, update: JobResultUpdate, db: Session = Depend
     return _job_read(job)
 
 
-@app.get(f"{settings.api_prefix}/jobs/{{job_id}}/artifacts/{{artifact_id}}")
+@app.get(
+    f"{settings.api_prefix}/jobs/{{job_id}}/artifacts/{{artifact_id}}",
+    tags=[AGENT_TAG],
+)
 def download_artifact(
     job_id: str,
     artifact_id: str,
@@ -1768,7 +1860,10 @@ def download_artifact(
     )
 
 
-@app.get(f"{settings.api_prefix}/jobs/{{job_id}}/artifacts/{{artifact_id}}/pages/{{page_number}}.png")
+@app.get(
+    f"{settings.api_prefix}/jobs/{{job_id}}/artifacts/{{artifact_id}}/pages/{{page_number}}.png",
+    tags=[AGENT_TAG],
+)
 def preview_pdf_artifact_page(
     job_id: str,
     artifact_id: str,
@@ -1791,7 +1886,7 @@ def preview_pdf_artifact_page(
     return Response(content=content, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
 
 
-@app.get(f"{settings.api_prefix}/jobs/{{job_id}}/bundle")
+@app.get(f"{settings.api_prefix}/jobs/{{job_id}}/bundle", tags=[AGENT_TAG])
 def download_bundle(job_id: str, db: Session = Depends(get_db)) -> FileResponse:
     job = db.get(Job, job_id)
     if job is None:
@@ -1805,7 +1900,11 @@ def download_bundle(job_id: str, db: Session = Depends(get_db)) -> FileResponse:
     return FileResponse(path, media_type="application/zip", filename=artifact.name)
 
 
-@app.delete(f"{settings.api_prefix}/jobs/{{job_id}}", status_code=status.HTTP_204_NO_CONTENT)
+@app.delete(
+    f"{settings.api_prefix}/jobs/{{job_id}}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    tags=[AGENT_TAG],
+)
 def delete_job(job_id: str, db: Session = Depends(get_db)) -> None:
     job = db.get(Job, job_id)
     if job is None:

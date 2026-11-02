@@ -509,6 +509,43 @@ def test_agent_registry_is_exposed() -> None:
     assert all("submit_result" in item["tools"] for item in agents)
 
 
+def test_openapi_groups_use_cases_and_agent_jobs() -> None:
+    with TestClient(app) as client:
+        document = client.get("/openapi.json").json()
+
+    assert {tag["name"] for tag in document["tags"]} == {
+        "protocol-extraction",
+        "clinical-document",
+        "edc-design",
+        "sdtm",
+        "tlf",
+        "agent",
+    }
+
+    operations = {
+        (path, method): operation
+        for path, path_item in document["paths"].items()
+        for method, operation in path_item.items()
+        if method in {"get", "post", "put", "patch", "delete"}
+    }
+    for (path, _), operation in operations.items():
+        if path.startswith("/api/v1/jobs") or path.startswith("/api/v1/agents"):
+            assert "agent" in operation["tags"]
+
+    assert "sdtm" in operations[
+        ("/api/v1/jobs/{job_id}/sdtm-domain-mapping", "put")
+    ]["tags"]
+    assert "tlf" in operations[("/api/v1/jobs/{job_id}/tlf-shell", "put")]["tags"]
+    assert set(operations[("/api/v1/jobs/{workflow}", "post")]["tags"]) == {
+        "agent",
+        "protocol-extraction",
+        "clinical-document",
+        "edc-design",
+        "sdtm",
+        "tlf",
+    }
+
+
 def test_cdisc_dataset_proxy_returns_versioned_metadata(monkeypatch) -> None:
     calls = []
 
