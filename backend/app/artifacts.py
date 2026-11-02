@@ -579,10 +579,59 @@ def _translated_text(namespace: str, text: str) -> etree._Element:
     return node
 
 
+def _insert_acrf_mapping_box(
+    page: fitz.Page,
+    question_rect: fitz.Rect,
+    target_variable: str,
+    occupied_boxes: list[fitz.Rect],
+) -> fitz.Rect:
+    """Draw one visible target-variable label beside a matched CRF question."""
+
+    font_size = 8.0
+    margin = 8.0
+    gap = 6.0
+    box_height = 20.0
+    box_width = min(max(fitz.get_text_length(target_variable, fontname="helv", fontsize=font_size) + 16.0, 52.0), 120.0)
+    page_rect = page.rect
+    centered_y = min(max(question_rect.y0 + (question_rect.height - box_height) / 2, margin), page_rect.y1 - margin - box_height)
+    vertical_offsets = [0.0, 23.0, -23.0, 46.0, -46.0, 69.0, -69.0]
+    horizontal_positions = [question_rect.x1 + gap, question_rect.x0 - gap - box_width]
+    candidates: list[fitz.Rect] = []
+    for x0 in horizontal_positions:
+        if x0 < margin or x0 + box_width > page_rect.x1 - margin:
+            continue
+        for offset in vertical_offsets:
+            y0 = min(max(centered_y + offset, margin), page_rect.y1 - margin - box_height)
+            candidate = fitz.Rect(x0, y0, x0 + box_width, y0 + box_height)
+            if candidate not in candidates:
+                candidates.append(candidate)
+    if not candidates:
+        x0 = min(max(question_rect.x1 + gap, margin), page_rect.x1 - margin - box_width)
+        candidates.append(fitz.Rect(x0, centered_y, x0 + box_width, centered_y + box_height))
+    box = next(
+        (candidate for candidate in candidates if not any(candidate.intersects(existing) for existing in occupied_boxes)),
+        candidates[0],
+    )
+    page.draw_rect(box, color=(0.20, 0.30, 0.58), fill=(0.92, 0.95, 1.0), width=0.8, overlay=True)
+    text_rect = fitz.Rect(box.x0 + 4, box.y0 + 3, box.x1 - 4, box.y1 - 2)
+    page.insert_textbox(
+        text_rect,
+        target_variable,
+        fontname="helv",
+        fontsize=font_size,
+        color=(0.08, 0.12, 0.24),
+        align=fitz.TEXT_ALIGN_CENTER,
+        overlay=True,
+    )
+    occupied_boxes.append(box)
+    return box
+
+
 def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: Path) -> tuple[Path | None, Path]:
     document = fitz.open(crf_path)
     searchable = any(page.get_text("text").strip() for page in document)
     coverage: list[dict] = []
+    occupied_boxes: dict[int, list[fitz.Rect]] = {}
     if not searchable:
         coverage_path.write_text(json.dumps({"status": "ocr_required", "searchable": False, "message": "The supplied CRF has no searchable text. OCR is not supported in this iteration; annotation was not performed.", "annotations": []}, indent=2), encoding="utf-8")
         document.close()
@@ -600,26 +649,21 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
                         matches.append((page, rect))
             if matches:
                 page, rect = matches[0]
-                highlight = page.add_highlight_annot(rect)
-                highlight.set_info(title=f"{dataset.domain}.{variable.name}")
-                highlight.update()
-                point = fitz.Point(min(rect.x1 + 8, page.rect.width - 24), max(rect.y0, 24))
-                value_level = "\n".join(
-                    f"VLM: {item.where_clause} — {item.mapping_expression}"
-                    for item in variable.value_level_metadata
+                target_variable = f"{dataset.domain}.{variable.name}"
+                box = _insert_acrf_mapping_box(
+                    page,
+                    rect,
+                    target_variable,
+                    occupied_boxes.setdefault(page.number, []),
                 )
-                text = f"{dataset.domain}.{variable.name}\n{variable.label}\n{variable.mapping_expression}"
-                if value_level:
-                    text = f"{text}\n{value_level}"
-                annotation = page.add_text_annot(point, text)
-                annotation.set_info(title="Clinical AI Workbench — DRAFT")
-                annotation.update()
+            else:
+                box = None
             status = "unmatched" if not matches else "ambiguous" if len(matches) > 1 else "matched"
-            coverage.append({"domain": dataset.domain, "variable": variable.name, "origin": variable.origin, "mapping": variable.mapping_expression, "label": needle, "status": status, "page": matches[0][0].number + 1 if matches else None, "match_count": len(matches)})
+            coverage.append({"domain": dataset.domain, "variable": variable.name, "origin": variable.origin, "mapping": variable.mapping_expression, "label": needle, "status": status, "page": matches[0][0].number + 1 if matches else None, "match_count": len(matches), "rendering": "textbox" if box else None, "textbox": [round(value, 2) for value in box] if box else None})
     appendix = document.new_page()
     appendix.insert_textbox(fitz.Rect(48, 48, appendix.rect.width - 48, 110), "Draft aCRF annotation appendix", fontsize=16, color=(0.1, 0.2, 0.35))
-    appendix.insert_textbox(fitz.Rect(48, 100, appendix.rect.width - 48, 155), DISCLAIMER, fontsize=9, color=(0.65, 0.05, 0.15))
-    issues = [f"{item['status'].upper()}: {item['domain']}.{item['variable']} ← {item['label'] or '[no CRF label]'}" for item in coverage if item["status"] != "matched"]
+    appendix.insert_textbox(fitz.Rect(48, 100, appendix.rect.width - 48, 155), DISCLAIMER.replace("—", "-"), fontsize=9, color=(0.65, 0.05, 0.15))
+    issues = [f"{item['status'].upper()}: {item['domain']}.{item['variable']} <- {item['label'] or '[no CRF label]'}" for item in coverage if item["status"] != "matched"]
     appendix.insert_textbox(fitz.Rect(48, 165, appendix.rect.width - 48, appendix.rect.height - 48), "Ambiguous and unmatched mappings:\n\n" + "\n".join(issues or ["None"]), fontsize=9)
     document.save(path)
     document.close()
