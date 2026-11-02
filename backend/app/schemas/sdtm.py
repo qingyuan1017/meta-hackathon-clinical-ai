@@ -107,6 +107,33 @@ class SDTMValueLevelMetadata(BaseModel):
 class SDTMACRFAnnotation(BaseModel):
     source_label: str = Field(default="", description="Exact blank-CRF question text that receives the annotation")
     mapping_text: str = Field(default="", description="Text rendered in the aCRF mapping box; blank uses DOMAIN.VARIABLE")
+    page: int | None = Field(default=None, ge=1, description="Optional manually positioned PDF page")
+    x: float | None = Field(default=None, ge=0, description="Optional manual left coordinate in PDF points")
+    y: float | None = Field(default=None, ge=0, description="Optional manual top coordinate in PDF points")
+
+
+class SDTMACRFPosition(BaseModel):
+    page: int = Field(ge=1)
+    x: float = Field(ge=0)
+    y: float = Field(ge=0)
+
+
+class SDTMDomainACRFAnnotation(BaseModel):
+    enabled: bool = True
+    text: str = Field(default="", description="Domain-level annotation text; blank uses the domain code")
+    positions: list[SDTMACRFPosition] = Field(default_factory=list, description="Optional per-page dragged positions")
+
+
+class SDTMFreeACRFAnnotation(BaseModel):
+    id: str
+    text: str
+    page: int = Field(default=1, ge=1)
+    x: float = Field(default=48.0, ge=0)
+    y: float = Field(default=48.0, ge=0)
+    font_family: Literal["Helvetica", "Helvetica Bold", "Times", "Times Bold", "Courier", "Courier Bold"] = "Helvetica Bold"
+    font_size: float = Field(default=9.0, ge=6.0, le=18.0)
+    text_color: str = Field(default="#7F1D1D", pattern=r"^#[0-9A-Fa-f]{6}$")
+    fill_color: str = Field(default="#FEE2E2", pattern=r"^#[0-9A-Fa-f]{6}$")
 
 
 class SDTMVariable(BaseModel):
@@ -139,6 +166,7 @@ class SDTMVariableDataset(BaseModel):
     acrf_font_size: float = Field(default=8.0, ge=6.0, le=18.0)
     acrf_text_color: str = Field(default="#141F3D", pattern=r"^#[0-9A-Fa-f]{6}$")
     acrf_fill_color: str = Field(default="#EBF2FF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    acrf_domain_annotation: SDTMDomainACRFAnnotation = Field(default_factory=SDTMDomainACRFAnnotation)
     variables: list[SDTMVariable] = Field(min_length=1)
     review_assumptions: list[str] = Field(
         default_factory=list,
@@ -209,5 +237,6 @@ class SDTMPlan(BaseModel):
     domain_mappings: list[SDTMDomainMapping] = Field(min_length=1)
     unmapped_datasets: list[SDTMUnmappedDataset] = Field(default_factory=list)
     rule_augmentations: list[SDTMRuleAugmentation] = Field(min_length=1)
+    acrf_free_annotations: list[SDTMFreeACRFAnnotation] = Field(default_factory=list)
     assumptions: list[str] = Field(default_factory=list)
     unresolved_mappings: list[str] = Field(default_factory=list)

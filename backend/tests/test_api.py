@@ -364,6 +364,9 @@ def test_use_case_registry_is_exposed() -> None:
         "Rule augmentation",
     ]
     assert "rule_augmentations" in sdtm["result_schema"]["properties"]
+    assert "acrf_free_annotations" in sdtm["result_schema"]["properties"]
+    assert {"page", "x", "y"} <= set(sdtm["result_schema"]["$defs"]["SDTMACRFAnnotation"]["properties"])
+    assert "acrf_domain_annotation" in sdtm["result_schema"]["$defs"]["SDTMDataset"]["properties"]
     tlf = next(item for item in definitions if item["id"] == "tlf")
     assert tlf["stages"] == [
         "Output inventory",

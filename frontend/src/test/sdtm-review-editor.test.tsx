@@ -96,7 +96,8 @@ describe("SDTMReviewEditor", () => {
         AE: { font_family: "Helvetica", font_size: 8, text_color: "#141F3D", fill_color: "#EBF2FF" },
       },
       annotations: [
-        { domain: "DM", variable: "AGE", annotation_index: 0, status: "matched", page: 1, label: "Age", mapping_text: "DM.AGE", textbox: [370, 100, 430, 126] },
+        { annotation_type: "variable", annotation_id: "DM.AGE.0", domain: "DM", variable: "AGE", annotation_index: 0, status: "matched", page: 1, label: "Age", mapping_text: "DM.AGE", textbox: [370, 100, 430, 126] },
+        { annotation_type: "domain", annotation_id: "domain:DM:1", domain: "DM", variable: "", annotation_index: 0, status: "matched", page: 1, label: "", mapping_text: "DM", textbox: [18, 18, 70, 42] },
       ],
     }));
     const onChange = vi.fn();
@@ -113,9 +114,19 @@ describe("SDTMReviewEditor", () => {
     expect(screen.getByText("DM.AGE")).toBeInTheDocument();
     expect(screen.queryByText("AE.AETERM")).not.toBeInTheDocument();
 
-    fireEvent.click(await screen.findByRole("button", { name: "Edit DM.AGE annotation 1" }));
+    const overlay = await screen.findByRole("button", { name: "Edit and move DM.AGE annotation 1" });
+    fireEvent.click(overlay);
     await waitFor(() => expect(screen.getByLabelText("CRF question text for DM.AGE annotation 1")).toHaveFocus());
+    const bounds = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ x: 0, y: 0, left: 0, top: 0, right: 612, bottom: 792, width: 612, height: 792, toJSON: () => ({}) });
+    fireEvent.pointerDown(overlay, { pointerId: 1, clientX: 380, clientY: 110 });
+    fireEvent.pointerMove(overlay, { pointerId: 1, clientX: 430, clientY: 160 });
+    fireEvent.pointerUp(overlay, { pointerId: 1, clientX: 430, clientY: 160 });
     fireEvent.change(screen.getByLabelText("aCRF mapping text for DM.AGE annotation 1"), { target: { value: "AGE at baseline" } });
+
+    fireEvent.change(screen.getByLabelText("Domain annotation text for DM"), { target: { value: "DEMOGRAPHICS" } });
+    const freeCard = screen.getByText("No-domain annotations").closest("article")!;
+    fireEvent.click(within(freeCard).getByRole("button", { name: "Add" }));
+    fireEvent.change(screen.getByLabelText("No-domain annotation text 1"), { target: { value: "NOT SUBMITTED - TEST" } });
 
     const ageCard = screen.getByText("DM.AGE").closest("article")!;
     fireEvent.click(within(ageCard).getByRole("button", { name: "Add" }));
@@ -134,9 +145,10 @@ describe("SDTMReviewEditor", () => {
     fireEvent.change(screen.getByLabelText("aCRF domain"), { target: { value: "DM" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Save & rebuild" }));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ datasets: expect.arrayContaining([expect.objectContaining({ domain: "DM", acrf_font_family: "Times Bold", acrf_font_size: 11, acrf_text_color: "#AA1122", acrf_fill_color: "#CCDDFF", variables: expect.arrayContaining([expect.objectContaining({ name: "AGE", acrf_annotations: [
-      { source_label: "Age", mapping_text: "AGE at baseline" },
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ acrf_free_annotations: [expect.objectContaining({ text: "NOT SUBMITTED - TEST", page: 1 })], datasets: expect.arrayContaining([expect.objectContaining({ domain: "DM", acrf_font_family: "Times Bold", acrf_font_size: 11, acrf_text_color: "#AA1122", acrf_fill_color: "#CCDDFF", acrf_domain_annotation: expect.objectContaining({ enabled: true, text: "DEMOGRAPHICS" }), variables: expect.arrayContaining([expect.objectContaining({ name: "AGE", acrf_annotations: [
+      { source_label: "Age", mapping_text: "AGE at baseline", page: 1, x: 420, y: 150 },
       { source_label: "Age at follow-up", mapping_text: "AGE follow-up" },
     ] })]) })]) }));
+    bounds.mockRestore();
   });
 });

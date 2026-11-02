@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MutableRefObject, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, ListChecks, Play, Plus, RotateCcw, Save, ScrollText, Table2, Trash2, Upload } from "lucide-react";
 import { api } from "@/lib/api";
@@ -39,7 +39,19 @@ interface SDTMDataset {
   acrf_font_size?: number;
   acrf_text_color?: string;
   acrf_fill_color?: string;
+  acrf_domain_annotation?: ACRFDomainAnnotation;
   variables: SDTMVariable[];
+}
+
+interface ACRFPosition { page: number; x: number; y: number; }
+interface ACRFDomainAnnotation { enabled: boolean; text: string; positions: ACRFPosition[]; }
+interface ACRFFreeAnnotation extends ACRFPosition {
+  id: string;
+  text: string;
+  font_family: "Helvetica" | "Helvetica Bold" | "Times" | "Times Bold" | "Courier" | "Courier Bold";
+  font_size: number;
+  text_color: string;
+  fill_color: string;
 }
 
 interface VariableRule {
@@ -60,6 +72,7 @@ export interface SDTMPlanDraft extends Record<string, unknown> {
   domain_mappings: DomainMapping[];
   datasets: SDTMDataset[];
   rule_augmentations: VariableRule[];
+  acrf_free_annotations: ACRFFreeAnnotation[];
   assumptions: string[];
   unresolved_mappings: string[];
 }
@@ -332,7 +345,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
       {stage === "acrf" && (
         <DerivedArtifactReview
           title="Annotated CRF review"
-          description="Review the generated PDF by domain, add multiple mappings for a target variable, customize each annotation's mapping text, manage font and background at domain level, and click an annotation in the PDF to edit it."
+          description="Review by domain, drag annotations to exact page locations, manage the domain label shown on each applicable page, and add page annotations such as NOT SUBMITTED that are not tied to an SDTM domain."
           artifact={acrfArtifact ?? acrfDiagnostics}
           missingMessage="No aCRF was generated because this job did not include a blank CRF PDF. Start a new generation with a blank CRF to enable annotation review."
         >
@@ -348,6 +361,11 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
               const dataset = next.datasets.find((item) => item.domain === domain);
               if (dataset) Object.assign(dataset, patch);
             })}
+            onDomainAnnotationChange={(domain, annotation) => update((next) => {
+              const dataset = next.datasets.find((item) => item.domain === domain);
+              if (dataset) dataset.acrf_domain_annotation = annotation;
+            })}
+            onFreeAnnotationsChange={(annotations) => update((next) => { next.acrf_free_annotations = annotations; })}
             onSave={() => onSave(plan)}
             saving={saving}
             saveDisabled={issues.length > 0}
@@ -493,17 +511,25 @@ function DefineArtifactPreview({ xml, html, diagnostics }: { xml?: Artifact; htm
 const ACRF_FONT_FAMILIES = ["Helvetica", "Helvetica Bold", "Times", "Times Bold", "Courier", "Courier Bold"] as const;
 const DEFAULT_ACRF_STYLE = { font_family: "Helvetica", font_size: 8, text_color: "#141F3D", fill_color: "#EBF2FF" } as const;
 type ACRFDomainStylePatch = Partial<Pick<SDTMDataset, "acrf_font_family" | "acrf_font_size" | "acrf_text_color" | "acrf_fill_color">>;
-type ACRFDiagnosticAnnotation = { domain: string; variable: string; annotation_index: number; status: string; page: number | null; label: string; mapping_text: string; textbox?: [number, number, number, number] | null };
+type ACRFDiagnosticAnnotation = { annotation_type?: "variable" | "domain" | "free"; annotation_id?: string; domain: string; variable: string; annotation_index: number; status: string; page: number | null; label: string; mapping_text: string; textbox?: [number, number, number, number] | null };
 type ACRFPage = { page: number; width: number; height: number };
 
 function acrfAnnotationKey(domain: string, variable: string, index: number) { return `${domain}.${variable}.${index}`; }
+function acrfEditorKey(annotation: ACRFDiagnosticAnnotation) {
+  if (annotation.annotation_type === "domain") return `domain:${annotation.domain}`;
+  if (annotation.annotation_type === "free") return `free:${annotation.annotation_id}`;
+  return acrfAnnotationKey(annotation.domain, annotation.variable, annotation.annotation_index);
+}
+function newFreeAnnotationId() { return `free-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 
-function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDomainStyleChange, onSave, saving, saveDisabled, error }: {
+function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDomainStyleChange, onDomainAnnotationChange, onFreeAnnotationsChange, onSave, saving, saveDisabled, error }: {
   pdf?: Artifact;
   diagnostics?: Artifact;
   plan: SDTMPlanDraft;
   onAnnotationsChange: (domain: string, variable: string, annotations: SDTMACRFAnnotationDraft[]) => void;
   onDomainStyleChange: (domain: string, patch: ACRFDomainStylePatch) => void;
+  onDomainAnnotationChange: (domain: string, annotation: ACRFDomainAnnotation) => void;
+  onFreeAnnotationsChange: (annotations: ACRFFreeAnnotation[]) => void;
   onSave: () => void;
   saving: boolean;
   saveDisabled: boolean;
@@ -512,7 +538,7 @@ function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDom
   const query = useQuery({ queryKey: ["acrf-diagnostics", diagnostics?.id], queryFn: () => api.artifactText(diagnostics!.download_url), enabled: Boolean(diagnostics) });
   const [selectedDomain, setSelectedDomain] = useState(plan.datasets[0]?.domain ?? "");
   const [selectedAnnotation, setSelectedAnnotation] = useState<string | null>(null);
-  const editorRefs = useRef(new Map<string, HTMLDivElement>());
+  const editorRefs = useRef(new Map<string, HTMLElement>());
   const pageRefs = useRef(new Map<number, HTMLDivElement>());
   let parsed: { status?: string; message?: string; annotations?: ACRFDiagnosticAnnotation[]; pages?: ACRFPage[]; domain_styles?: Record<string, typeof DEFAULT_ACRF_STYLE> } = {};
   try { parsed = query.data ? JSON.parse(query.data) : {}; } catch { /* render unavailable diagnostics below */ }
@@ -529,6 +555,8 @@ function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDom
   if (!pdf) return <EmptyReview text="Annotated CRF output is unavailable." />;
   const dataset = plan.datasets.find((item) => item.domain === selectedDomain) ?? plan.datasets[0];
   if (!dataset) return <EmptyReview text="No SDTM domains are available for aCRF review." />;
+  const domainAnnotation = dataset.acrf_domain_annotation ?? { enabled: true, text: dataset.domain, positions: [] };
+  const freeAnnotations = plan.acrf_free_annotations ?? [];
   const savedAnnotations = new Map((parsed.annotations ?? []).map((item) => [acrfAnnotationKey(item.domain, item.variable, item.annotation_index), item]));
   const annotationCount = dataset.variables.reduce((count, variable) => count + (variable.acrf_annotations?.length ?? 0), 0);
   const style = {
@@ -539,10 +567,23 @@ function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDom
   };
   const savedStyle = parsed.domain_styles?.[dataset.domain] ?? DEFAULT_ACRF_STYLE;
   const stylePending = style.font_family !== savedStyle.font_family || style.font_size !== savedStyle.font_size || style.text_color !== savedStyle.text_color.toUpperCase() || style.fill_color !== savedStyle.fill_color.toUpperCase();
-  const selectAnnotation = (domain: string, variable: string, index: number, page?: number | null) => {
-    setSelectedDomain(domain);
-    setSelectedAnnotation(acrfAnnotationKey(domain, variable, index));
-    if (page) pageRefs.current.get(page)?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+  const selectAnnotation = (annotation: ACRFDiagnosticAnnotation) => {
+    if (annotation.domain) setSelectedDomain(annotation.domain);
+    setSelectedAnnotation(acrfEditorKey(annotation));
+    if (annotation.page) pageRefs.current.get(annotation.page)?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  };
+  const moveAnnotation = (annotation: ACRFDiagnosticAnnotation, position: ACRFPosition) => {
+    if (annotation.annotation_type === "domain") {
+      const targetDataset = plan.datasets.find((item) => item.domain === annotation.domain);
+      const current = targetDataset?.acrf_domain_annotation ?? { enabled: true, text: annotation.domain, positions: [] };
+      const positions = [...current.positions.filter((item) => item.page !== position.page), position];
+      onDomainAnnotationChange(annotation.domain, { ...current, positions });
+    } else if (annotation.annotation_type === "free") {
+      onFreeAnnotationsChange(freeAnnotations.map((item) => item.id === annotation.annotation_id ? { ...item, ...position } : item));
+    } else {
+      const variable = plan.datasets.find((item) => item.domain === annotation.domain)?.variables.find((item) => item.name === annotation.variable);
+      if (variable) onAnnotationsChange(annotation.domain, annotation.variable, (variable.acrf_annotations ?? []).map((item, index) => index === annotation.annotation_index ? { ...item, ...position } : item));
+    }
   };
   return <div className="grid gap-4 xl:grid-cols-[430px_minmax(0,1fr)]">
     <aside className="flex max-h-[48rem] min-h-0 flex-col overflow-hidden rounded-lg border border-white/10 bg-black/20">
@@ -554,10 +595,22 @@ function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDom
           <div className="mt-2 grid grid-cols-[minmax(0,1fr)_78px] gap-2"><select aria-label={`aCRF font for ${dataset.domain}`} value={style.font_family} onChange={(event) => onDomainStyleChange(dataset.domain, { acrf_font_family: event.target.value as SDTMDataset["acrf_font_family"] })} className={inputClass}>{ACRF_FONT_FAMILIES.map((font) => <option key={font}>{font}</option>)}</select><input aria-label={`aCRF font size for ${dataset.domain}`} type="number" min={6} max={18} step={0.5} value={style.font_size} onChange={(event) => onDomainStyleChange(dataset.domain, { acrf_font_size: Math.min(18, Math.max(6, Number(event.target.value) || 8)) })} className={inputClass} /></div>
           <div className="mt-2 grid grid-cols-2 gap-2"><label className="flex items-center gap-2 rounded-md border border-white/10 bg-[#101012] px-2 py-1.5"><input aria-label={`aCRF text color for ${dataset.domain}`} type="color" value={style.text_color} onChange={(event) => onDomainStyleChange(dataset.domain, { acrf_text_color: event.target.value.toUpperCase() })} className="h-6 w-8 cursor-pointer bg-transparent p-0" /><span className="text-[9px] font-bold uppercase text-zinc-500">Text</span></label><label className="flex items-center gap-2 rounded-md border border-white/10 bg-[#101012] px-2 py-1.5"><input aria-label={`aCRF background color for ${dataset.domain}`} type="color" value={style.fill_color} onChange={(event) => onDomainStyleChange(dataset.domain, { acrf_fill_color: event.target.value.toUpperCase() })} className="h-6 w-8 cursor-pointer bg-transparent p-0" /><span className="text-[9px] font-bold uppercase text-zinc-500">Background</span></label></div>
         </div>
-        <p className="mt-2 text-[10px] leading-4 text-zinc-600">Add more than one annotation to a variable, choose the CRF question for each, and customize the text printed in its mapping box.</p>
+        <p className="mt-2 text-[10px] leading-4 text-zinc-600">Drag any box in the page preview to persist a new location. Variable and domain boxes inherit this domain style.</p>
         {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2 py-1.5 text-[10px] text-rose-300">{error}</p>}
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
+        <article ref={(node) => { if (node) editorRefs.current.set(`domain:${dataset.domain}`, node); else editorRefs.current.delete(`domain:${dataset.domain}`); }} className={`rounded-lg border p-2.5 ${selectedAnnotation === `domain:${dataset.domain}` ? "border-violet-400 bg-violet-500/[0.08]" : "border-violet-500/20 bg-violet-500/[0.04]"}`}>
+          <div className="flex items-center justify-between gap-2"><div><span className="text-[10px] font-black uppercase tracking-wider text-violet-300">Domain annotation</span><p className="mt-1 text-[10px] text-zinc-600">Shown at the top-left of every page containing a {dataset.domain} variable annotation.</p></div><input aria-label={`Enable ${dataset.domain} domain annotation`} type="checkbox" checked={domainAnnotation.enabled} onChange={(event) => onDomainAnnotationChange(dataset.domain, { ...domainAnnotation, enabled: event.target.checked })} /></div>
+          <input aria-label={`Domain annotation text for ${dataset.domain}`} value={domainAnnotation.text} disabled={!domainAnnotation.enabled} onChange={(event) => onDomainAnnotationChange(dataset.domain, { ...domainAnnotation, text: event.target.value })} placeholder={dataset.domain} className={`${inputClass} mt-2`} />
+          <p className="mt-2 text-[9px] text-zinc-600">{domainAnnotation.positions.length ? `${domainAnnotation.positions.length} page position${domainAnnotation.positions.length === 1 ? "" : "s"} customized.` : "Using automatic top-left placement."}</p>
+        </article>
+        <article className="rounded-lg border border-amber-500/20 bg-amber-500/[0.035] p-2.5">
+          <div className="flex items-center justify-between gap-2"><div><span className="text-[10px] font-black uppercase tracking-wider text-amber-300">No-domain annotations</span><p className="mt-1 text-[10px] text-zinc-600">Page notes such as NOT SUBMITTED.</p></div><button type="button" onClick={() => { const annotation: ACRFFreeAnnotation = { id: newFreeAnnotationId(), text: "NOT SUBMITTED", page: 1, x: 48, y: 48, font_family: "Helvetica Bold", font_size: 9, text_color: "#7F1D1D", fill_color: "#FEE2E2" }; onFreeAnnotationsChange([...freeAnnotations, annotation]); setSelectedAnnotation(`free:${annotation.id}`); }} className="text-[10px] font-bold text-amber-300"><Plus size={11} className="mr-1 inline" />Add</button></div>
+          {freeAnnotations.map((annotation, index) => <div key={annotation.id} ref={(node) => { if (node) editorRefs.current.set(`free:${annotation.id}`, node); else editorRefs.current.delete(`free:${annotation.id}`); }} className={`mt-2 rounded-md border p-2 ${selectedAnnotation === `free:${annotation.id}` ? "border-amber-300 bg-amber-500/[0.08]" : "border-white/[0.08] bg-black/10"}`}>
+            <div className="grid grid-cols-[minmax(0,1fr)_70px_30px] gap-2"><input aria-label={`No-domain annotation text ${index + 1}`} value={annotation.text} onChange={(event) => onFreeAnnotationsChange(freeAnnotations.map((item) => item.id === annotation.id ? { ...item, text: event.target.value } : item))} className={inputClass} /><input aria-label={`No-domain annotation page ${index + 1}`} type="number" min={1} max={Math.max(1, (parsed.pages?.length ?? 1) - 1)} value={annotation.page} onChange={(event) => onFreeAnnotationsChange(freeAnnotations.map((item) => item.id === annotation.id ? { ...item, page: Math.max(1, Number(event.target.value) || 1) } : item))} className={inputClass} /><button type="button" aria-label={`Remove no-domain annotation ${index + 1}`} onClick={() => onFreeAnnotationsChange(freeAnnotations.filter((item) => item.id !== annotation.id))} className="text-rose-300"><Trash2 size={13} /></button></div>
+            <div className="mt-2 grid grid-cols-[minmax(0,1fr)_68px_42px_42px] gap-2"><select aria-label={`No-domain annotation font ${index + 1}`} value={annotation.font_family} onChange={(event) => onFreeAnnotationsChange(freeAnnotations.map((item) => item.id === annotation.id ? { ...item, font_family: event.target.value as ACRFFreeAnnotation["font_family"] } : item))} className={inputClass}>{ACRF_FONT_FAMILIES.map((font) => <option key={font}>{font}</option>)}</select><input aria-label={`No-domain annotation font size ${index + 1}`} type="number" min={6} max={18} value={annotation.font_size} onChange={(event) => onFreeAnnotationsChange(freeAnnotations.map((item) => item.id === annotation.id ? { ...item, font_size: Math.min(18, Math.max(6, Number(event.target.value) || 9)) } : item))} className={inputClass} /><input aria-label={`No-domain annotation text color ${index + 1}`} type="color" value={annotation.text_color} onChange={(event) => onFreeAnnotationsChange(freeAnnotations.map((item) => item.id === annotation.id ? { ...item, text_color: event.target.value.toUpperCase() } : item))} className="h-9 w-10 bg-transparent" /><input aria-label={`No-domain annotation background color ${index + 1}`} type="color" value={annotation.fill_color} onChange={(event) => onFreeAnnotationsChange(freeAnnotations.map((item) => item.id === annotation.id ? { ...item, fill_color: event.target.value.toUpperCase() } : item))} className="h-9 w-10 bg-transparent" /></div>
+          </div>)}
+        </article>
         {dataset.variables.map((variable) => {
           const variableKey = `${dataset.domain}.${variable.name}`;
           const annotations = variable.acrf_annotations ?? [];
@@ -574,29 +627,48 @@ function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDom
                 <div className="flex items-center justify-between"><span className="text-[9px] font-black uppercase tracking-wider text-zinc-500">Annotation {index + 1}</span><span className={`text-[9px] font-black uppercase ${statusClass}`}>{status}</span></div>
                 <label className="mt-2 block"><span className="mb-1 block text-[9px] text-zinc-600">CRF question text</span><input aria-label={`CRF question text for ${variableKey} annotation ${index + 1}`} value={annotation.source_label} onChange={(event) => onAnnotationsChange(dataset.domain, variable.name, annotations.map((item, itemIndex) => itemIndex === index ? { ...item, source_label: event.target.value } : item))} placeholder="Exact question text from blank CRF" className={inputClass} /></label>
                 <label className="mt-2 block"><span className="mb-1 block text-[9px] text-zinc-600">Mapping text</span><input aria-label={`aCRF mapping text for ${variableKey} annotation ${index + 1}`} value={annotation.mapping_text} onChange={(event) => onAnnotationsChange(dataset.domain, variable.name, annotations.map((item, itemIndex) => itemIndex === index ? { ...item, mapping_text: event.target.value } : item))} placeholder={variableKey} className={inputClass} /></label>
-                <div className="mt-2 flex items-center justify-between"><span className="text-[10px] text-zinc-600">{saved?.page ? `Page ${saved.page}` : annotation.source_label.trim() ? "Save to locate question" : "Question required"}</span><div className="flex gap-2">{saved?.page && <button type="button" onClick={() => selectAnnotation(dataset.domain, variable.name, index, saved.page)} className="text-[10px] font-bold text-violet-300">Show</button>}<button type="button" aria-label={`Remove ${variableKey} annotation ${index + 1}`} onClick={() => { onAnnotationsChange(dataset.domain, variable.name, annotations.filter((_, itemIndex) => itemIndex !== index)); setSelectedAnnotation(null); }} className="text-[10px] font-bold text-rose-300"><Trash2 size={11} className="mr-1 inline" />Remove</button></div></div>
+                <div className="mt-2 flex items-center justify-between"><span className="text-[10px] text-zinc-600">{saved?.page ? `Page ${saved.page}${annotation.x != null ? " - custom position" : ""}` : annotation.source_label.trim() ? "Save to locate question" : "Question required"}</span><div className="flex gap-2">{saved?.page && <button type="button" onClick={() => selectAnnotation(saved)} className="text-[10px] font-bold text-violet-300">Show</button>}<button type="button" aria-label={`Remove ${variableKey} annotation ${index + 1}`} onClick={() => { onAnnotationsChange(dataset.domain, variable.name, annotations.filter((_, itemIndex) => itemIndex !== index)); setSelectedAnnotation(null); }} className="text-[10px] font-bold text-rose-300"><Trash2 size={11} className="mr-1 inline" />Remove</button></div></div>
               </div>;
             })}
           </article>;
         })}
       </div>
     </aside>
-    <ACRFPageReview pdf={pdf} pages={parsed.pages ?? []} annotations={parsed.annotations ?? []} selected={selectedAnnotation} pageRefs={pageRefs} onSelect={selectAnnotation} />
+    <ACRFPageReview pdf={pdf} pages={parsed.pages ?? []} annotations={parsed.annotations ?? []} selected={selectedAnnotation} pageRefs={pageRefs} onSelect={selectAnnotation} onMove={moveAnnotation} />
   </div>;
 }
 
-function ACRFPageReview({ pdf, pages, annotations, selected, pageRefs, onSelect }: { pdf: Artifact; pages: ACRFPage[]; annotations: ACRFDiagnosticAnnotation[]; selected: string | null; pageRefs: MutableRefObject<Map<number, HTMLDivElement>>; onSelect: (domain: string, variable: string, index: number, page?: number | null) => void }) {
+function ACRFPageReview({ pdf, pages, annotations, selected, pageRefs, onSelect, onMove }: { pdf: Artifact; pages: ACRFPage[]; annotations: ACRFDiagnosticAnnotation[]; selected: string | null; pageRefs: MutableRefObject<Map<number, HTMLDivElement>>; onSelect: (annotation: ACRFDiagnosticAnnotation) => void; onMove: (annotation: ACRFDiagnosticAnnotation, position: ACRFPosition) => void }) {
   if (!pages.length) return <div className="relative"><iframe title="Annotated CRF review" src={api.artifactPreviewUrl(pdf.download_url)} className="h-[48rem] w-full rounded-lg border border-white/10 bg-white" /><p className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-zinc-950/90 px-3 py-1.5 text-[10px] text-amber-200">Rebuild once to enable click-to-edit annotations.</p></div>;
   return <div className="h-[48rem] overflow-auto rounded-lg border border-white/10 bg-zinc-800 p-3" aria-label="Clickable annotated CRF review">
     <div className="mx-auto max-w-4xl space-y-4">{pages.map((page) => <div key={page.page} ref={(node) => { if (node) pageRefs.current.set(page.page, node); else pageRefs.current.delete(page.page); }} className="relative overflow-hidden bg-white shadow-xl">
       <img src={api.artifactPageUrl(pdf.download_url, page.page)} alt={`Annotated CRF page ${page.page}`} className="block h-auto w-full" loading="lazy" />
       {annotations.filter((annotation) => annotation.page === page.page && annotation.textbox).map((annotation) => {
-        const key = acrfAnnotationKey(annotation.domain, annotation.variable, annotation.annotation_index);
-        const [x0, y0, x1, y1] = annotation.textbox!;
-        return <button key={key} type="button" aria-label={`Edit ${annotation.domain}.${annotation.variable} annotation ${annotation.annotation_index + 1}`} title={`Edit ${annotation.mapping_text}`} onClick={() => onSelect(annotation.domain, annotation.variable, annotation.annotation_index, annotation.page)} className={`absolute rounded transition hover:bg-violet-400/15 hover:ring-2 hover:ring-violet-400 ${selected === key ? "bg-violet-400/15 ring-2 ring-violet-400" : "bg-transparent"}`} style={{ left: `${x0 / page.width * 100}%`, top: `${y0 / page.height * 100}%`, width: `${(x1 - x0) / page.width * 100}%`, height: `${(y1 - y0) / page.height * 100}%` }} />;
+        return <DraggableACRFOverlay key={annotation.annotation_id ?? acrfEditorKey(annotation)} page={page} annotation={annotation} selected={selected === acrfEditorKey(annotation)} onSelect={() => onSelect(annotation)} onMove={(position) => onMove(annotation, position)} />;
       })}
     </div>)}</div>
   </div>;
+}
+
+function DraggableACRFOverlay({ page, annotation, selected, onSelect, onMove }: { page: ACRFPage; annotation: ACRFDiagnosticAnnotation; selected: boolean; onSelect: () => void; onMove: (position: ACRFPosition) => void }) {
+  const [draft, setDraft] = useState<[number, number] | null>(null);
+  const draftRef = useRef<[number, number] | null>(null);
+  const drag = useRef<{ offsetX: number; offsetY: number; width: number; height: number } | null>(null);
+  const [x0, y0, x1, y1] = annotation.textbox!;
+  useEffect(() => { setDraft(null); draftRef.current = null; }, [x0, y0]);
+  const position = draft ?? [x0, y0];
+  const move = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (!drag.current) return;
+    const bounds = event.currentTarget.parentElement?.getBoundingClientRect();
+    if (!bounds?.width || !bounds.height) return;
+    const pointerX = (event.clientX - bounds.left) / bounds.width * page.width;
+    const pointerY = (event.clientY - bounds.top) / bounds.height * page.height;
+    const next: [number, number] = [Math.min(Math.max(0, pointerX - drag.current.offsetX), page.width - drag.current.width), Math.min(Math.max(0, pointerY - drag.current.offsetY), page.height - drag.current.height)];
+    draftRef.current = next;
+    setDraft(next);
+  };
+  const label = annotation.annotation_type === "domain" ? `${annotation.domain} domain annotation` : annotation.annotation_type === "free" ? `no-domain annotation ${annotation.mapping_text}` : `${annotation.domain}.${annotation.variable} annotation ${annotation.annotation_index + 1}`;
+  return <button type="button" aria-label={`Edit and move ${label}`} title={`Drag to move; click to edit ${annotation.mapping_text}`} onClick={onSelect} onPointerDown={(event) => { onSelect(); const bounds = event.currentTarget.parentElement?.getBoundingClientRect(); if (!bounds?.width || !bounds.height) return; event.currentTarget.setPointerCapture?.(event.pointerId); const pointerX = (event.clientX - bounds.left) / bounds.width * page.width; const pointerY = (event.clientY - bounds.top) / bounds.height * page.height; drag.current = { offsetX: pointerX - position[0], offsetY: pointerY - position[1], width: x1 - x0, height: y1 - y0 }; }} onPointerMove={move} onPointerUp={(event) => { move(event); const next = draftRef.current; drag.current = null; if (next) onMove({ page: page.page, x: Math.round(next[0] * 100) / 100, y: Math.round(next[1] * 100) / 100 }); }} className={`absolute cursor-move touch-none rounded transition hover:bg-violet-400/15 hover:ring-2 hover:ring-violet-400 ${selected ? "bg-violet-400/15 ring-2 ring-violet-400" : "bg-transparent"}`} style={{ left: `${position[0] / page.width * 100}%`, top: `${position[1] / page.height * 100}%`, width: `${(x1 - x0) / page.width * 100}%`, height: `${(y1 - y0) / page.height * 100}%` }} />;
 }
 
 function SourceCard({ source }: { source: { name: string; type: SourceType } }) {
@@ -749,9 +821,16 @@ function normalizePlan(value: Record<string, unknown>): SDTMPlanDraft {
         const annotations = normalized.acrf_annotations?.length ? normalized.acrf_annotations : normalized.crf_source_label ? [{ source_label: normalized.crf_source_label, mapping_text: `${dataset.domain}.${normalized.name}` }] : [];
         return { ...normalized, acrf_annotations: annotations };
       });
-      return { ...dataset, acrf_font_family: dataset.acrf_font_family ?? legacyStyle?.acrf_font_family ?? "Helvetica", acrf_font_size: dataset.acrf_font_size ?? legacyStyle?.acrf_font_size ?? 8, acrf_text_color: dataset.acrf_text_color ?? legacyStyle?.acrf_text_color ?? "#141F3D", acrf_fill_color: dataset.acrf_fill_color ?? legacyStyle?.acrf_fill_color ?? "#EBF2FF", record_plan: normalizeRecordPlan(dataset.record_plan), variables };
+      const rawDomainAnnotation = dataset.acrf_domain_annotation;
+      const domainAnnotation: ACRFDomainAnnotation = {
+        enabled: rawDomainAnnotation?.enabled !== false,
+        text: stringValue(rawDomainAnnotation?.text, dataset.domain),
+        positions: arrayValue<ACRFPosition>(rawDomainAnnotation?.positions).filter((item) => finiteNumber(item.page) && finiteNumber(item.x) && finiteNumber(item.y)).map((item) => ({ page: item.page, x: item.x, y: item.y })),
+      };
+      return { ...dataset, acrf_font_family: dataset.acrf_font_family ?? legacyStyle?.acrf_font_family ?? "Helvetica", acrf_font_size: dataset.acrf_font_size ?? legacyStyle?.acrf_font_size ?? 8, acrf_text_color: dataset.acrf_text_color ?? legacyStyle?.acrf_text_color ?? "#141F3D", acrf_fill_color: dataset.acrf_fill_color ?? legacyStyle?.acrf_fill_color ?? "#EBF2FF", acrf_domain_annotation: domainAnnotation, record_plan: normalizeRecordPlan(dataset.record_plan), variables };
     }),
     rule_augmentations: arrayValue<VariableRule>(value.rule_augmentations),
+    acrf_free_annotations: arrayValue<ACRFFreeAnnotation>(value.acrf_free_annotations).map((item, index) => ({ id: stringValue(item.id, `free-${index + 1}`), text: stringValue(item.text, ""), page: finiteNumber(item.page) ? item.page : 1, x: finiteNumber(item.x) ? item.x : 48, y: finiteNumber(item.y) ? item.y : 48, font_family: ACRF_FONT_FAMILIES.includes(item.font_family) ? item.font_family : "Helvetica Bold", font_size: finiteNumber(item.font_size) ? item.font_size : 9, text_color: stringValue(item.text_color, "#7F1D1D").toUpperCase(), fill_color: stringValue(item.fill_color, "#FEE2E2").toUpperCase() })),
     assumptions: arrayValue<string>(value.assumptions),
     unresolved_mappings: arrayValue<string>(value.unresolved_mappings),
   };
@@ -774,6 +853,7 @@ function reconcilePlan(plan: SDTMPlanDraft): SDTMPlanDraft {
 function reviewIssues(plan: SDTMPlanDraft): string[] {
   const issues: string[] = [];
   if (!plan.datasets.length) issues.push("Import at least one target SDTM domain.");
+  plan.acrf_free_annotations.forEach((annotation, index) => { if (!annotation.text.trim()) issues.push(`No-domain aCRF annotation ${index + 1} needs text.`); if (annotation.page < 1) issues.push(`No-domain aCRF annotation ${index + 1} needs a valid page.`); });
   plan.datasets.forEach((dataset) => {
     const mappings = plan.domain_mappings.filter((mapping) => mapping.target_domain === dataset.domain);
     if (!mappings.length) issues.push(`${dataset.domain} needs at least one source dataset mapping.`);
@@ -841,5 +921,6 @@ function stringList(value: unknown): string[] | null { if (!Array.isArray(value)
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function stringValue(value: unknown, fallback: string): string { return typeof value === "string" ? value : fallback; }
 function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
+function finiteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
 function allowsSourcelessOrigin(value: string): boolean { const normalized = value.trim().toLowerCase(); return ["assigned", "derived", "protocol", "system", "sponsor"].some((token) => normalized.includes(token)); }
 function splitLines(value: string): string[] { return value.split("\n").map((item) => item.trim()).filter(Boolean); }

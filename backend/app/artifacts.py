@@ -457,6 +457,8 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
     )
     annotations: dict[tuple[str, str], list[dict]] = {}
     for annotation in acrf_annotations or []:
+        if annotation.get("annotation_type", "variable") != "variable":
+            continue
         key = (str(annotation.get("domain", "")).upper(), str(annotation.get("variable", "")).upper())
         annotations.setdefault(key, []).append(annotation)
     if acrf_annotations:
@@ -755,16 +757,18 @@ def _translated_text(namespace: str, text: str) -> etree._Element:
 
 def _insert_acrf_mapping_box(
     page: fitz.Page,
-    question_rect: fitz.Rect,
-    target_variable: str,
+    question_rect: fitz.Rect | None,
+    text: str,
     occupied_boxes: list[fitz.Rect],
     *,
     font_family: str,
     font_size: float,
     text_color: str,
     fill_color: str,
+    position: tuple[float, float] | None = None,
+    avoid_overlaps: bool = True,
 ) -> fitz.Rect:
-    """Draw one visible target-variable label beside a matched CRF question."""
+    """Draw one visible aCRF label beside a question or at a persisted page position."""
 
     font_names = {
         "Helvetica": "helv",
@@ -780,32 +784,40 @@ def _insert_acrf_mapping_box(
     margin = 8.0
     gap = 6.0
     box_height = max(24.0, font_size * 2.0 + 6.0)
-    box_width = min(max(fitz.get_text_length(target_variable, fontname=font_name, fontsize=font_size) + 16.0, 52.0), 180.0)
+    box_width = min(max(fitz.get_text_length(text, fontname=font_name, fontsize=font_size) + 16.0, 52.0), 180.0)
     page_rect = page.rect
-    centered_y = min(max(question_rect.y0 + (question_rect.height - box_height) / 2, margin), page_rect.y1 - margin - box_height)
-    vertical_offsets = [0.0, 23.0, -23.0, 46.0, -46.0, 69.0, -69.0]
-    horizontal_positions = [question_rect.x1 + gap, question_rect.x0 - gap - box_width]
     candidates: list[fitz.Rect] = []
-    for x0 in horizontal_positions:
-        if x0 < margin or x0 + box_width > page_rect.x1 - margin:
-            continue
-        for offset in vertical_offsets:
-            y0 = min(max(centered_y + offset, margin), page_rect.y1 - margin - box_height)
-            candidate = fitz.Rect(x0, y0, x0 + box_width, y0 + box_height)
-            if candidate not in candidates:
-                candidates.append(candidate)
-    if not candidates:
-        x0 = min(max(question_rect.x1 + gap, margin), page_rect.x1 - margin - box_width)
-        candidates.append(fitz.Rect(x0, centered_y, x0 + box_width, centered_y + box_height))
+    if position is not None:
+        base_x = min(max(position[0], margin), page_rect.x1 - margin - box_width)
+        base_y = min(max(position[1], margin), page_rect.y1 - margin - box_height)
+        offsets = [0.0, box_height + 4.0, (box_height + 4.0) * 2] if avoid_overlaps else [0.0]
+        candidates = [fitz.Rect(base_x, min(base_y + offset, page_rect.y1 - margin - box_height), base_x + box_width, min(base_y + offset, page_rect.y1 - margin - box_height) + box_height) for offset in offsets]
+    elif question_rect is not None:
+        centered_y = min(max(question_rect.y0 + (question_rect.height - box_height) / 2, margin), page_rect.y1 - margin - box_height)
+        vertical_offsets = [0.0, 23.0, -23.0, 46.0, -46.0, 69.0, -69.0]
+        horizontal_positions = [question_rect.x1 + gap, question_rect.x0 - gap - box_width]
+        for x0 in horizontal_positions:
+            if x0 < margin or x0 + box_width > page_rect.x1 - margin:
+                continue
+            for offset in vertical_offsets:
+                y0 = min(max(centered_y + offset, margin), page_rect.y1 - margin - box_height)
+                candidate = fitz.Rect(x0, y0, x0 + box_width, y0 + box_height)
+                if candidate not in candidates:
+                    candidates.append(candidate)
+        if not candidates:
+            x0 = min(max(question_rect.x1 + gap, margin), page_rect.x1 - margin - box_width)
+            candidates.append(fitz.Rect(x0, centered_y, x0 + box_width, centered_y + box_height))
+    else:
+        candidates.append(fitz.Rect(margin, margin, margin + box_width, margin + box_height))
     box = next(
-        (candidate for candidate in candidates if not any(candidate.intersects(existing) for existing in occupied_boxes)),
+        (candidate for candidate in candidates if not avoid_overlaps or not any(candidate.intersects(existing) for existing in occupied_boxes)),
         candidates[0],
     )
     page.draw_rect(box, color=text_rgb, fill=fill_rgb, width=0.8, overlay=True)
     text_rect = fitz.Rect(box.x0 + 4, box.y0 + 3, box.x1 - 4, box.y1 - 2)
     page.insert_textbox(
         text_rect,
-        target_variable,
+        text,
         fontname=font_name,
         fontsize=font_size,
         color=text_rgb,
@@ -818,9 +830,11 @@ def _insert_acrf_mapping_box(
 
 def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: Path) -> tuple[Path | None, Path]:
     document = fitz.open(crf_path)
+    source_page_count = document.page_count
     searchable = any(page.get_text("text").strip() for page in document)
     coverage: list[dict] = []
     occupied_boxes: dict[int, list[fitz.Rect]] = {}
+    domain_pages: dict[str, set[int]] = {dataset.domain: set() for dataset in result.datasets}
     if not searchable:
         coverage_path.write_text(json.dumps({"status": "ocr_required", "searchable": False, "message": "The supplied CRF has no searchable text. OCR is not supported in this iteration; annotation was not performed.", "annotations": [], "pages": []}, indent=2), encoding="utf-8")
         document.close()
@@ -833,6 +847,9 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
             for annotation_index, annotation in enumerate(annotations):
                 source_label = annotation.source_label if hasattr(annotation, "source_label") else annotation["source_label"]
                 configured_mapping_text = annotation.mapping_text if hasattr(annotation, "mapping_text") else annotation["mapping_text"]
+                configured_page = annotation.page if hasattr(annotation, "page") else annotation.get("page")
+                configured_x = annotation.x if hasattr(annotation, "x") else annotation.get("x")
+                configured_y = annotation.y if hasattr(annotation, "y") else annotation.get("y")
                 needle = source_label.strip()
                 mapping_text = configured_mapping_text.strip() or f"{dataset.domain}.{variable.name}"
                 matches: list[tuple[fitz.Page, fitz.Rect]] = []
@@ -842,6 +859,9 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
                             matches.append((page, rect))
                 if matches:
                     page, rect = matches[0]
+                    manual_position = configured_page is not None and configured_x is not None and configured_y is not None and 1 <= configured_page <= source_page_count
+                    if manual_position:
+                        page = document[configured_page - 1]
                     box = _insert_acrf_mapping_box(
                         page,
                         rect,
@@ -851,21 +871,70 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
                         font_size=dataset.acrf_font_size,
                         text_color=dataset.acrf_text_color,
                         fill_color=dataset.acrf_fill_color,
+                        position=(configured_x, configured_y) if manual_position else None,
+                        avoid_overlaps=not manual_position,
                     )
+                    domain_pages[dataset.domain].add(page.number + 1)
                 else:
                     box = None
                 status = "unmatched" if not matches else "ambiguous" if len(matches) > 1 else "matched"
-                coverage.append({"domain": dataset.domain, "variable": variable.name, "annotation_index": annotation_index, "origin": variable.origin, "mapping": variable.mapping_expression, "label": needle, "mapping_text": mapping_text, "status": status, "page": matches[0][0].number + 1 if matches else None, "match_count": len(matches), "rendering": "textbox" if box else None, "textbox": [round(value, 2) for value in box] if box else None, "style": {"font_family": dataset.acrf_font_family, "font_size": dataset.acrf_font_size, "text_color": dataset.acrf_text_color.upper(), "fill_color": dataset.acrf_fill_color.upper()}})
+                coverage.append({"annotation_type": "variable", "annotation_id": f"{dataset.domain}.{variable.name}.{annotation_index}", "domain": dataset.domain, "variable": variable.name, "annotation_index": annotation_index, "origin": variable.origin, "mapping": variable.mapping_expression, "label": needle, "mapping_text": mapping_text, "status": status, "page": page.number + 1 if matches else None, "match_count": len(matches), "rendering": "textbox" if box else None, "textbox": [round(value, 2) for value in box] if box else None, "style": {"font_family": dataset.acrf_font_family, "font_size": dataset.acrf_font_size, "text_color": dataset.acrf_text_color.upper(), "fill_color": dataset.acrf_fill_color.upper()}})
+    for dataset in result.datasets:
+        domain_annotation = dataset.acrf_domain_annotation
+        if not domain_annotation.enabled:
+            continue
+        positions = {position.page: position for position in domain_annotation.positions}
+        for page_number in sorted(domain_pages[dataset.domain]):
+            page = document[page_number - 1]
+            configured = positions.get(page_number)
+            box = _insert_acrf_mapping_box(
+                page,
+                None,
+                domain_annotation.text.strip() or dataset.domain,
+                occupied_boxes.setdefault(page.number, []),
+                font_family=dataset.acrf_font_family,
+                font_size=dataset.acrf_font_size,
+                text_color=dataset.acrf_text_color,
+                fill_color=dataset.acrf_fill_color,
+                position=(configured.x, configured.y) if configured else (18.0, 18.0),
+                avoid_overlaps=configured is None,
+            )
+            coverage.append({"annotation_type": "domain", "annotation_id": f"domain:{dataset.domain}:{page_number}", "domain": dataset.domain, "variable": "", "annotation_index": 0, "label": "", "mapping_text": domain_annotation.text.strip() or dataset.domain, "status": "matched", "page": page_number, "match_count": 1, "rendering": "textbox", "textbox": [round(value, 2) for value in box], "style": {"font_family": dataset.acrf_font_family, "font_size": dataset.acrf_font_size, "text_color": dataset.acrf_text_color.upper(), "fill_color": dataset.acrf_fill_color.upper()}})
+    for annotation_index, annotation in enumerate(result.acrf_free_annotations):
+        valid_page = 1 <= annotation.page <= source_page_count
+        box = None
+        if valid_page and annotation.text.strip():
+            page = document[annotation.page - 1]
+            box = _insert_acrf_mapping_box(
+                page,
+                None,
+                annotation.text.strip(),
+                occupied_boxes.setdefault(page.number, []),
+                font_family=annotation.font_family,
+                font_size=annotation.font_size,
+                text_color=annotation.text_color,
+                fill_color=annotation.fill_color,
+                position=(annotation.x, annotation.y),
+                avoid_overlaps=False,
+            )
+        coverage.append({"annotation_type": "free", "annotation_id": annotation.id, "domain": "", "variable": "", "annotation_index": annotation_index, "label": "", "mapping_text": annotation.text.strip(), "status": "matched" if box else "unmatched", "page": annotation.page if valid_page else None, "match_count": 1 if box else 0, "rendering": "textbox" if box else None, "textbox": [round(value, 2) for value in box] if box else None, "style": {"font_family": annotation.font_family, "font_size": annotation.font_size, "text_color": annotation.text_color.upper(), "fill_color": annotation.fill_color.upper()}})
     appendix = document.new_page()
     appendix.insert_textbox(fitz.Rect(48, 48, appendix.rect.width - 48, 110), "Draft aCRF annotation appendix", fontsize=16, color=(0.1, 0.2, 0.35))
     appendix.insert_textbox(fitz.Rect(48, 100, appendix.rect.width - 48, 155), DISCLAIMER.replace("—", "-"), fontsize=9, color=(0.65, 0.05, 0.15))
-    issues = [f"{item['status'].upper()}: {item['domain']}.{item['variable']} annotation {item['annotation_index'] + 1} <- {item['label'] or '[no CRF label]'}" for item in coverage if item["status"] != "matched"]
+    issues = []
+    for item in coverage:
+        if item["status"] == "matched":
+            continue
+        if item["annotation_type"] == "variable":
+            issues.append(f"{item['status'].upper()}: {item['domain']}.{item['variable']} annotation {item['annotation_index'] + 1} <- {item['label'] or '[no CRF label]'}")
+        else:
+            issues.append(f"{item['status'].upper()}: free annotation {item['annotation_id']} on page {item['page'] or '[invalid]'}")
     appendix.insert_textbox(fitz.Rect(48, 165, appendix.rect.width - 48, appendix.rect.height - 48), "Ambiguous and unmatched mappings:\n\n" + "\n".join(issues or ["None"]), fontsize=9)
     pages = [{"page": page.number + 1, "width": round(page.rect.width, 2), "height": round(page.rect.height, 2)} for page in document]
     document.save(path)
     document.close()
     domain_styles = {dataset.domain: {"font_family": dataset.acrf_font_family, "font_size": dataset.acrf_font_size, "text_color": dataset.acrf_text_color.upper(), "fill_color": dataset.acrf_fill_color.upper()} for dataset in result.datasets}
-    coverage_path.write_text(json.dumps({"status": "review_required" if issues else "completed", "searchable": True, "annotations": coverage, "pages": pages, "domain_styles": domain_styles, "summary": {state: sum(1 for item in coverage if item["status"] == state) for state in ("matched", "ambiguous", "unmatched")}}, indent=2), encoding="utf-8")
+    coverage_path.write_text(json.dumps({"status": "review_required" if issues else "completed", "searchable": True, "annotations": coverage, "pages": pages, "domain_styles": domain_styles, "summary": {state: sum(1 for item in coverage if item["annotation_type"] == "variable" and item["status"] == state) for state in ("matched", "ambiguous", "unmatched")}}, indent=2), encoding="utf-8")
     return path, coverage_path
 
 
