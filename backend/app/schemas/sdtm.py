@@ -104,6 +104,11 @@ class SDTMValueLevelMetadata(BaseModel):
     controlled_terms: list[str] = Field(default_factory=list)
 
 
+class SDTMACRFAnnotation(BaseModel):
+    source_label: str = Field(default="", description="Exact blank-CRF question text that receives the annotation")
+    mapping_text: str = Field(default="", description="Text rendered in the aCRF mapping box; blank uses DOMAIN.VARIABLE")
+
+
 class SDTMVariable(BaseModel):
     name: str
     label: str
@@ -115,10 +120,7 @@ class SDTMVariable(BaseModel):
     controlled_terms: list[str] = Field(default_factory=list)
     value_level_metadata: list[SDTMValueLevelMetadata] = Field(default_factory=list)
     crf_source_label: str | None = None
-    acrf_font_family: Literal["Helvetica", "Helvetica Bold", "Times", "Times Bold", "Courier", "Courier Bold"] = "Helvetica"
-    acrf_font_size: float = Field(default=8.0, ge=6.0, le=18.0)
-    acrf_text_color: str = Field(default="#141F3D", pattern=r"^#[0-9A-Fa-f]{6}$")
-    acrf_fill_color: str = Field(default="#EBF2FF", pattern=r"^#[0-9A-Fa-f]{6}$")
+    acrf_annotations: list[SDTMACRFAnnotation] = Field(default_factory=list)
     length: int | None = Field(default=None, ge=1, le=32767)
     format: str | None = None
     role: str | None = None
@@ -133,6 +135,10 @@ class SDTMVariableDataset(BaseModel):
     key_variables: list[str] = Field(default_factory=lambda: ["STUDYID", "USUBJID"])
     dataset_class: str = "Special Purpose"
     purpose: str = "Tabulation"
+    acrf_font_family: Literal["Helvetica", "Helvetica Bold", "Times", "Times Bold", "Courier", "Courier Bold"] = "Helvetica"
+    acrf_font_size: float = Field(default=8.0, ge=6.0, le=18.0)
+    acrf_text_color: str = Field(default="#141F3D", pattern=r"^#[0-9A-Fa-f]{6}$")
+    acrf_fill_color: str = Field(default="#EBF2FF", pattern=r"^#[0-9A-Fa-f]{6}$")
     variables: list[SDTMVariable] = Field(min_length=1)
     review_assumptions: list[str] = Field(
         default_factory=list,

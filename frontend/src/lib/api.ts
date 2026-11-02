@@ -145,6 +145,7 @@ export const api = {
   deleteJob: (id: string) => request<void>(`/api/v1/jobs/${id}`, { method: "DELETE" }),
   artifactUrl: (path: string) => `${API_URL}${path}`,
   artifactPreviewUrl: (path: string) => `${API_URL}${path}?inline=true`,
+  artifactPageUrl: (path: string, page: number) => `${API_URL}${path}/pages/${page}.png`,
   artifactText: (path: string) => requestText(`${path}?inline=true`),
   bundleUrl: (id: string) => `${API_URL}/api/v1/jobs/${id}/bundle`,
 };

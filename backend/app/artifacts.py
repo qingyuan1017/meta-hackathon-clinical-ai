@@ -307,7 +307,7 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
             "Origin",
             "Mapping",
             "Controlled Terms",
-            "CRF Source Label",
+            "aCRF Annotations",
         ]
     )
     for dataset in result.datasets:
@@ -324,7 +324,7 @@ def _render_sdtm_xlsx(result: SDTMPlan, path: Path) -> Path:
                     variable.origin,
                     variable.mapping_expression,
                     "; ".join(variable.controlled_terms),
-                    variable.crf_source_label or "",
+                    "; ".join(f"{annotation.source_label} -> {annotation.mapping_text or f'{dataset.domain}.{variable.name}'}" for annotation in variable.acrf_annotations) or variable.crf_source_label or "",
                 ]
             )
 
@@ -455,10 +455,10 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
         Version=result.standard.replace("SDTMIG ", ""),
         Status="Final",
     )
-    annotations = {
-        (str(item.get("domain", "")).upper(), str(item.get("variable", "")).upper()): item
-        for item in (acrf_annotations or [])
-    }
+    annotations: dict[tuple[str, str], list[dict]] = {}
+    for annotation in acrf_annotations or []:
+        key = (str(annotation.get("domain", "")).upper(), str(annotation.get("variable", "")).upper())
+        annotations.setdefault(key, []).append(annotation)
     if acrf_annotations:
         acrf_leaf = etree.SubElement(metadata, f"{{{def_ns}}}leaf", ID="LF.ACRF")
         acrf_leaf.set(f"{{{xlink_ns}}}href", "annotated-crf.pdf")
@@ -521,13 +521,14 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
                     _source_reference_text(variable.sources) or variable.mapping_expression,
                 )
             )
-            annotation = annotations.get((domain, variable_name))
-            if annotation and annotation.get("page"):
+            variable_annotations = annotations.get((domain, variable_name), [])
+            annotation_pages = sorted({int(annotation["page"]) for annotation in variable_annotations if annotation.get("page")})
+            if annotation_pages:
                 document_reference = etree.SubElement(origin, f"{{{def_ns}}}DocumentRef", leafID="LF.ACRF")
                 etree.SubElement(
                     document_reference,
                     f"{{{def_ns}}}PDFPageRef",
-                    PageRefs=str(annotation["page"]),
+                    PageRefs=" ".join(str(page) for page in annotation_pages),
                     Type="PhysicalRef",
                 )
             if variable.controlled_terms:
@@ -821,42 +822,50 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
     coverage: list[dict] = []
     occupied_boxes: dict[int, list[fitz.Rect]] = {}
     if not searchable:
-        coverage_path.write_text(json.dumps({"status": "ocr_required", "searchable": False, "message": "The supplied CRF has no searchable text. OCR is not supported in this iteration; annotation was not performed.", "annotations": []}, indent=2), encoding="utf-8")
+        coverage_path.write_text(json.dumps({"status": "ocr_required", "searchable": False, "message": "The supplied CRF has no searchable text. OCR is not supported in this iteration; annotation was not performed.", "annotations": [], "pages": []}, indent=2), encoding="utf-8")
         document.close()
         return None, coverage_path
     for dataset in result.datasets:
         for variable in dataset.variables:
-            matches: list[tuple[fitz.Page, fitz.Rect]] = []
-            needle = (variable.crf_source_label or "").strip()
-            if needle and len(needle) >= 2:
-                for page in document:
-                    for rect in page.search_for(needle):
-                        matches.append((page, rect))
-            if matches:
-                page, rect = matches[0]
-                target_variable = f"{dataset.domain}.{variable.name}"
-                box = _insert_acrf_mapping_box(
-                    page,
-                    rect,
-                    target_variable,
-                    occupied_boxes.setdefault(page.number, []),
-                    font_family=variable.acrf_font_family,
-                    font_size=variable.acrf_font_size,
-                    text_color=variable.acrf_text_color,
-                    fill_color=variable.acrf_fill_color,
-                )
-            else:
-                box = None
-            status = "unmatched" if not matches else "ambiguous" if len(matches) > 1 else "matched"
-            coverage.append({"domain": dataset.domain, "variable": variable.name, "origin": variable.origin, "mapping": variable.mapping_expression, "label": needle, "status": status, "page": matches[0][0].number + 1 if matches else None, "match_count": len(matches), "rendering": "textbox" if box else None, "textbox": [round(value, 2) for value in box] if box else None, "style": {"font_family": variable.acrf_font_family, "font_size": variable.acrf_font_size, "text_color": variable.acrf_text_color.upper(), "fill_color": variable.acrf_fill_color.upper()}})
+            annotations = list(variable.acrf_annotations)
+            if not annotations and variable.crf_source_label:
+                annotations = [{"source_label": variable.crf_source_label, "mapping_text": ""}]
+            for annotation_index, annotation in enumerate(annotations):
+                source_label = annotation.source_label if hasattr(annotation, "source_label") else annotation["source_label"]
+                configured_mapping_text = annotation.mapping_text if hasattr(annotation, "mapping_text") else annotation["mapping_text"]
+                needle = source_label.strip()
+                mapping_text = configured_mapping_text.strip() or f"{dataset.domain}.{variable.name}"
+                matches: list[tuple[fitz.Page, fitz.Rect]] = []
+                if needle and len(needle) >= 2:
+                    for page in document:
+                        for rect in page.search_for(needle):
+                            matches.append((page, rect))
+                if matches:
+                    page, rect = matches[0]
+                    box = _insert_acrf_mapping_box(
+                        page,
+                        rect,
+                        mapping_text,
+                        occupied_boxes.setdefault(page.number, []),
+                        font_family=dataset.acrf_font_family,
+                        font_size=dataset.acrf_font_size,
+                        text_color=dataset.acrf_text_color,
+                        fill_color=dataset.acrf_fill_color,
+                    )
+                else:
+                    box = None
+                status = "unmatched" if not matches else "ambiguous" if len(matches) > 1 else "matched"
+                coverage.append({"domain": dataset.domain, "variable": variable.name, "annotation_index": annotation_index, "origin": variable.origin, "mapping": variable.mapping_expression, "label": needle, "mapping_text": mapping_text, "status": status, "page": matches[0][0].number + 1 if matches else None, "match_count": len(matches), "rendering": "textbox" if box else None, "textbox": [round(value, 2) for value in box] if box else None, "style": {"font_family": dataset.acrf_font_family, "font_size": dataset.acrf_font_size, "text_color": dataset.acrf_text_color.upper(), "fill_color": dataset.acrf_fill_color.upper()}})
     appendix = document.new_page()
     appendix.insert_textbox(fitz.Rect(48, 48, appendix.rect.width - 48, 110), "Draft aCRF annotation appendix", fontsize=16, color=(0.1, 0.2, 0.35))
     appendix.insert_textbox(fitz.Rect(48, 100, appendix.rect.width - 48, 155), DISCLAIMER.replace("—", "-"), fontsize=9, color=(0.65, 0.05, 0.15))
-    issues = [f"{item['status'].upper()}: {item['domain']}.{item['variable']} <- {item['label'] or '[no CRF label]'}" for item in coverage if item["status"] != "matched"]
+    issues = [f"{item['status'].upper()}: {item['domain']}.{item['variable']} annotation {item['annotation_index'] + 1} <- {item['label'] or '[no CRF label]'}" for item in coverage if item["status"] != "matched"]
     appendix.insert_textbox(fitz.Rect(48, 165, appendix.rect.width - 48, appendix.rect.height - 48), "Ambiguous and unmatched mappings:\n\n" + "\n".join(issues or ["None"]), fontsize=9)
+    pages = [{"page": page.number + 1, "width": round(page.rect.width, 2), "height": round(page.rect.height, 2)} for page in document]
     document.save(path)
     document.close()
-    coverage_path.write_text(json.dumps({"status": "review_required" if issues else "completed", "searchable": True, "annotations": coverage, "summary": {state: sum(1 for item in coverage if item["status"] == state) for state in ("matched", "ambiguous", "unmatched")}}, indent=2), encoding="utf-8")
+    domain_styles = {dataset.domain: {"font_family": dataset.acrf_font_family, "font_size": dataset.acrf_font_size, "text_color": dataset.acrf_text_color.upper(), "fill_color": dataset.acrf_fill_color.upper()} for dataset in result.datasets}
+    coverage_path.write_text(json.dumps({"status": "review_required" if issues else "completed", "searchable": True, "annotations": coverage, "pages": pages, "domain_styles": domain_styles, "summary": {state: sum(1 for item in coverage if item["status"] == state) for state in ("matched", "ambiguous", "unmatched")}}, indent=2), encoding="utf-8")
     return path, coverage_path
 
 

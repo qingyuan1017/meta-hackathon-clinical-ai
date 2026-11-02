@@ -12,8 +12,9 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from mcp import Client as MCPClient
+import pymupdf as fitz
 from reportlab.pdfgen import canvas
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -1515,6 +1516,29 @@ def download_artifact(
         filename=artifact.name,
         content_disposition_type="inline" if inline else "attachment",
     )
+
+
+@app.get(f"{settings.api_prefix}/jobs/{{job_id}}/artifacts/{{artifact_id}}/pages/{{page_number}}.png")
+def preview_pdf_artifact_page(
+    job_id: str,
+    artifact_id: str,
+    page_number: int,
+    db: Session = Depends(get_db),
+) -> Response:
+    artifact = db.scalar(select(Artifact).where(Artifact.id == artifact_id, Artifact.job_id == job_id))
+    if artifact is None:
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+    if artifact.media_type != "application/pdf":
+        raise HTTPException(status_code=415, detail="Page previews are available only for PDF artifacts.")
+    path = _safe_artifact_path(job_id, artifact.relative_path)
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail="Artifact file is no longer available.")
+    with fitz.open(path) as document:
+        if page_number < 1 or page_number > document.page_count:
+            raise HTTPException(status_code=404, detail="PDF page not found.")
+        pixmap = document[page_number - 1].get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+        content = pixmap.tobytes("png")
+    return Response(content=content, media_type="image/png", headers={"Cache-Control": "private, max-age=300"})
 
 
 @app.get(f"{settings.api_prefix}/jobs/{{job_id}}/bundle")

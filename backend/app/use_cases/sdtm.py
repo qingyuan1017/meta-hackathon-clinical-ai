@@ -327,8 +327,9 @@ class SDTMUseCase(ClinicalUseCase):
                     "every contributing source. For wide-to-long findings, use an identical test-code where-clause "
                     "set across slice-dependent variables and put test code, test name, result, unit, standard result, "
                     "standard unit, range, and flag sources in their own target-variable VLM cells; every multi-source "
-                    "transpose variable must distribute all of its sources into those cells. When no blank CRF is "
-                    "supplied, leave crf_source_label null. Do not "
+                    "transpose variable must distribute all of its sources into those cells. When a blank CRF is "
+                    "supplied, put every exact question label in repeatable acrf_annotations and default mapping_text "
+                    "to DOMAIN.VARIABLE; otherwise leave acrf_annotations empty and crf_source_label null. Do not "
                     "generate record-construction steps or target-variable R/SAS code; record preparation belongs "
                     "to the rule/code stage."
                 ),
@@ -1596,7 +1597,7 @@ class SDTMUseCase(ClinicalUseCase):
     @staticmethod
     def _crf_source(crf: Path | None) -> str:
         if crf is None:
-            return "BLANK CRF NOT SUPPLIED\nDo not invent CRF labels or annotations. Leave crf_source_label null."
+            return "BLANK CRF NOT SUPPLIED\nDo not invent CRF labels or annotations. Leave acrf_annotations empty and crf_source_label null."
         return f"BLANK CRF TEXT\n{parse_source(crf)}"
 
     @staticmethod

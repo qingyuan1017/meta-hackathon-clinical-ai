@@ -10,7 +10,7 @@ from reportlab.pdfgen import canvas
 
 from app.artifacts import add_manifest_and_bundle, diagnose_define, render_clinical_document, render_edc, render_protocol, render_sdtm, render_tlf
 from app.core_conformance import CoreConformanceError, CoreConformanceResult
-from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMDataset, SDTMDomainMapping, SDTMPlan, SDTMRuleAugmentation, SDTMUnmappedDataset, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFFigureSpec, TLFPlan, TLFProgramSpec, TLFRow, TLFSourceVariable, TLFSpec
+from app.schemas import ClinicalDocument, DocumentSection, EDCDesign, EDCField, EDCForm, EDCVisit, Objective, SDTMACRFAnnotation, SDTMDataset, SDTMDomainMapping, SDTMPlan, SDTMRuleAugmentation, SDTMUnmappedDataset, SDTMValueLevelMetadata, SDTMVariable, StudySummary, TLFColumn, TLFFigureSpec, TLFPlan, TLFProgramSpec, TLFRow, TLFSourceVariable, TLFSpec
 from tests.sdtm_helpers import read_plan, source
 from app.usdm import USDM_VERSION, validate_usdm
 
@@ -196,29 +196,30 @@ def test_acrf_coverage_and_define_review_diagnostics(tmp_path) -> None:
     plan = SDTMPlan(
         study_name="SYN-ACRF",
         domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic")],
-        datasets=[SDTMDataset(domain="DM", description="Demographics", record_plan=read_plan("DM", "RAW_DM"), variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", sources=[source("RAW_DM", "AGE")], crf_source_label="Age", acrf_font_family="Times Bold", acrf_font_size=11, acrf_text_color="#AA1122", acrf_fill_color="#CCDDFF", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGE = 18", label="Age in years", data_type="Num", mapping_expression="Direct", sources=[source("RAW_DM", "AGE")])]), SDTMVariable(name="SEX", label="Sex", sources=[source("RAW_DM", "SEX")], crf_source_label="Sex"), SDTMVariable(name="RACE", label="Race", sources=[source("RAW_DM", "RACE")], comment="Multiple selections are represented using sponsor-defined lineage.")])],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", record_plan=read_plan("DM", "RAW_DM"), acrf_font_family="Times Bold", acrf_font_size=11, acrf_text_color="#AA1122", acrf_fill_color="#CCDDFF", variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", sources=[source("RAW_DM", "AGE")], acrf_annotations=[SDTMACRFAnnotation(source_label="Age", mapping_text="AGE primary"), SDTMACRFAnnotation(source_label="RACE", mapping_text="AGE alternate")], value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGE = 18", label="Age in years", data_type="Num", mapping_expression="Direct", sources=[source("RAW_DM", "AGE")])]), SDTMVariable(name="SEX", label="Sex", sources=[source("RAW_DM", "SEX")], crf_source_label="Sex"), SDTMVariable(name="RACE", label="Race", sources=[source("RAW_DM", "RACE")], comment="Multiple selections are represented using sponsor-defined lineage.")])],
         rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", description="Direct", logic="Direct", r_expression='.data[["AGE"]]', sas_expression="AGE"), SDTMRuleAugmentation(rule_id="DM-SEX", target_domain="DM", target_variable="SEX", description="Direct", logic="Direct", r_expression='.data[["SEX"]]', sas_expression="SEX"), SDTMRuleAugmentation(rule_id="DM-RACE", target_domain="DM", target_variable="RACE", description="Direct", logic="Direct", r_expression='.data[["RACE"]]', sas_expression="RACE")],
     )
     paths = render_sdtm(plan, crf, tmp_path, ["r"])
     assert {"define.xml", "define.xsl", "define.html", "define-diagnostics.json", "annotated-crf.pdf", "acrf-annotations.json"} <= {path.name for path in paths}
     coverage = json.loads((tmp_path / "acrf-annotations.json").read_text(encoding="utf-8"))
-    assert coverage["summary"] == {"matched": 0, "ambiguous": 1, "unmatched": 2}
-    age_annotation = next(item for item in coverage["annotations"] if item["variable"] == "AGE")
-    race_annotation = next(item for item in coverage["annotations"] if item["variable"] == "RACE")
-    assert age_annotation["rendering"] == "textbox"
-    assert len(age_annotation["textbox"]) == 4
-    assert age_annotation["style"] == {"font_family": "Times Bold", "font_size": 11.0, "text_color": "#AA1122", "fill_color": "#CCDDFF"}
-    assert race_annotation["label"] == ""
-    assert race_annotation["rendering"] is None
+    assert coverage["summary"] == {"matched": 1, "ambiguous": 1, "unmatched": 1}
+    age_annotations = [item for item in coverage["annotations"] if item["variable"] == "AGE"]
+    assert [item["mapping_text"] for item in age_annotations] == ["AGE primary", "AGE alternate"]
+    assert [item["annotation_index"] for item in age_annotations] == [0, 1]
+    assert all(item["rendering"] == "textbox" and len(item["textbox"]) == 4 for item in age_annotations)
+    assert age_annotations[0]["style"] == {"font_family": "Times Bold", "font_size": 11.0, "text_color": "#AA1122", "fill_color": "#CCDDFF"}
+    assert coverage["domain_styles"]["DM"] == age_annotations[0]["style"]
+    assert [page["page"] for page in coverage["pages"]] == [1, 2]
+    assert all(page["width"] > 0 and page["height"] > 0 for page in coverage["pages"])
     with fitz.open(tmp_path / "annotated-crf.pdf") as annotated_crf:
         first_page = annotated_crf[0]
-        assert first_page.search_for("DM.AGE")
-        assert not first_page.search_for("DM.RACE")
+        assert first_page.search_for("AGE primary")
+        assert first_page.search_for("AGE alternate")
         assert list(first_page.annots() or []) == []
         assert first_page.get_drawings()
         appendix_text = annotated_crf[-1].get_text("text")
         assert "DRAFT - HACKATHON DEMONSTRATION ONLY" in appendix_text
-        assert "AMBIGUOUS: DM.AGE <- Age" in appendix_text
+        assert "AMBIGUOUS: DM.AGE annotation 1 <- Age" in appendix_text
     diagnostics = json.loads((tmp_path / "define-diagnostics.json").read_text(encoding="utf-8"))
     assert diagnostics["well_formed"] is True
     assert diagnostics["internal_references_valid"] is True

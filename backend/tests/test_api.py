@@ -6,6 +6,7 @@ from threading import Event
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+from reportlab.pdfgen import canvas
 
 from app.artifacts import artifact_record
 from app.db import SessionLocal
@@ -95,6 +96,38 @@ def test_artifact_can_be_requested_inline_for_review() -> None:
                 session.delete(stored)
                 session.commit()
         shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def test_pdf_artifact_page_can_be_rendered_for_interactive_review() -> None:
+    with TestClient(app) as client:
+        with SessionLocal() as session:
+            job = Job(workflow="sdtm", title="PDF page preview", status="succeeded", options_json="{}", input_files_json="[]")
+            session.add(job)
+            session.flush()
+            job_dir = settings.jobs_dir / job.id
+            artifact_path = job_dir / "output" / "annotated-crf.pdf"
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            pdf = canvas.Canvas(str(artifact_path))
+            pdf.drawString(50, 750, "Clickable aCRF annotation")
+            pdf.save()
+            artifact = Artifact(**artifact_record(artifact_path, job_dir))
+            job.artifacts.append(artifact)
+            session.commit()
+            job_id, artifact_id = job.id, artifact.id
+        try:
+            response = client.get(f"/api/v1/jobs/{job_id}/artifacts/{artifact_id}/pages/1.png")
+            missing = client.get(f"/api/v1/jobs/{job_id}/artifacts/{artifact_id}/pages/2.png")
+            assert response.status_code == 200
+            assert response.headers["content-type"] == "image/png"
+            assert response.content.startswith(b"\x89PNG")
+            assert missing.status_code == 404
+        finally:
+            with SessionLocal() as session:
+                stored = session.get(Job, job_id)
+                if stored:
+                    session.delete(stored)
+                    session.commit()
+            shutil.rmtree(job_dir, ignore_errors=True)
 
 
 def test_generation_requires_meta_configuration() -> None:

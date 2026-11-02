@@ -44,6 +44,7 @@ from .reviews import (
     VoiceTranscriptionRead,
 )
 from .sdtm import (
+    SDTMACRFAnnotation,
     SDTMDataset,
     SDTMDomainRecordPlan,
     SDTMDomainMapping,
@@ -150,6 +151,7 @@ __all__ = [
     "SDTMDomainMappingUpdate",
     "SDTMDomainRerunRequest",
     "SDTMAggregation",
+    "SDTMACRFAnnotation",
     "SDTMJoinKey",
     "ExecutionAttempt",
     "ExecutionAttemptList",
