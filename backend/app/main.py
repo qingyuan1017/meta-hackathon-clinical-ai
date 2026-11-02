@@ -55,6 +55,7 @@ from .schemas import (
     SDTMDomainMappingReview,
     ExecutionAttempt,
     ExecutionAttemptList,
+    ExecutionOutputPreview,
     RepairApproval,
     SDTMProgramUpdate,
     ValidationFinding,
@@ -82,6 +83,7 @@ from .sdtm_execution import (
     UnavailableRExecutionProvider,
     list_attempts,
     load_attempt,
+    preview_execution_output,
     save_attempt,
     apply_typed_repair,
     ensure_repair_allowed,
@@ -1208,6 +1210,28 @@ def read_sdtm_executions(job_id: str, db: Session = Depends(get_db)) -> Executio
     if job.workflow != "sdtm":
         raise HTTPException(status_code=409, detail="Execution history is available only for SDTM jobs.")
     return ExecutionAttemptList(items=list_attempts(settings.jobs_dir / job_id))
+
+
+@app.get(
+    f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-executions/{{attempt_id}}/outputs/{{output_name}}/preview",
+    response_model=ExecutionOutputPreview,
+    tags=[AGENT_TAG, SDTM_TAG],
+)
+def read_sdtm_execution_output_preview(
+    job_id: str,
+    attempt_id: str,
+    output_name: str,
+    db: Session = Depends(get_db),
+) -> ExecutionOutputPreview:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm":
+        raise HTTPException(status_code=409, detail="Execution output previews are available only for SDTM jobs.")
+    try:
+        return preview_execution_output(settings.jobs_dir / job_id, attempt_id, output_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.put(
