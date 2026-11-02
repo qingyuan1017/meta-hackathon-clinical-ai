@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SDTMReviewEditor } from "@/components/sdtm-review-editor";
 import { api } from "@/lib/api";
@@ -70,5 +71,54 @@ describe("SDTMReviewEditor", () => {
     expect(screen.getByText("Generated R/SAS program artifacts are unavailable for DM. Save or rerun the reviewed mapping to build them.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Rerun DM rules/code" }));
     await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "rule_augmentation", "DM"));
+  });
+
+  it("supports reviewing, adding, editing, deleting, and rebuilding aCRF mappings", async () => {
+    const editablePlan = structuredClone(plan);
+    editablePlan.datasets[0].variables.push({
+      name: "SEX", label: "Sex", data_type: "Char", mapping_type: "direct",
+      sources: [{ dataset: "RAW_DM", variable: "SEX", role: "value" }], origin: "CRF",
+      mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null,
+    });
+    editablePlan.rule_augmentations.push({ rule_id: "DM-SEX", target_domain: "DM", target_variable: "SEX", description: "Map SEX", logic: "Direct", r_expression: '.data[["SEX"]]', sas_expression: "SEX", review_notes: [] });
+    const artifacts: Artifact[] = [
+      { id: "acrf-pdf", name: "annotated-crf.pdf", media_type: "application/pdf", size_bytes: 500, sha256: "c".repeat(64), download_url: "/artifact/acrf-pdf" },
+      { id: "acrf-json", name: "acrf-annotations.json", media_type: "application/json", size_bytes: 200, sha256: "d".repeat(64), download_url: "/artifact/acrf-json" },
+    ];
+    vi.spyOn(api, "artifactText").mockResolvedValue(JSON.stringify({
+      status: "review_required",
+      annotations: [
+        { domain: "DM", variable: "AGE", status: "matched", page: 1, label: "Age" },
+        { domain: "DM", variable: "SEX", status: "unmatched", page: null, label: "" },
+      ],
+    }));
+    const onChange = vi.fn();
+    const onSave = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    function Harness() {
+      const [value, setValue] = useState<Record<string, unknown>>(editablePlan);
+      return <SDTMReviewEditor value={value} artifacts={artifacts} onChange={(next) => { onChange(next); setValue(next); }} onSave={onSave} saving={false} />;
+    }
+    render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>);
+
+    fireEvent.click(screen.getByText("aCRF review"));
+    expect(await screen.findByText("1 of 2 target variables have question text.")).toBeInTheDocument();
+    expect(screen.getByLabelText("CRF question text for DM.AGE")).toHaveValue("Age");
+
+    fireEvent.change(screen.getByLabelText("CRF question text for DM.SEX"), { target: { value: "Sex" } });
+    expect(screen.getByText("2 of 2 target variables have question text.")).toBeInTheDocument();
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ datasets: [expect.objectContaining({ variables: expect.arrayContaining([expect.objectContaining({ name: "SEX", crf_source_label: "Sex" })]) })] }));
+
+    fireEvent.change(screen.getByLabelText("CRF question text for DM.AGE"), { target: { value: "Age at screening" } });
+    expect(screen.getByLabelText("CRF question text for DM.AGE")).toHaveValue("Age at screening");
+    fireEvent.click(screen.getByRole("button", { name: "Remove aCRF mapping for DM.AGE" }));
+    expect(screen.getByLabelText("CRF question text for DM.AGE")).toHaveValue("");
+    expect(screen.getByText("1 of 2 target variables have question text.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save & rebuild" }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ datasets: [expect.objectContaining({ variables: expect.arrayContaining([
+      expect.objectContaining({ name: "AGE", crf_source_label: null }),
+      expect.objectContaining({ name: "SEX", crf_source_label: "Sex" }),
+    ]) })] }));
   });
 });
