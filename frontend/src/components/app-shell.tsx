@@ -5,7 +5,8 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import { ChevronDown, FlaskConical, Menu, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { ConfigStatus } from "@/components/config-status";
-import { workspaceGroups } from "@/lib/workflows";
+import { ExperimentalBadge } from "@/components/experimental-badge";
+import { workflowById, workspaceGroups } from "@/lib/workflows";
 import { cn } from "@/lib/utils";
 
 function WorkspaceNavigation({ onNavigate }: { onNavigate?: () => void }) {
@@ -22,6 +23,7 @@ function WorkspaceNavigation({ onNavigate }: { onNavigate?: () => void }) {
             {group.items.map((item) => {
               const active = pathname === item.pathname
                 && (item.pathname !== "/workflows/clinical-document" || selectedDiscipline === item.discipline);
+              const experimental = workflowById[item.workflow].experimental;
               const Icon = item.icon;
               return (
                 <Link
@@ -29,13 +31,15 @@ function WorkspaceNavigation({ onNavigate }: { onNavigate?: () => void }) {
                   href={item.href}
                   onClick={onNavigate}
                   aria-current={active ? "page" : undefined}
+                  aria-label={experimental ? `${item.label} (Experimental)` : item.label}
                   className={cn(
                     "focus-ring group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition",
                     active ? "bg-white text-zinc-950 shadow-sm" : "text-zinc-400 hover:bg-white/5 hover:text-white",
                   )}
                 >
                   <Icon size={17} className={active ? "text-clinical-600" : "text-zinc-500 group-hover:text-zinc-300"} />
-                  <span>{item.label}</span>
+                  <span className="min-w-0 flex-1">{item.label}</span>
+                  {experimental && <ExperimentalBadge compact />}
                 </Link>
               );
             })}

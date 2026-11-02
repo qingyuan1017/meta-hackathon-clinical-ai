@@ -16,6 +16,9 @@ describe("AppShell", () => {
     render(<QueryClientProvider client={client}><AppShell><div>Workspace content</div></AppShell></QueryClientProvider>);
 
     const navigation = screen.getByRole("navigation", { name: "Clinical workspaces" });
+    expect(screen.getByRole("link", { name: "SDTM" })).not.toHaveTextContent("Experimental");
+    expect(screen.getByRole("link", { name: "TLF (Experimental)" })).toBeInTheDocument();
+    expect(screen.getAllByText("Experimental")).toHaveLength(5);
     const toggle = screen.getByRole("button", { name: "Collapse navigation sidebar" });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
     expect(navigation.closest("aside")).toHaveClass("lg:flex");

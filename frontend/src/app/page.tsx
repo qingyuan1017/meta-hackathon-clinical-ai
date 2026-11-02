@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { ArrowUpRight, Bot, Download, FolderClock, ShieldCheck, Sparkles } from "lucide-react";
 import { ConfigStatus } from "@/components/config-status";
-import { workspaceGroups } from "@/lib/workflows";
+import { ExperimentalBadge } from "@/components/experimental-badge";
+import { workflowById, workspaceGroups } from "@/lib/workflows";
 import { API_URL } from "@/lib/api";
 
 const groupCopy = {
@@ -54,10 +55,11 @@ export default function HomePage() {
               <div className="p-2">
                 {group.items.map((item) => {
                   const Icon = item.icon;
+                  const experimental = workflowById[item.workflow].experimental;
                   return (
-                    <Link key={item.label} href={item.href} className="focus-ring group flex items-center justify-between rounded-lg px-3 py-3 transition hover:bg-white/[0.05]">
-                      <span className="flex items-center gap-3 text-sm font-medium text-zinc-200"><span className="grid h-8 w-8 place-items-center rounded-md border border-white/10 bg-white/[0.03] text-zinc-400"><Icon size={15} /></span>{item.label}</span>
-                      <ArrowUpRight size={15} className="text-zinc-400 transition group-hover:text-clinical-600" />
+                    <Link key={item.label} href={item.href} aria-label={experimental ? `${item.label} (Experimental)` : item.label} className="focus-ring group flex items-center justify-between rounded-lg px-3 py-3 transition hover:bg-white/[0.05]">
+                      <span className="flex min-w-0 items-center gap-3 text-sm font-medium text-zinc-200"><span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-white/10 bg-white/[0.03] text-zinc-400"><Icon size={15} /></span><span>{item.label}</span>{experimental && <ExperimentalBadge compact />}</span>
+                      <ArrowUpRight size={15} className="shrink-0 text-zinc-400 transition group-hover:text-clinical-600" />
                     </Link>
                   );
                 })}

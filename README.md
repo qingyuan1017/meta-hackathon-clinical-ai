@@ -6,11 +6,12 @@ A local, single-user hackathon application that uses Meta's OpenAI-compatible AP
 
 ## Included workflows
 
-- Protocol extraction to structured JSON, Markdown, and CDISC USDM 4.0 JSON accepted only after the complete CORE conformance gate passes
-- Ten clinical document templates with DOCX and PDF output
-- EDC build specifications and edit checks in JSON and XLSX
+- **Hackathon focus:** SDTM is the primary supported demonstration workflow. All other workflows are currently labeled **Experimental** in the application.
+- Protocol extraction *(Experimental)* to structured JSON, Markdown, and CDISC USDM 4.0 JSON accepted only after the complete CORE conformance gate passes
+- Ten clinical document templates with DOCX and PDF output *(Experimental)*
+- EDC build specifications and edit checks in JSON and XLSX *(Experimental)*
 - SDTM mapping, deterministic per-domain R/SAS programs, optional isolated R execution/XPT output, annotated CRF, Define-XML review, validation triage, and draft cSDRG
-- TLF shells with DOCX and R/SAS program scaffolds
+- TLF shells with DOCX and R/SAS program scaffolds *(Experimental)*
 
 ## Use-case architecture
 

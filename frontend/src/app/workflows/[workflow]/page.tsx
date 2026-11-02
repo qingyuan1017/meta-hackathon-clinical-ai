@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { Bot, CheckCircle2, Circle, Info } from "lucide-react";
 import { ConfigStatus } from "@/components/config-status";
 import { AgentActivitySidebar } from "@/components/agent-activity-sidebar";
+import { ExperimentalBadge } from "@/components/experimental-badge";
 import { ResultView } from "@/components/result-view";
 import { WorkflowForm } from "@/components/workflow-form";
 import { WorkflowJobHistory } from "@/components/workflow-job-history";
@@ -57,7 +58,7 @@ export default function WorkflowPage() {
       <div className="border-b border-white/10 pb-6">
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-clinical-700">{workspaceLabel} / {definition.shortTitle}</p>
         <div className="mt-2 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-          <div><h1 className="text-3xl font-semibold tracking-[-0.03em] text-white">{definition.title}</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">{definition.description}</p></div>
+          <div><div className="flex flex-wrap items-center gap-3"><h1 className="text-3xl font-semibold tracking-[-0.03em] text-white">{definition.title}</h1>{definition.experimental && <ExperimentalBadge />}</div><p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">{definition.description}</p></div>
           <Link href="/" className="focus-ring text-sm font-medium text-zinc-500 hover:text-white">All modules</Link>
         </div>
       </div>
