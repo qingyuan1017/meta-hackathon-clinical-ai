@@ -413,6 +413,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/sdtm-executions/{attempt_id}/outputs/{output_name}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Sdtm Execution Output Preview */
+        get: operations["read_sdtm_execution_output_preview_api_v1_jobs__job_id__sdtm_executions__attempt_id__outputs__output_name__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/sdtm-programs/{domain}/{language}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Sdtm Program */
+        put: operations["update_sdtm_program_api_v1_jobs__job_id__sdtm_programs__domain___language__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/sdtm-executions/{attempt_id}/repair": {
         parameters: {
             query?: never;
@@ -1087,6 +1121,23 @@ export interface components {
             /** Columns */
             columns?: string[];
         };
+        /** ExecutionOutputPreview */
+        ExecutionOutputPreview: {
+            /** Name */
+            name: string;
+            /** Row Count */
+            row_count: number;
+            /** Columns */
+            columns?: string[];
+            /** Rows */
+            rows?: {
+                [key: string]: string | number | boolean | null;
+            }[];
+            /** Preview Limit */
+            preview_limit: number;
+            /** Truncated */
+            truncated: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -1515,6 +1566,18 @@ export interface components {
              * @enum {string}
              */
             submission_readiness: "not_assessed" | "blocked" | "review_required" | "ready";
+        };
+        /** SDTMProgramUpdate */
+        SDTMProgramUpdate: {
+            /** Code */
+            code: string;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /**
+             * Reviewer
+             * @default Workbench reviewer
+             */
+            reviewer: string;
         };
         /** SDTMSourceReference */
         SDTMSourceReference: {
@@ -2954,6 +3017,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExecutionAttempt"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_sdtm_execution_output_preview_api_v1_jobs__job_id__sdtm_executions__attempt_id__outputs__output_name__preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                attempt_id: string;
+                output_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExecutionOutputPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_sdtm_program_api_v1_jobs__job_id__sdtm_programs__domain___language__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                domain: string;
+                language: "r" | "sas";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SDTMProgramUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRead"];
                 };
             };
             /** @description Validation Error */

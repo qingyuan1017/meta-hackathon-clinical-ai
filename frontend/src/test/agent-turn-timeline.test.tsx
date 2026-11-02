@@ -107,4 +107,14 @@ describe("AgentTurnTimeline", () => {
     expect(screen.getByText("Sent")).toBeInTheDocument();
     expect(screen.getAllByText("Use the Safety population for every adverse-event output.")).not.toHaveLength(0);
   });
+
+  it("keeps unmatched current constraints out of agent history", () => {
+    render(<AgentTurnTimeline
+      progress={progress}
+      result={{ unresolved_items: ["The endpoint definition still requires confirmation."] }}
+    />);
+
+    expect(screen.queryByText("Other current constraints")).not.toBeInTheDocument();
+    expect(screen.queryByText("The endpoint definition still requires confirmation.")).not.toBeInTheDocument();
+  });
 });

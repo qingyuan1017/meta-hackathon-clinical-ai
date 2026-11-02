@@ -59,7 +59,9 @@ describe("RevisionDecisionPanel", () => {
       onlyMatchedFeedback
     />);
 
-    expect(screen.getByRole("region", { name: "DM feedback decisions" })).toHaveTextContent("DM decision");
+    const panel = screen.getByRole("region", { name: "DM feedback decisions" });
+    expect(panel).toHaveTextContent("Other current constraints");
+    expect(panel).toHaveTextContent("DM decision");
     expect(screen.queryByText("Revise AE")).not.toBeInTheDocument();
   });
 });

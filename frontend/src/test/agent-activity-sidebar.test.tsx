@@ -115,6 +115,8 @@ describe("AgentActivitySidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Agent history" }));
     const inputs = await screen.findAllByLabelText("Review guidance for the agent");
     fireEvent.change(inputs[0], { target: { value: "Use the Safety population for every AE output." } });
+    fireEvent.click(screen.getByRole("button", { name: "Select revision scope" }));
+    expect(screen.getByRole("dialog", { name: "Revision scope" })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("checkbox")[0]);
     const buttons = screen.getAllByRole("button", { name: "Generate patch" });
     fireEvent.click(buttons[0]);
@@ -125,7 +127,7 @@ describe("AgentActivitySidebar", () => {
       current_result: job.result,
       scope: expect.objectContaining({ paths: ["/study_name"] }),
     })));
-    expect(screen.getAllByText(/does not approve or advance/i)).not.toHaveLength(0);
+    expect(screen.getByRole("tooltip", { name: /does not approve it or advance/i })).toBeInTheDocument();
   });
 
   it("uses the current completed SDTM selection for right-side agent revisions", async () => {
@@ -137,7 +139,10 @@ describe("AgentActivitySidebar", () => {
     fireEvent.click(screen.getByRole("button", { name: "Agent history" }));
     expect(await screen.findByText("Variable & VLM · DM")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start voice input" })).toBeInTheDocument();
-    expect(screen.getByText("DM")).toBeInTheDocument();
+    expect(screen.getByRole("tooltip", { name: /active tab and selected domain determine/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Select revision scope" }));
+    expect(screen.getByRole("dialog", { name: "Revision scope" })).toBeInTheDocument();
+    expect(screen.getAllByText("DM")).not.toHaveLength(0);
     fireEvent.change(screen.getByLabelText("Review guidance for the agent"), { target: { value: "Use RFSTDTC when deriving DM.RFSTDTC." } });
     fireEvent.click(screen.getByRole("button", { name: "Generate proposal" }));
 

@@ -1,4 +1,4 @@
-import type { AgentProgress, CDISCDataset, ExecutionAttempt, Health, Job, JobList, ReviewScope, ReviewScopeProposal, UseCaseContract, ValidationFinding, ValidationRecord, Workflow } from "./types";
+import type { AgentProgress, CDISCDataset, ExecutionAttempt, ExecutionOutputPreview, Health, Job, JobList, ReviewScope, ReviewScopeProposal, UseCaseContract, ValidationFinding, ValidationRecord, Workflow } from "./types";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -133,6 +133,8 @@ export const api = {
       body: JSON.stringify({ result }),
     }),
   sdtmExecutions: (id: string) => request<{ items: ExecutionAttempt[] }>(`/api/v1/jobs/${id}/sdtm-executions`),
+  sdtmExecutionOutputPreview: (id: string, attemptId: string, outputName: string) =>
+    request<ExecutionOutputPreview>(`/api/v1/jobs/${id}/sdtm-executions/${encodeURIComponent(attemptId)}/outputs/${encodeURIComponent(outputName)}/preview`),
   updateSdtmProgram: (id: string, domain: string, language: "r" | "sas", code: string, expectedSha256: string, reviewer = "Workbench reviewer") =>
     request<Job>(`/api/v1/jobs/${id}/sdtm-programs/${encodeURIComponent(domain)}/${language}`, {
       method: "PUT",

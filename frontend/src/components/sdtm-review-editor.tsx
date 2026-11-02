@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, ListChecks, Play, Plus, Save, ScrollText, Table2, Trash2, Upload } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Artifact, CDISCDataset, ExecutionAttempt, Job, SDTMWorkbenchState, ValidationFinding } from "@/lib/types";
+import type { Artifact, CDISCDataset, ExecutionAttempt, ExecutionOutputPreview as ExecutionOutputPreviewData, Job, SDTMWorkbenchState, ValidationFinding } from "@/lib/types";
 import type { RevisionFeedbackEvent } from "@/lib/revision-decision";
 import { useOptionalReviewDraft } from "@/lib/review-draft-context";
 import { Button } from "./ui/button";
@@ -275,9 +275,17 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
       <div className={`rounded-xl border p-4 ${proposalReview ? "border-amber-500/25 bg-amber-500/[0.08]" : "border-violet-500/20 bg-violet-500/[0.06]"}`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div><p className={`text-xs font-black uppercase tracking-[0.14em] ${proposalReview ? "text-amber-200" : "text-violet-300"}`}>{proposalReview ? "Review gate · agent proposal" : "SDTM review workspace"}</p><p className={`mt-1 text-sm ${proposalReview ? "text-amber-100/80" : "text-zinc-300"}`}>{proposalReview ? "Review the proposed changes, recorded decisions, and assumptions in the same workspace used for stage review. Approved artifacts remain active until you accept this transaction." : "Review each mapping stage, then inspect the derived aCRF and Define-XML. Saving revalidates the complete plan and rebuilds every artifact."}</p></div>
-          <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-200">{proposalReview ? "Proposal · review required" : "Draft · review required"}</span>
+          <div role="group" aria-label="SDTM review status and actions" className="flex shrink-0 items-center gap-2">
+            <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-200">{proposalReview ? "Proposal · review required" : "Draft · review required"}</span>
+            {!proposalReview && <SaveMappingsAction
+              onSave={() => onSave(plan)}
+              saving={saving}
+              issues={issues}
+            />}
+          </div>
         </div>
         {workbench && <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{Object.entries(workbench.lifecycle).map(([label, status]) => <div key={label} className="rounded-lg border border-white/10 bg-black/15 px-3 py-2"><p className="text-[9px] font-black uppercase tracking-wider text-zinc-500">{label.replaceAll("_", " ")}</p><p className={`mt-1 text-xs font-bold ${status === "passed" || status === "completed" || status === "ready" ? "text-emerald-300" : status === "failed" || status === "blocked" || status === "unavailable" ? "text-rose-300" : "text-amber-200"}`}>{status.replaceAll("_", " ")}</p></div>)}</div>}
+        {!proposalReview && <div className="mt-4 rounded-lg border border-white/10 bg-black/15 px-3 py-2">{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="text-xs font-bold text-emerald-300">All mapping references are ready for schema validation.</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div>}
       </div>
 
       {proposalReview && <RevisionDecisionPanel result={{ assumptions: stageAssumptions, unresolved_mappings: stageUnresolved }} events={feedbackEvents} title="Stage-wide feedback decisions" assumptionsTitle="Stage-wide assumptions" ariaLabel="Stage-wide feedback decisions" onlyMatchedFeedback collapsedByDefault />}
@@ -428,12 +436,34 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
       {stage === "validation" && <ValidationReview jobId={jobId} workbench={workbench} />}
       {stage === "csdrg" && <CSDRGReview jobId={jobId} source={csdrgJson} pdf={csdrgPdf} />}
 
-      {!proposalReview && <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-        <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="text-xs font-bold text-emerald-300">All mapping references are ready for schema validation.</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div>
-        <Button type="button" variant="clinical" onClick={() => onSave(plan)} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Validating and rebuilding…" : "Save reviewed mappings"}</Button>
-      </div>}
     </div>
   );
+}
+
+function SaveMappingsAction({ onSave, saving, issues }: { onSave: () => void; saving: boolean; issues: string[] }) {
+  const tooltipId = useId();
+  const blocked = issues.length > 0;
+  const description = blocked
+    ? `Resolve ${issues.length} mapping validation issue${issues.length === 1 ? "" : "s"} before saving. ${issues[0]}`
+    : "Validate the complete reviewed SDTM plan and rebuild every generated artifact. Prior execution and validation evidence becomes historical when programs change.";
+  return <div className="group/save-mappings relative">
+    <Button
+      type="button"
+      variant="clinical"
+      aria-label="Save reviewed mappings"
+      aria-describedby={tooltipId}
+      className="h-9 w-9 p-0"
+      onClick={onSave}
+      disabled={saving || blocked}
+    >
+      <Save size={16} className={saving ? "animate-pulse" : ""} />
+      <span className="sr-only">Save reviewed mappings</span>
+    </Button>
+    <div id={tooltipId} role="tooltip" className="pointer-events-none invisible absolute right-0 top-[calc(100%+0.5rem)] z-50 w-72 translate-y-1 rounded-lg border border-white/15 bg-[#101012] p-3 opacity-0 shadow-2xl transition duration-150 group-hover/save-mappings:visible group-hover/save-mappings:translate-y-0 group-hover/save-mappings:opacity-100 group-focus-within/save-mappings:visible group-focus-within/save-mappings:translate-y-0 group-focus-within/save-mappings:opacity-100">
+      <p className="text-xs font-bold text-zinc-100">{saving ? "Saving reviewed mappings…" : "Save reviewed mappings"}</p>
+      <p className="mt-1 text-[11px] leading-5 text-zinc-400">{description}</p>
+    </div>
+  </div>;
 }
 
 function executionAttemptDomains(attempt: ExecutionAttempt): string[] {
@@ -445,6 +475,50 @@ function executionAttemptDomains(attempt: ExecutionAttempt): string[] {
 
 function isExecutionRepairCandidate(attempt: ExecutionAttempt): boolean {
   return attempt.status === "failed" || attempt.status === "timed_out" || attempt.status === "review_required";
+}
+
+function ExecutionOutputPreview({ jobId, attemptId, output }: {
+  jobId?: string;
+  attemptId: string;
+  output: ExecutionAttempt["outputs"][number];
+}) {
+  const [open, setOpen] = useState(false);
+  const query = useQuery({
+    queryKey: ["sdtm-execution-output-preview", jobId, attemptId, output.name],
+    queryFn: () => api.sdtmExecutionOutputPreview(jobId!, attemptId, output.name),
+    enabled: open && Boolean(jobId),
+  });
+  const preview = query.data;
+
+  return <section className="rounded-lg border border-white/[0.08] bg-black/15">
+    <div className="flex flex-wrap items-center justify-between gap-3 p-3">
+      <div><p className="font-mono text-xs font-bold text-cyan-200">{output.name}</p><p className="mt-1 text-[11px] text-zinc-500">{output.row_count ?? "Unknown"} rows · {output.columns.length} columns · {(output.size_bytes / 1024).toFixed(1)} KB</p></div>
+      <Button type="button" variant="outline" size="sm" disabled={!jobId} aria-expanded={open} onClick={() => setOpen((current) => !current)}><Table2 size={14} />{open ? "Hide preview" : "Preview result"}</Button>
+    </div>
+    {open && <div className="border-t border-white/[0.08] p-3">
+      {query.isPending && <p className="text-xs text-zinc-500">Loading result preview…</p>}
+      {query.error && <p className="text-xs text-rose-300">{query.error.message}</p>}
+      {preview && <ExecutionPreviewTable preview={preview} />}
+    </div>}
+  </section>;
+}
+
+function ExecutionPreviewTable({ preview }: { preview: ExecutionOutputPreviewData }) {
+  return <div>
+    <div className="overflow-x-auto rounded-lg border border-white/[0.08]">
+      <table className="min-w-full border-collapse text-left text-[11px]">
+        <thead className="bg-white/[0.05] text-zinc-300"><tr>{preview.columns.map((column) => <th key={column} scope="col" className="whitespace-nowrap border-b border-r border-white/[0.08] px-3 py-2 font-black last:border-r-0">{column}</th>)}</tr></thead>
+        <tbody>{preview.rows.map((row, rowIndex) => <tr key={rowIndex} className="odd:bg-black/10">{preview.columns.map((column) => <td key={column} className="max-w-72 whitespace-nowrap border-b border-r border-white/[0.06] px-3 py-2 font-mono text-zinc-300 last:border-r-0">{formatPreviewValue(row[column])}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+    {!preview.rows.length && <p className="mt-2 text-xs text-zinc-500">This result contains no rows.</p>}
+    <p className="mt-2 text-[11px] text-zinc-500">Showing {preview.rows.length} of {preview.row_count} rows{preview.truncated ? ` (first ${preview.preview_limit})` : ""}. Preview is read-only.</p>
+  </div>;
+}
+
+function formatPreviewValue(value: string | number | boolean | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
 }
 
 function ExecutionReview({ jobId, workbench, datasets, domain, onDomainChange }: {
@@ -547,6 +621,7 @@ function ExecutionReview({ jobId, workbench, datasets, domain, onDomainChange }:
         {attempt.checks.some((check) => check.check_id === "domain-execution") && <div className="mt-3"><p className="text-[10px] font-black uppercase tracking-wider text-zinc-500">Independent domain execution</p><div className="mt-2 flex flex-wrap gap-2">{attempt.checks.filter((check) => check.check_id === "domain-execution").map((check) => <span key={`${attempt.attempt_id}-${check.domain}`} className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${check.status === "passed" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : check.status === "not_run" ? "border-zinc-500/20 bg-zinc-500/10 text-zinc-400" : "border-rose-500/20 bg-rose-500/10 text-rose-300"}`}>{check.domain} · {check.status.replaceAll("_", " ")}</span>)}</div></div>}
         {attempt.failure_classification && <p className="mt-3 text-xs text-amber-200">Failure classification: {attempt.failure_classification.replaceAll("_", " ")}</p>}
         {attempt.repair_proposal && <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/[0.06] p-3"><p className="text-xs font-bold text-amber-100">Typed repair proposal · {attempt.repair_proposal.status}</p><p className="mt-1 text-xs text-zinc-300">{attempt.repair_proposal.rationale}</p><pre className="mt-2 overflow-auto rounded bg-black/30 p-2 text-[11px] text-cyan-100">{attempt.repair_proposal.diff}</pre>{attempt.repair_proposal.status === "proposed" && <div className="mt-3 flex gap-2"><Button type="button" variant="clinical" size="sm" disabled={repairMutation.isPending} onClick={() => repairMutation.mutate({ attemptId: attempt.attempt_id, proposalId: attempt.repair_proposal!.proposal_id, approved: true })}>Approve and rerun</Button><Button type="button" variant="outline" size="sm" disabled={repairMutation.isPending} onClick={() => repairMutation.mutate({ attemptId: attempt.attempt_id, proposalId: attempt.repair_proposal!.proposal_id, approved: false })}>Reject</Button></div>}</div>}
+        {attempt.outputs.length > 0 && <div className="mt-3 space-y-2"><p className="text-[10px] font-black uppercase tracking-wider text-zinc-500">Result datasets</p>{attempt.outputs.map((output) => <ExecutionOutputPreview key={output.name} jobId={jobId} attemptId={attempt.attempt_id} output={output} />)}</div>}
         <div className="mt-3 grid gap-2 md:grid-cols-2">{attempt.checks.filter((check) => check.check_id !== "domain-execution").map((check, index) => <div key={`${check.check_id}-${index}`} className="rounded-lg border border-white/[0.08] p-2 text-xs"><span className={check.status === "passed" ? "text-emerald-300" : check.status === "warning" || check.status === "not_run" ? "text-amber-300" : "text-rose-300"}>{check.status.toUpperCase()}</span><span className="ml-2 text-zinc-400">{check.message}</span></div>)}</div>
         {(attempt.stdout || attempt.stderr) && <details className="mt-3"><summary className="cursor-pointer text-xs font-bold text-zinc-400">Sanitized runner logs</summary><pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-black/30 p-3 text-[11px] text-zinc-400">{[attempt.stdout, attempt.stderr].filter(Boolean).join("\n")}</pre></details>}
       </article>})}

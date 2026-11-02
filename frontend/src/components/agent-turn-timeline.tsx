@@ -85,7 +85,6 @@ export function AgentTurnTimeline({ progress, result, warnings = [], compact = f
       {progress.events.length ? (
         <ol aria-label="Agent turn details" className="relative space-y-4 before:absolute before:bottom-6 before:left-[1.15rem] before:top-6 before:w-px before:bg-white/10">
           {progress.events.map((event, index) => <AgentTurnCard key={`${event.turn}-${event.name ?? event.type}-${index}`} event={event} nextEvent={progress.events[index + 1]} progressStatus={progress.status} compact={compact} defaultOpen={index === progress.events.length - 1} decisions={decisionsByEvent.get(index)} />)}
-          {feedbackSequence.unmatched.length > 0 && <li className="relative pl-12"><DecisionCard decisions={feedbackSequence.unmatched} title="Other current constraints" /></li>}
         </ol>
       ) : (
         <div className="grid min-h-48 place-items-center rounded-xl border border-dashed border-white/15 bg-white/[0.02] px-6 text-center text-sm text-zinc-500">

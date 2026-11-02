@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import difflib
 import json
+import math
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from .schemas.sdtm_workbench import (
     ExecutionAttempt,
     ExecutionCheck,
     ExecutionOutput,
+    ExecutionOutputPreview,
     RepairChange,
     RepairProposal,
     RawDatasetInventory,
@@ -309,6 +311,58 @@ def load_attempt(job_dir: Path, attempt_id: str) -> ExecutionAttempt:
     if not path.is_file():
         raise ValueError("Execution attempt was not found.")
     return ExecutionAttempt.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def preview_execution_output(
+    job_dir: Path,
+    attempt_id: str,
+    output_name: str,
+    limit: int = 25,
+) -> ExecutionOutputPreview:
+    attempt = load_attempt(job_dir, attempt_id)
+    output = next((item for item in attempt.outputs if item.name == output_name), None)
+    if output is None or Path(output_name).name != output_name:
+        raise ValueError("Execution output was not found.")
+    path = job_dir / "sdtm" / "executions" / attempt_id / "output" / output_name
+    if not path.is_file():
+        raise ValueError("Execution output file is unavailable.")
+    try:
+        import pyreadstat
+
+        frame, _metadata = pyreadstat.read_xport(str(path), row_limit=limit)
+    except Exception as exc:
+        raise ValueError("Execution output could not be read for preview.") from exc
+
+    columns = [str(column) for column in frame.columns]
+    rows = [
+        {column: _preview_value(value) for column, value in row.items()}
+        for row in frame.head(limit).to_dict(orient="records")
+    ]
+    return ExecutionOutputPreview(
+        name=output.name,
+        row_count=output.row_count if output.row_count is not None else len(frame.index),
+        columns=columns,
+        rows=rows,
+        preview_limit=limit,
+        truncated=output.row_count is not None and output.row_count > limit,
+    )
+
+
+def _preview_value(value: Any) -> str | int | float | bool | None:
+    if value is None:
+        return None
+    if hasattr(value, "item"):
+        try:
+            value = value.item()
+        except (TypeError, ValueError):
+            pass
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())
+    return str(value)
 
 
 def save_attempt(job_dir: Path, attempt: ExecutionAttempt) -> None:

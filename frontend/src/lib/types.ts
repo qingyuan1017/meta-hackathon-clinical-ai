@@ -51,6 +51,15 @@ export interface ExecutionAttempt {
   repair_proposal: { proposal_id: string; status: string; rationale: string; diff: string; change: { domain: string; target_variable: string; source_dataset: string; from_source_variable: string; to_source_variable: string }; reviewer: string | null; decided_at: string | null } | null;
 }
 
+export interface ExecutionOutputPreview {
+  name: string;
+  row_count: number;
+  columns: string[];
+  rows: Array<Record<string, string | number | boolean | null>>;
+  preview_limit: number;
+  truncated: boolean;
+}
+
 export interface ValidationFinding {
   finding_id: string; provider: string; provider_version: string; rule_id: string; severity: string; dataset: string | null; variable: string | null; message: string;
   finding_status: "open" | "accepted" | "corrected" | "not_applicable" | "explained"; disposition: string | null; explanation: string | null; reviewer: string | null; approved_at: string | null;

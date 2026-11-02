@@ -77,8 +77,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <p className="mt-0.5 text-xs text-zinc-500">Synthetic sandbox</p>
         </div>
         <div className="mt-7 min-h-0 flex-1 overflow-y-auto"><WorkspaceNavigation /></div>
-        <div className="mt-5 space-y-3 border-t border-white/10 pt-4">
-          <ConfigStatus compact tone="dark" />
+        <div className="mt-5 border-t border-white/10 pt-4">
           <p className="px-1 text-[10px] leading-4 text-zinc-600">Demo only · No PHI · Expert review required</p>
         </div>
       </aside>
@@ -90,15 +89,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             type="button"
             aria-label={sidebarOpen ? "Collapse navigation sidebar" : "Expand navigation sidebar"}
             aria-expanded={sidebarOpen}
+            title={sidebarOpen ? "Collapse navigation" : "Expand navigation"}
             onClick={() => setSidebarOpen((value) => !value)}
-            className="focus-ring hidden items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-400 transition hover:bg-white/[0.05] hover:text-white lg:flex"
+            className="focus-ring hidden h-9 w-9 items-center justify-center rounded-lg text-zinc-400 transition hover:bg-white/[0.05] hover:text-white lg:flex"
           >
             {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-            <span>{sidebarOpen ? "Collapse workspace navigation" : "Expand workspace navigation"}</span>
           </button>
-          <div className="hidden items-center gap-2 text-xs font-medium text-zinc-400 sm:flex">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-            Local artifact environment
+          <div className="hidden items-center gap-3 sm:flex">
+            <span className="flex items-center gap-2 text-xs font-medium text-zinc-400">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              Local artifact environment
+            </span>
+            <span aria-hidden="true" className="h-3 w-px bg-white/10" />
+            <ConfigStatus compact tone="dark" inline />
           </div>
           <button
             type="button"

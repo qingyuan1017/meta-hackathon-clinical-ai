@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, Maximize2, Mic, MicOff, Minimize2, PanelRightClose, PanelRightOpen, Send } from "lucide-react";
+import { CircleHelp, Hash, LoaderCircle, Maximize2, Mic, MicOff, Minimize2, PanelRightClose, PanelRightOpen, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { convertRecordingToWav } from "@/lib/audio";
 import { useReviewDraft, type SDTMRevisionContext } from "@/lib/review-draft-context";
@@ -193,30 +193,34 @@ function CompletedSDTMRevisionComposer({ job, currentResult, context, message, o
   useEffect(() => setScope(completedRevisionScope(context)), [context.domain, context.surface, context.variable]);
   const hasScope = scope.paths.length > 0 || scope.source_datasets.length > 0 || scope.target_domains.length > 0 || scope.variables.length > 0;
   const canSubmit = Boolean(message.trim()) && hasScope && !submitting;
-  return <form className="border-t border-white/[0.08] bg-[#151518] p-3" onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(scope); }}>
-    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300">Guide this revision</p>
-    <p className="mt-1 text-xs font-bold text-zinc-200">{context.label}</p>
-    <p className="mt-1 text-[11px] leading-4 text-zinc-500">The active tab and selected domain determine the agent and revision scope. Change the selection in the workspace to target something else.</p>
-    <VoiceGuidanceInput jobId={job.id} message={message} onMessageChange={onMessageChange} submitting={submitting} />
+  const help = `Revise ${context.label}. The active tab and selected domain determine the agent and initial scope. ${producesDraft ? "The draft will open in the existing editor for review and saving." : "Approved artifacts remain active until you accept the proposal."}`;
+  return <form className="border-t border-white/[0.08] bg-[#151518] p-2.5" onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(scope); }}>
+    <div className="flex items-center gap-1.5">
+      <p className="min-w-0 flex-1 truncate text-[11px] font-bold text-zinc-200">{context.label}</p>
+      <InfoTooltip label="About this revision" description={help} />
+    </div>
     <textarea
       aria-label="Review guidance for the agent"
       value={message}
       onChange={(event) => onMessageChange(event.target.value.slice(0, 4000))}
-      rows={4}
+      rows={2}
       maxLength={4000}
-      placeholder="Describe the change for the current selection."
-      className="focus-ring mt-2 w-full resize-y rounded-lg border border-white/10 bg-[#0d0d0f] px-3 py-2 text-xs leading-5 text-zinc-200 placeholder:text-zinc-600"
+      placeholder="Describe the requested change…"
+      className="focus-ring mt-1.5 w-full resize-y rounded-lg border border-white/10 bg-[#0d0d0f] px-3 py-2 text-xs leading-5 text-zinc-200 placeholder:text-zinc-600"
     />
-    <CompletedRevisionScopePicker context={context} currentResult={currentResult} scope={scope} onChange={setScope} />
-    <div className="mt-2 flex items-center justify-between gap-3">
-      <span className={`text-[10px] ${hasScope ? "text-emerald-300" : "text-amber-300"}`}>{hasScope ? `Scope confirmed · ${message.length}/4000` : "Select a scope before submitting"}</span>
+    <div className="mt-1.5 flex items-center gap-1.5">
+      <VoiceGuidanceInput jobId={job.id} message={message} onMessageChange={onMessageChange} submitting={submitting} />
+      <ScopeMenu hasScope={hasScope} summary={scopeSummary(scope)}>
+        <CompletedRevisionScopePicker context={context} currentResult={currentResult} scope={scope} onChange={setScope} />
+      </ScopeMenu>
+      <span className="ml-1 text-[9px] tabular-nums text-zinc-600">{message.length}/4000</span>
+      <span className="flex-1" />
       <button type="submit" disabled={!canSubmit} className="focus-ring inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">
         {submitting ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}
         {submitting ? "Agent is revising…" : producesDraft ? "Draft revision" : "Generate proposal"}
       </button>
     </div>
     {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{error}</p>}
-    <p className="mt-2 text-[10px] leading-4 text-amber-200/70">{producesDraft ? "The cSDRG draft will appear in the existing editor for review and saving." : "Approved artifacts remain active until the proposal is accepted."}</p>
   </form>;
 }
 
@@ -243,7 +247,7 @@ function CompletedRevisionScopePicker({ context, currentResult, scope, onChange 
   const selectedVariable = scope.variables[0]?.variable ?? "";
   const selectedFields = scope.variables[0]?.fields ?? [];
   const fieldLockAvailable = context.surface === "variable_mapping" || context.surface === "acrf" || context.surface === "define_xml";
-  return <div className="mt-2 grid gap-2 rounded-lg border border-white/10 bg-black/15 p-2">
+  return <div className="grid gap-2">
     <div><p className="text-[10px] font-bold text-zinc-400">Affected target domain</p><p className="mt-1 rounded-md border border-violet-400/20 bg-violet-500/[0.08] px-2 py-1.5 font-mono text-[11px] font-bold text-violet-200">{domain}</p></div>
     {variables.length > 0 && <label className="text-[10px] font-bold text-zinc-400">Narrow to one variable<select aria-label="Affected target variable" value={selectedVariable} onChange={(event) => onChange(event.target.value ? { ...emptyScope(), variables: [{ domain, variable: event.target.value, fields: [] }] } : { ...emptyScope(), target_domains: [domain] })} className={scopeInput}><option value="">Entire {domain} domain</option>{variables.map((item) => <option key={String(item.name)}>{String(item.name)}</option>)}</select></label>}
     {selectedVariable && fieldLockAvailable && <div><p className="text-[10px] font-bold text-zinc-400">Optional field lock</p><div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-auto">{variableFields.map((field) => <label key={field} className="flex items-center gap-1 rounded border border-white/10 px-1.5 py-1 text-[9px] text-zinc-400"><input type="checkbox" checked={selectedFields.includes(field)} onChange={() => { const fields = selectedFields.includes(field) ? selectedFields.filter((item) => item !== field) : [...selectedFields, field]; onChange({ ...emptyScope(), variables: [{ domain, variable: selectedVariable, fields }] }); }} />{field}</label>)}</div><p className="mt-1 text-[9px] text-zinc-600">No checked fields means the full variable row and its dependent rule are in scope.</p></div>}
@@ -251,10 +255,11 @@ function CompletedRevisionScopePicker({ context, currentResult, scope, onChange 
 }
 
 function FixedScope({ label, value }: { label: string; value: string }) {
-  return <div className="mt-2 rounded-lg border border-white/10 bg-black/15 p-2"><p className="text-[10px] font-bold text-zinc-400">{label}</p><p className="mt-1 text-[10px] leading-4 text-zinc-300">{value}</p></div>;
+  return <div><p className="text-[10px] font-bold text-zinc-400">{label}</p><p className="mt-1 text-[10px] leading-4 text-zinc-300">{value}</p></div>;
 }
 
 function VoiceGuidanceInput({ jobId, message, onMessageChange, submitting }: { jobId: string; message: string; onMessageChange: (value: string) => void; submitting: boolean }) {
+  const tooltipId = useId();
   const [voiceSupported, setVoiceSupported] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -337,16 +342,15 @@ function VoiceGuidanceInput({ jobId, message, onMessageChange, submitting }: { j
   const minutes = Math.floor(elapsedSeconds / 60);
   const seconds = String(elapsedSeconds % 60).padStart(2, "0");
   return <>
-    <div className="mt-2 flex items-center gap-2">
-      <button type="button" onClick={voiceState === "recording" ? stopVoiceInput : startVoiceInput} disabled={!voiceSupported || voiceState === "requesting" || voiceState === "transcribing" || submitting} aria-label={voiceState === "recording" ? "Stop voice input" : "Start voice input"} aria-pressed={voiceState === "recording"} className={`focus-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40 ${voiceState === "recording" ? "border-rose-400/40 bg-rose-500/15 text-rose-200" : "border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]"}`}>
+    <div className="group/voice relative">
+      <button type="button" onClick={voiceState === "recording" ? stopVoiceInput : startVoiceInput} disabled={!voiceSupported || voiceState === "requesting" || voiceState === "transcribing" || submitting} aria-label={voiceState === "recording" ? "Stop voice input" : "Start voice input"} aria-describedby={tooltipId} aria-pressed={voiceState === "recording"} className={`focus-ring grid h-8 min-w-8 place-items-center rounded-lg border px-2 text-[10px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40 ${voiceState === "recording" ? "border-rose-400/40 bg-rose-500/15 text-rose-200" : "border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]"}`}>
         {voiceState === "requesting" || voiceState === "transcribing" ? <LoaderCircle size={14} className="animate-spin" /> : voiceState === "recording" ? <MicOff size={14} /> : <Mic size={14} />}
-        {voiceState === "requesting" ? "Opening mic…" : voiceState === "transcribing" ? "Transcribing…" : voiceState === "recording" ? `Stop ${minutes}:${seconds}` : "Voice input"}
+        {voiceState === "recording" && <span className="ml-1">{minutes}:{seconds}</span>}
       </button>
-      <span className="text-[10px] leading-4 text-zinc-600">Meta Muse adds editable text; it never auto-submits.</span>
+      <div id={tooltipId} role="tooltip" className={`pointer-events-none absolute bottom-[calc(100%+0.5rem)] left-0 z-50 w-64 rounded-lg border bg-[#101012] p-2.5 text-[10px] font-normal leading-4 shadow-2xl transition ${voiceError ? "visible translate-y-0 border-rose-500/25 text-rose-300 opacity-100" : "invisible translate-y-1 border-white/15 text-zinc-300 opacity-0 group-hover/voice:visible group-hover/voice:translate-y-0 group-hover/voice:opacity-100 group-focus-within/voice:visible group-focus-within/voice:translate-y-0 group-focus-within/voice:opacity-100"}`}>
+        {voiceError ?? (voiceSupported ? "Record synthetic or de-identified guidance. Meta Muse adds editable text and never submits it automatically. Audio is not stored by this workbench." : "Voice input is unavailable in this browser.")}
+      </div>
     </div>
-    {!voiceSupported && <p className="mt-1.5 text-[10px] leading-4 text-amber-300/80">Voice input is unavailable in this browser.</p>}
-    {voiceError && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{voiceError}</p>}
-    <p className="mt-2 text-[10px] leading-4 text-zinc-600">Record synthetic or de-identified guidance only. Audio is sent to the configured Meta Model API and is not stored by this workbench.</p>
   </>;
 }
 
@@ -363,30 +367,35 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
   useEffect(() => { if (!message) setScope(emptyScope()); }, [message]);
   return (
     <form
-      className="border-t border-white/[0.08] bg-[#151518] p-3"
+      className="border-t border-white/[0.08] bg-[#151518] p-2.5"
       onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(scope); }}
     >
-      <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300">Guide this revision</p>
-      <p className="mt-1 text-[11px] leading-4 text-zinc-500">Ask the agent to revise {stage}. This does not approve or advance the workflow.</p>
-      <VoiceGuidanceInput jobId={job.id} message={message} onMessageChange={onMessageChange} submitting={submitting} />
+      <div className="flex items-center gap-1.5">
+        <p className="min-w-0 flex-1 truncate text-[11px] font-bold text-zinc-200">Revise {stage}</p>
+        <InfoTooltip label="About this revision" description={`Ask the agent to revise ${stage}. Generating a patch does not approve it or advance the workflow.`} />
+      </div>
       <textarea
         aria-label="Review guidance for the agent"
         value={message}
         onChange={(event) => onMessageChange(event.target.value.slice(0, 4000))}
-        rows={3}
+        rows={2}
         maxLength={4000}
-        placeholder="Example: Use the Safety population for every adverse-event output and keep unsupported decisions as TODOs."
-        className="focus-ring mt-2 w-full resize-y rounded-lg border border-white/10 bg-[#0d0d0f] px-3 py-2 text-xs leading-5 text-zinc-200 placeholder:text-zinc-600"
+        placeholder="Describe the requested change…"
+        className="focus-ring mt-1.5 w-full resize-y rounded-lg border border-white/10 bg-[#0d0d0f] px-3 py-2 text-xs leading-5 text-zinc-200 placeholder:text-zinc-600"
       />
-      <ScopePicker job={job} currentResult={currentResult} scope={scope} onChange={setScope} />
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <button type="button" disabled={!message.trim() || scopeMutation.isPending} onClick={() => scopeMutation.mutate()} className="focus-ring rounded-md border border-white/10 px-2.5 py-1.5 text-[10px] font-bold text-zinc-300 disabled:opacity-40">{scopeMutation.isPending ? "Finding scope…" : "Suggest scope from comment"}</button>
-        <span className={`text-[10px] ${hasScope ? "text-emerald-300" : "text-amber-300"}`}>{hasScope ? "Scope confirmed" : "Select a scope before submitting"}</span>
-      </div>
-      {scopeMutation.data && <p className="mt-1 text-[10px] leading-4 text-zinc-500">{scopeMutation.data.explanation} Confirm or adjust the selection.</p>}
-      {scopeMutation.error && <p className="mt-1 text-[10px] text-rose-300">{scopeMutation.error.message}</p>}
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <span className="text-[10px] text-zinc-600">{message.length}/4000</span>
+      <div className="mt-1.5 flex items-center gap-1.5">
+        <VoiceGuidanceInput jobId={job.id} message={message} onMessageChange={onMessageChange} submitting={submitting} />
+        <ScopeMenu
+          hasScope={hasScope}
+          summary={scopeSummary(scope)}
+          suggestScope={{ disabled: !message.trim() || scopeMutation.isPending, pending: scopeMutation.isPending, onClick: () => scopeMutation.mutate() }}
+          proposalNote={scopeMutation.data ? `${scopeMutation.data.explanation} Confirm or adjust the selection.` : undefined}
+          proposalError={scopeMutation.error?.message}
+        >
+          <ScopePicker job={job} currentResult={currentResult} scope={scope} onChange={setScope} />
+        </ScopeMenu>
+        <span className="ml-1 text-[9px] tabular-nums text-zinc-600">{message.length}/4000</span>
+        <span className="flex-1" />
         <button type="submit" disabled={!canSubmit} className="focus-ring inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">
           {submitting ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}
           {submitting ? "Generating scoped patch…" : "Generate patch"}
@@ -395,6 +404,80 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
       {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{error}</p>}
     </form>
   );
+}
+
+function InfoTooltip({ label, description }: { label: string; description: string }) {
+  const tooltipId = useId();
+  return <div className="group/info relative shrink-0">
+    <button type="button" aria-label={label} aria-describedby={tooltipId} className="focus-ring grid h-7 w-7 place-items-center rounded-md text-zinc-500 transition hover:bg-white/[0.06] hover:text-zinc-200">
+      <CircleHelp size={14} />
+    </button>
+    <div id={tooltipId} role="tooltip" className="pointer-events-none invisible absolute bottom-[calc(100%+0.4rem)] right-0 z-50 w-72 translate-y-1 rounded-lg border border-white/15 bg-[#101012] p-2.5 text-[10px] font-normal leading-4 text-zinc-300 opacity-0 shadow-2xl transition group-hover/info:visible group-hover/info:translate-y-0 group-hover/info:opacity-100 group-focus-within/info:visible group-focus-within/info:translate-y-0 group-focus-within/info:opacity-100">
+      {description}
+    </div>
+  </div>;
+}
+
+function ScopeMenu({ hasScope, summary, children, suggestScope, proposalNote, proposalError }: {
+  hasScope: boolean;
+  summary: string;
+  children: React.ReactNode;
+  suggestScope?: { disabled: boolean; pending: boolean; onClick: () => void };
+  proposalNote?: string;
+  proposalError?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
+  const tooltipId = useId();
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+  return <div ref={menuRef} className="group/scope relative">
+    <button
+      type="button"
+      aria-label="Select revision scope"
+      aria-describedby={tooltipId}
+      aria-expanded={open}
+      aria-controls={menuId}
+      onClick={() => setOpen((value) => !value)}
+      className={`focus-ring relative grid h-8 w-8 place-items-center rounded-lg border transition ${open ? "border-violet-400/50 bg-violet-500/15 text-violet-200" : hasScope ? "border-emerald-400/25 bg-emerald-500/[0.08] text-emerald-300 hover:bg-emerald-500/15" : "border-amber-400/25 bg-amber-500/[0.08] text-amber-300 hover:bg-amber-500/15"}`}
+    >
+      <Hash size={15} />
+      <span className={`absolute right-1 top-1 h-1.5 w-1.5 rounded-full ${hasScope ? "bg-emerald-400" : "bg-amber-400"}`} />
+    </button>
+    {!open && <div id={tooltipId} role="tooltip" className="pointer-events-none invisible absolute bottom-[calc(100%+0.5rem)] left-0 z-50 w-56 translate-y-1 rounded-lg border border-white/15 bg-[#101012] p-2.5 text-[10px] font-normal leading-4 text-zinc-300 opacity-0 shadow-2xl transition group-hover/scope:visible group-hover/scope:translate-y-0 group-hover/scope:opacity-100 group-focus-within/scope:visible group-focus-within/scope:translate-y-0 group-focus-within/scope:opacity-100">
+      {hasScope ? `Scope: ${summary}. Select to review or change it.` : "Select the revision scope before submitting."}
+    </div>}
+    {open && <div id={menuId} role="dialog" aria-label="Revision scope" className="absolute -left-10 bottom-[calc(100%+0.5rem)] z-50 max-h-[min(28rem,70vh)] w-[min(28rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-white/15 bg-[#101012] p-3 shadow-2xl">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div><p className="text-[10px] font-black uppercase tracking-[0.12em] text-violet-300">Revision scope</p><p className={`mt-0.5 text-[9px] ${hasScope ? "text-emerald-300" : "text-amber-300"}`}>{hasScope ? summary : "No scope selected"}</p></div>
+        {suggestScope && <button type="button" disabled={suggestScope.disabled} onClick={suggestScope.onClick} className="focus-ring rounded-md border border-white/10 px-2 py-1.5 text-[9px] font-bold text-zinc-300 transition hover:bg-white/[0.06] disabled:opacity-40">{suggestScope.pending ? "Finding…" : "Suggest from guidance"}</button>}
+      </div>
+      {children}
+      {proposalNote && <p className="mt-2 text-[9px] leading-4 text-zinc-500">{proposalNote}</p>}
+      {proposalError && <p className="mt-2 text-[9px] text-rose-300">{proposalError}</p>}
+    </div>}
+  </div>;
+}
+
+function scopeSummary(scope: ReviewScope): string {
+  const variable = scope.variables[0];
+  if (variable) return `${variable.domain}.${variable.variable}${variable.fields.length ? ` · ${variable.fields.length} fields` : ""}`;
+  if (scope.target_domains.length) return scope.target_domains.join(", ");
+  if (scope.source_datasets.length) return `${scope.source_datasets.length} source dataset${scope.source_datasets.length === 1 ? "" : "s"}`;
+  if (scope.paths.length) return `${scope.paths.length} section${scope.paths.length === 1 ? "" : "s"}`;
+  return "not selected";
 }
 
 const variableFields = ["label", "data_type", "mapping_type", "sources", "origin", "mapping_expression", "controlled_terms", "value_level_metadata", "crf_source_label", "acrf_annotations"];
@@ -413,7 +496,7 @@ function ScopePicker({ job, currentResult, scope, onChange }: { job: Job; curren
     const variables = asRecords(dataset?.variables);
     const selectedVariable = scope.variables[0]?.variable ?? "";
     const selectedFields = scope.variables[0]?.fields ?? [];
-    return <div className="mt-2 grid gap-2 rounded-lg border border-white/10 bg-black/15 p-2">
+    return <div className="grid gap-2">
       <label className="text-[10px] font-bold text-zinc-400">Affected target domain<select aria-label="Affected target domain" value={selectedDomain} onChange={(event) => onChange({ ...emptyScope(), target_domains: event.target.value ? [event.target.value] : [] })} className={scopeInput}><option value="">Select domain</option>{datasets.map((item) => <option key={String(item.domain)}>{String(item.domain)}</option>)}</select></label>
       {selectedDomain && <label className="text-[10px] font-bold text-zinc-400">Narrow to one variable<select aria-label="Affected target variable" value={selectedVariable} onChange={(event) => onChange(event.target.value ? { ...emptyScope(), variables: [{ domain: selectedDomain, variable: event.target.value, fields: [] }] } : { ...emptyScope(), target_domains: [selectedDomain] })} className={scopeInput}><option value="">Entire {selectedDomain} domain</option>{variables.map((item) => <option key={String(item.name)}>{String(item.name)}</option>)}</select></label>}
       {selectedVariable && <div><p className="text-[10px] font-bold text-zinc-400">Optional field lock</p><div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-auto">{variableFields.map((field) => <label key={field} className="flex items-center gap-1 rounded border border-white/10 px-1.5 py-1 text-[9px] text-zinc-400"><input type="checkbox" checked={selectedFields.includes(field)} onChange={() => { const fields = selectedFields.includes(field) ? selectedFields.filter((item) => item !== field) : [...selectedFields, field]; onChange({ ...emptyScope(), variables: [{ domain: selectedDomain, variable: selectedVariable, fields }] }); }} />{field}</label>)}</div><p className="mt-1 text-[9px] text-zinc-600">No checked fields means the full variable row is in scope.</p></div>}
@@ -424,7 +507,7 @@ function ScopePicker({ job, currentResult, scope, onChange }: { job: Job; curren
 }
 
 function ScopeChecklist({ label, items, labels = {}, selected, onChange }: { label: string; items: string[]; labels?: Record<string, string>; selected: string[]; onChange: (items: string[]) => void }) {
-  return <div className="mt-2 rounded-lg border border-white/10 bg-black/15 p-2"><p className="text-[10px] font-bold text-zinc-400">{label}</p><div className="mt-1 max-h-28 space-y-1 overflow-auto">{items.map((item) => <label key={item} className="flex items-center gap-2 text-[10px] text-zinc-300"><input type="checkbox" checked={selected.includes(item)} onChange={() => onChange(selected.includes(item) ? selected.filter((value) => value !== item) : [...selected, item])} /><span>{labels[item] ?? item}</span></label>)}</div></div>;
+  return <div><p className="text-[10px] font-bold text-zinc-400">{label}</p><div className="mt-1 max-h-28 space-y-1 overflow-auto">{items.map((item) => <label key={item} className="flex items-center gap-2 text-[10px] text-zinc-300"><input type="checkbox" checked={selected.includes(item)} onChange={() => onChange(selected.includes(item) ? selected.filter((value) => value !== item) : [...selected, item])} /><span>{labels[item] ?? item}</span></label>)}</div></div>;
 }
 
 function genericPathChoices(job: Job, current: Record<string, unknown>): Array<{ path: string; label: string }> {

@@ -8,6 +8,8 @@ from threading import Event
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import pandas as pd
+import pyreadstat
 import pytest
 from reportlab.pdfgen import canvas
 
@@ -17,7 +19,7 @@ from app.core_conformance import CoreConformanceResult
 from app.main import app, settings
 from app.jobs import runner
 from app.models import Artifact, Job
-from app.schemas import CSDRGDocument, ExecutionAttempt, ExecutionCheck, StudySummary
+from app.schemas import CSDRGDocument, ExecutionAttempt, ExecutionCheck, ExecutionOutput, StudySummary
 from app.review_patches import build_patch_record, new_patch_request, public_patch, result_revision, write_patch_record
 from app.schemas.reviews import ReviewScope
 from app.sdtm_workbench import read_state, write_state
@@ -164,6 +166,71 @@ def test_completed_sdtm_program_can_be_manually_edited_with_audit_and_evidence_r
             stored = session.get(Job, job_id)
             artifact = next(item for item in stored.artifacts if item.name == "build-dm.R")
             assert artifact.sha256 == sha256_file(program)
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def test_sdtm_execution_output_can_be_previewed_with_bounded_rows() -> None:
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm",
+            title="Execution result preview",
+            status="succeeded",
+            options_json="{}",
+            input_files_json="[]",
+        )
+        session.add(job)
+        session.flush()
+        job_dir = settings.jobs_dir / job.id
+        attempt_id = "attempt-abcdef123456"
+        attempt_dir = job_dir / "sdtm" / "executions" / attempt_id
+        output = attempt_dir / "output" / "dm.xpt"
+        output.parent.mkdir(parents=True, exist_ok=True)
+        frame = pd.DataFrame({
+            "USUBJID": [f"SYN-{index:03d}" for index in range(30)],
+            "AGE": [float(index) for index in range(30)],
+        })
+        pyreadstat.write_xport(frame, output, table_name="DM", file_format_version=5)
+        save_attempt(job_dir, ExecutionAttempt(
+            attempt_id=attempt_id,
+            status="passed",
+            created_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+            program_hash="a" * 64,
+            program_artifact=f"sdtm/executions/{attempt_id}/program.R",
+            outputs=[ExecutionOutput(
+                name="dm.xpt",
+                sha256=sha256_file(output),
+                size_bytes=output.stat().st_size,
+                row_count=30,
+                columns=["USUBJID", "AGE"],
+            )],
+        ))
+        session.commit()
+        job_id = job.id
+
+    try:
+        with TestClient(app) as client:
+            response = client.get(
+                f"/api/v1/jobs/{job_id}/sdtm-executions/{attempt_id}/outputs/dm.xpt/preview"
+            )
+            missing = client.get(
+                f"/api/v1/jobs/{job_id}/sdtm-executions/{attempt_id}/outputs/ae.xpt/preview"
+            )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["name"] == "dm.xpt"
+        assert payload["columns"] == ["USUBJID", "AGE"]
+        assert payload["row_count"] == 30
+        assert len(payload["rows"]) == 25
+        assert payload["rows"][0] == {"USUBJID": "SYN-000", "AGE": 0.0}
+        assert payload["truncated"] is True
+        assert missing.status_code == 404
     finally:
         with SessionLocal() as session:
             stored = session.get(Job, job_id)

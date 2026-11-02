@@ -10,7 +10,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("AppShell", () => {
-  it("lets desktop users collapse and restore the workspace navigation", () => {
+  it("lets desktop users collapse and restore the workspace navigation", async () => {
     vi.spyOn(api, "health").mockResolvedValue({ meta_configured: true, meta_model: "test-model" });
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><AppShell><div>Workspace content</div></AppShell></QueryClientProvider>);
@@ -19,12 +19,17 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "SDTM" })).not.toHaveTextContent("Experimental");
     expect(screen.getByRole("link", { name: "TLF (Experimental)" })).toBeInTheDocument();
     expect(screen.getAllByText("Experimental")).toHaveLength(5);
+    const environmentStatus = screen.getByText("Local artifact environment").parentElement?.parentElement;
+    expect(await screen.findByText("Meta generation is ready")).toBeInTheDocument();
+    expect(environmentStatus).toHaveTextContent("Meta generation is ready");
     const toggle = screen.getByRole("button", { name: "Collapse navigation sidebar" });
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(toggle).not.toHaveTextContent("Collapse workspace navigation");
     expect(navigation.closest("aside")).toHaveClass("lg:flex");
 
     fireEvent.click(toggle);
     expect(screen.getByRole("button", { name: "Expand navigation sidebar" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: "Expand navigation sidebar" })).not.toHaveTextContent("Expand workspace navigation");
     expect(navigation.closest("aside")).toHaveClass("hidden");
 
     fireEvent.click(screen.getByRole("button", { name: "Expand navigation sidebar" }));

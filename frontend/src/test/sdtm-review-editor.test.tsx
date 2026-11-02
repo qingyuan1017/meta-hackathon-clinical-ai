@@ -40,6 +40,10 @@ describe("SDTMReviewEditor", () => {
     renderEditor(plan, undefined, artifacts);
 
     expect(screen.getByText("Domain mapping")).toBeInTheDocument();
+    const reviewActions = screen.getByRole("group", { name: "SDTM review status and actions" });
+    const saveMappings = within(reviewActions).getByRole("button", { name: "Save reviewed mappings" });
+    expect(document.getElementById(saveMappings.getAttribute("aria-describedby")!)).toHaveTextContent("rebuild every generated artifact");
+    expect(screen.getAllByRole("button", { name: "Save reviewed mappings" })).toHaveLength(1);
     expect(screen.getAllByText("RAW_DM")).toHaveLength(2);
     fireEvent.click(screen.getByText("Variable & VLM"));
     expect(screen.getByText("Use the variable-by-source matrix to edit target metadata, minor derivations, detailed lineage, and VLM rows.")).toBeInTheDocument();
@@ -131,6 +135,34 @@ describe("SDTMReviewEditor", () => {
     expect(screen.getByText(/guidance, voice input, and scope in the right-side agent/i)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("SDTM revision context")).toHaveTextContent("Rule & Code repair · DM · attempt-abcdef123456"));
     expect(screen.getByLabelText("SDTM revision context")).toHaveTextContent('"executionAttemptId":"attempt-abcdef123456"');
+  });
+
+  it("previews a produced execution dataset on demand", async () => {
+    vi.spyOn(api, "sdtmExecutions").mockResolvedValue({ items: [{
+      attempt_id: "attempt-abcdef123456", parent_attempt_id: null, status: "passed",
+      created_at: "2026-11-01T12:00:00Z", completed_at: "2026-11-01T12:01:00Z",
+      program_hash: "c".repeat(64), runtime: { r: "4.4.1" }, exit_code: 0,
+      stdout: "", stderr: "",
+      outputs: [{ name: "dm.xpt", sha256: "d".repeat(64), size_bytes: 2048, row_count: 2, columns: ["USUBJID", "AGE"] }],
+      checks: [{ check_id: "xpt-readable", status: "passed", message: "dm.xpt is readable with 2 rows.", domain: "DM" }],
+      failure_classification: null, repair_proposal: null,
+    }] });
+    const preview = vi.spyOn(api, "sdtmExecutionOutputPreview").mockResolvedValue({
+      name: "dm.xpt", row_count: 2, columns: ["USUBJID", "AGE"],
+      rows: [{ USUBJID: "SYN-001", AGE: 42 }, { USUBJID: "SYN-002", AGE: null }],
+      preview_limit: 25, truncated: false,
+    });
+    renderEditor(plan, "job-preview");
+
+    fireEvent.click(screen.getByText("Execution"));
+    const previewButton = await screen.findByRole("button", { name: "Preview result" });
+    expect(preview).not.toHaveBeenCalled();
+    fireEvent.click(previewButton);
+
+    expect(await screen.findByRole("columnheader", { name: "USUBJID" })).toBeInTheDocument();
+    expect(screen.getByText("SYN-001")).toBeInTheDocument();
+    expect(screen.getByText("Showing 2 of 2 rows. Preview is read-only.")).toBeInTheDocument();
+    expect(preview).toHaveBeenCalledWith("job-preview", "attempt-abcdef123456", "dm.xpt");
   });
 
   it("uses the full stage-review presentation for completed-job proposals", () => {

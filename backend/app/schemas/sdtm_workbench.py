@@ -64,6 +64,15 @@ class ExecutionOutput(BaseModel):
     columns: list[str] = Field(default_factory=list)
 
 
+class ExecutionOutputPreview(BaseModel):
+    name: str
+    row_count: int
+    columns: list[str] = Field(default_factory=list)
+    rows: list[dict[str, str | int | float | bool | None]] = Field(default_factory=list)
+    preview_limit: int
+    truncated: bool
+
+
 class ExecutionCheck(BaseModel):
     check_id: str
     status: Literal["passed", "failed", "warning", "not_run"]
