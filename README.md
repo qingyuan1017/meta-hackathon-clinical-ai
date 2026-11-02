@@ -127,7 +127,9 @@ This separation is intentional: an agent is a probabilistic planner that calls t
 
 3. Open http://localhost:3000. The API and interactive OpenAPI documentation are available at http://localhost:8000/docs. MCP endpoints are available at `http://localhost:8001/mcp` for CDISC Library, `http://localhost:8002/mcp` for the workbench, `http://localhost:8003/mcp` for ClinicalTrials.gov, `http://localhost:8004/mcp` for NCBO BioPortal, `http://localhost:8005/mcp` for PubMed, and `http://localhost:8765/mcp` for openFDA. Synthetic inputs, including a generated blank CRF PDF, are downloadable from the dashboard. If port 3000 is already occupied, set another free port such as `WEB_PORT=3300` before starting Compose.
 
-Generated files and SQLite history are kept in the `clinical-ai-data` Docker volume until a job is deleted.
+Generated files and SQLite history are kept in the `clinical-ai-data` Docker volume until a job is deleted. Validated job inputs are also copied to the `clinical-ai-objects` MinIO volume under `jobs/<job-id>/inputs/`; the API restores a missing local input from object storage and verifies its SHA-256 checksum before processing. Deleting a job removes both copies.
+
+The Compose MinIO image is built from a pinned upstream source revision for this local/hackathon stack. Because upstream MinIO is archived, hosted deployments should review that lifecycle risk and may instead point the same `OBJECT_STORAGE_*` settings at a maintained S3-compatible service. Do not expose the development console or reuse the default root credentials in a hosted environment.
 
 ## Local development
 
@@ -179,7 +181,12 @@ See [`mobile/README.md`](mobile/README.md) for physical-device networking and na
 | `AGENT_MAX_REMOTE_TOOL_CALLS` | Maximum optional MCP calls per agent run; defaults to 6 |
 | `SDTM_DOMAIN_AGENT_CONCURRENCY` | Maximum simultaneous SDTM per-domain agents for variable mapping and rule augmentation; defaults to 4 |
 | `SDTM_DOMAIN_AGENT_MAX_ATTEMPTS` | Maximum attempts for one SDTM domain after transient model timeouts or connection failures; defaults to 2 and does not rerun accepted domains |
-| `SDTM_DOMAIN_MAX_SOURCE_CHUNKS` | Complete-read cap for each SDTM domain agent; defaults to 12 and remains bounded by available agent turns |
+| `SDTM_DOMAIN_MAX_SOURCE_CHUNKS` | Complete-read cap for each SDTM domain agent; defaults to 12, may be raised to 16 for larger domains such as LB, and remains bounded by available agent turns |
+| `OBJECT_STORAGE_ENABLED` | Persist validated uploads in S3-compatible object storage; Compose enables this for MinIO |
+| `OBJECT_STORAGE_ENDPOINT` | S3-compatible endpoint without a URL scheme; Compose uses `minio:9000` |
+| `OBJECT_STORAGE_ACCESS_KEY` / `OBJECT_STORAGE_SECRET_KEY` | Object-storage credentials; use a scoped application identity outside local development |
+| `OBJECT_STORAGE_BUCKET` | Durable input bucket; defaults to `clinical-ai-inputs` |
+| `OBJECT_STORAGE_SECURE` | Use TLS for the object-storage connection; enable this for a hosted endpoint |
 | `CDISC_MCP_ENABLED` | Allow the EDC, SDTM, and TLF agents to use CDISC Library tools |
 | `CDISC_MCP_URL` | Backend connection URL; defaults to `http://127.0.0.1:8001/mcp` |
 | `CLINICALGOV_MCP_ENABLED` | Allow Meta generation to use the separate ClinicalTrials.gov MCP service |

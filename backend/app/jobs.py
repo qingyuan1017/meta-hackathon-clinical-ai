@@ -12,6 +12,7 @@ from .artifacts import artifact_record
 from .config import get_settings
 from .db import SessionLocal
 from .models import Artifact, Job
+from .object_storage import get_object_storage
 from .schemas import DISCLAIMER, SDTMPlan
 from .sdtm_workbench import read_state, write_state
 from .sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
@@ -59,8 +60,9 @@ class JobRunner:
             input_names = json.loads(job.input_files_json)
 
         job_dir = settings.jobs_dir / job_id
-        inputs = [(job_dir / "input" / name).resolve() for name in input_names]
         try:
+            await asyncio.to_thread(get_object_storage().restore_job_inputs, job_id, job_dir / "input", input_names)
+            inputs = [(job_dir / "input" / name).resolve() for name in input_names]
             baseline = SDTMPlan.model_validate(baseline_raw)
             context = UseCaseContext(
                 inputs=inputs,
@@ -169,9 +171,10 @@ class JobRunner:
             input_names = json.loads(job.input_files_json)
 
         job_dir = settings.jobs_dir / job_id
-        inputs = [(job_dir / "input" / name).resolve() for name in input_names]
         output_dir = job_dir / "output"
         try:
+            await asyncio.to_thread(get_object_storage().restore_job_inputs, job_id, job_dir / "input", input_names)
+            inputs = [(job_dir / "input" / name).resolve() for name in input_names]
             service = WorkflowService()
             review = await service.prepare_review(
                 workflow,

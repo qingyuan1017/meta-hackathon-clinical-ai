@@ -13,6 +13,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
+from starlette.concurrency import run_in_threadpool
 from mcp import Client as MCPClient
 import pymupdf as fitz
 from reportlab.pdfgen import canvas
@@ -28,6 +29,7 @@ from .config import get_settings
 from .db import get_db, initialize_database
 from .jobs import runner
 from .models import Artifact, Job
+from .object_storage import ObjectStorageError, get_object_storage
 from .parsers import parse_source
 from .schemas import (
     AgentEventRead,
@@ -139,6 +141,7 @@ OPENAPI_TAGS = [
 async def lifespan(_: FastAPI):
     settings.ensure_directories()
     initialize_database()
+    await run_in_threadpool(get_object_storage().ensure_ready)
     yield
 
 
@@ -166,11 +169,13 @@ def health(db: Session = Depends(get_db)) -> HealthRead:
     except Exception:
         database = "error"
     storage = "ok" if settings.jobs_dir.exists() and settings.jobs_dir.is_dir() else "error"
-    overall = "ok" if database == "ok" and storage == "ok" else "degraded"
+    object_storage = get_object_storage().health()
+    overall = "ok" if database == "ok" and storage == "ok" and object_storage in {"ok", "disabled"} else "degraded"
     return HealthRead(
         status=overall,
         database=database,
         storage=storage,
+        object_storage=object_storage,
         meta_configured=settings.meta_configured,
         meta_base_url=settings.meta_api_base_url,
         meta_model=settings.meta_model or None,
@@ -394,6 +399,10 @@ async def create_job(
         parsed_options["_input_roles"] = input_roles
         job.options_json = json.dumps(parsed_options, ensure_ascii=False)
         job.input_files_json = json.dumps(saved_names)
+        try:
+            await run_in_threadpool(get_object_storage().upload_job_inputs, job.id, input_dir, saved_names)
+        except ObjectStorageError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         if workflow == "sdtm":
             metadata_files = [
                 name for name in input_roles["source"]
@@ -411,6 +420,10 @@ async def create_job(
         db.refresh(job)
     except Exception:
         db.rollback()
+        try:
+            await run_in_threadpool(get_object_storage().delete_job_inputs, job.id)
+        except Exception:
+            pass
         shutil.rmtree(job_dir, ignore_errors=True)
         raise
     runner.enqueue(job.id)
@@ -1909,6 +1922,10 @@ def delete_job(job_id: str, db: Session = Depends(get_db)) -> None:
     job = db.get(Job, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
+    try:
+        get_object_storage().delete_job_inputs(job_id)
+    except ObjectStorageError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     db.delete(job)
     db.commit()
     shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)

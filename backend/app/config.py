@@ -10,6 +10,15 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     data_dir: Path = Path("data")
     frontend_origin: str = "http://localhost:3000"
+    object_storage_enabled: bool = False
+    object_storage_endpoint: str = "127.0.0.1:9000"
+    object_storage_access_key: str = ""
+    object_storage_secret_key: str = ""
+    object_storage_bucket: str = "clinical-ai-inputs"
+    object_storage_secure: bool = False
+    object_storage_region: str = "us-east-1"
+    object_storage_startup_attempts: int = 30
+    object_storage_startup_delay_seconds: float = 1.0
     meta_api_key: str = ""
     meta_api_base_url: str = "https://api.meta.ai/v1"
     meta_model: str = ""
