@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -73,7 +73,7 @@ describe("SDTMReviewEditor", () => {
     await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "rule_augmentation", "DM"));
   });
 
-  it("supports reviewing, adding, editing, deleting, and rebuilding aCRF mappings", async () => {
+  it("supports domain filtering, multiple annotations, domain styling, custom text, and click-to-edit", async () => {
     const editablePlan = structuredClone(plan);
     editablePlan.datasets[0].variables.push({
       name: "SEX", label: "Sex", data_type: "Char", mapping_type: "direct",
@@ -81,15 +81,22 @@ describe("SDTMReviewEditor", () => {
       mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null,
     });
     editablePlan.rule_augmentations.push({ rule_id: "DM-SEX", target_domain: "DM", target_variable: "SEX", description: "Map SEX", logic: "Direct", r_expression: '.data[["SEX"]]', sas_expression: "SEX", review_notes: [] });
+    editablePlan.domain_mappings.push({ source_dataset: "RAW_AE", source_type: "raw", target_domain: "AE", relationship: "direct", rationale: "Adverse events" });
+    editablePlan.datasets.push({ domain: "AE", description: "Adverse events", structure: "One record per event", key_variables: ["USUBJID", "AESEQ"], record_plan: { steps: [{ step_id: "read_ae", operation: "read", description: "Read AE", output: "ae_source", inputs: [], source_dataset: "RAW_AE" }], output_step: "read_ae" }, variables: [{ name: "AETERM", label: "Term", data_type: "Char", mapping_type: "direct", sources: [{ dataset: "RAW_AE", variable: "AETERM", role: "value" }], origin: "CRF", mapping_expression: "Direct", controlled_terms: [], value_level_metadata: [], crf_source_label: null }] });
+    editablePlan.rule_augmentations.push({ rule_id: "AE-AETERM", target_domain: "AE", target_variable: "AETERM", description: "Map AETERM", logic: "Direct", r_expression: '.data[["AETERM"]]', sas_expression: "AETERM", review_notes: [] });
     const artifacts: Artifact[] = [
       { id: "acrf-pdf", name: "annotated-crf.pdf", media_type: "application/pdf", size_bytes: 500, sha256: "c".repeat(64), download_url: "/artifact/acrf-pdf" },
       { id: "acrf-json", name: "acrf-annotations.json", media_type: "application/json", size_bytes: 200, sha256: "d".repeat(64), download_url: "/artifact/acrf-json" },
     ];
     vi.spyOn(api, "artifactText").mockResolvedValue(JSON.stringify({
       status: "review_required",
+      pages: [{ page: 1, width: 612, height: 792 }, { page: 2, width: 612, height: 792 }],
+      domain_styles: {
+        DM: { font_family: "Helvetica", font_size: 8, text_color: "#141F3D", fill_color: "#EBF2FF" },
+        AE: { font_family: "Helvetica", font_size: 8, text_color: "#141F3D", fill_color: "#EBF2FF" },
+      },
       annotations: [
-        { domain: "DM", variable: "AGE", status: "matched", page: 1, label: "Age", style: { font_family: "Helvetica", font_size: 8, text_color: "#141F3D", fill_color: "#EBF2FF" } },
-        { domain: "DM", variable: "SEX", status: "unmatched", page: null, label: "", style: { font_family: "Helvetica", font_size: 8, text_color: "#141F3D", fill_color: "#EBF2FF" } },
+        { domain: "DM", variable: "AGE", annotation_index: 0, status: "matched", page: 1, label: "Age", mapping_text: "DM.AGE", textbox: [370, 100, 430, 126] },
       ],
     }));
     const onChange = vi.fn();
@@ -102,29 +109,34 @@ describe("SDTMReviewEditor", () => {
     render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>);
 
     fireEvent.click(screen.getByText("aCRF review"));
-    expect(await screen.findByText("1 of 2 target variables have question text.")).toBeInTheDocument();
-    expect(screen.getByLabelText("CRF question text for DM.AGE")).toHaveValue("Age");
+    expect(await screen.findByText("1 annotation in DM.")).toBeInTheDocument();
+    expect(screen.getByText("DM.AGE")).toBeInTheDocument();
+    expect(screen.queryByText("AE.AETERM")).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("CRF question text for DM.SEX"), { target: { value: "Sex" } });
-    expect(screen.getByText("2 of 2 target variables have question text.")).toBeInTheDocument();
-    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ datasets: [expect.objectContaining({ variables: expect.arrayContaining([expect.objectContaining({ name: "SEX", crf_source_label: "Sex" })]) })] }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit DM.AGE annotation 1" }));
+    await waitFor(() => expect(screen.getByLabelText("CRF question text for DM.AGE annotation 1")).toHaveFocus());
+    fireEvent.change(screen.getByLabelText("aCRF mapping text for DM.AGE annotation 1"), { target: { value: "AGE at baseline" } });
 
-    fireEvent.change(screen.getByLabelText("aCRF font for DM.SEX"), { target: { value: "Times Bold" } });
-    fireEvent.change(screen.getByLabelText("aCRF font size for DM.SEX"), { target: { value: "11" } });
-    fireEvent.change(screen.getByLabelText("aCRF text color for DM.SEX"), { target: { value: "#aa1122" } });
-    fireEvent.change(screen.getByLabelText("aCRF background color for DM.SEX"), { target: { value: "#ccddff" } });
-    expect(screen.getByText("#AA1122")).toBeInTheDocument();
+    const ageCard = screen.getByText("DM.AGE").closest("article")!;
+    fireEvent.click(within(ageCard).getByRole("button", { name: "Add" }));
+    fireEvent.change(screen.getByLabelText("CRF question text for DM.AGE annotation 2"), { target: { value: "Age at follow-up" } });
+    fireEvent.change(screen.getByLabelText("aCRF mapping text for DM.AGE annotation 2"), { target: { value: "AGE follow-up" } });
+    expect(screen.getByText("2 annotations in DM.")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText("CRF question text for DM.AGE"), { target: { value: "Age at screening" } });
-    expect(screen.getByLabelText("CRF question text for DM.AGE")).toHaveValue("Age at screening");
-    fireEvent.click(screen.getByRole("button", { name: "Remove aCRF mapping for DM.AGE" }));
-    expect(screen.getByLabelText("CRF question text for DM.AGE")).toHaveValue("");
-    expect(screen.getByText("1 of 2 target variables have question text.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("aCRF font for DM"), { target: { value: "Times Bold" } });
+    fireEvent.change(screen.getByLabelText("aCRF font size for DM"), { target: { value: "11" } });
+    fireEvent.change(screen.getByLabelText("aCRF text color for DM"), { target: { value: "#aa1122" } });
+    fireEvent.change(screen.getByLabelText("aCRF background color for DM"), { target: { value: "#ccddff" } });
+
+    fireEvent.change(screen.getByLabelText("aCRF domain"), { target: { value: "AE" } });
+    expect(screen.getByText("AE.AETERM")).toBeInTheDocument();
+    expect(screen.queryByText("DM.AGE")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("aCRF domain"), { target: { value: "DM" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Save & rebuild" }));
-    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ datasets: [expect.objectContaining({ variables: expect.arrayContaining([
-      expect.objectContaining({ name: "AGE", crf_source_label: null }),
-      expect.objectContaining({ name: "SEX", crf_source_label: "Sex", acrf_font_family: "Times Bold", acrf_font_size: 11, acrf_text_color: "#AA1122", acrf_fill_color: "#CCDDFF" }),
-    ]) })] }));
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ datasets: expect.arrayContaining([expect.objectContaining({ domain: "DM", acrf_font_family: "Times Bold", acrf_font_size: 11, acrf_text_color: "#AA1122", acrf_fill_color: "#CCDDFF", variables: expect.arrayContaining([expect.objectContaining({ name: "AGE", acrf_annotations: [
+      { source_label: "Age", mapping_text: "AGE at baseline" },
+      { source_label: "Age at follow-up", mapping_text: "AGE follow-up" },
+    ] })]) })]) }));
   });
 });

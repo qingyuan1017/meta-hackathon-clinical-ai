@@ -1453,6 +1453,12 @@ export interface components {
             controlled_terms?: string[];
         };
         /** SDTMVariable */
+        SDTMACRFAnnotation: {
+            /** Exact blank-CRF question text that receives the annotation */
+            source_label?: string;
+            /** Text rendered in the aCRF mapping box; blank uses DOMAIN.VARIABLE */
+            mapping_text?: string;
+        };
         SDTMVariable: {
             /** Name */
             name: string;
@@ -1488,14 +1494,8 @@ export interface components {
             value_level_metadata?: components["schemas"]["SDTMValueLevelMetadata"][];
             /** Crf Source Label */
             crf_source_label?: string | null;
-            /** @default Helvetica */
-            acrf_font_family?: "Helvetica" | "Helvetica Bold" | "Times" | "Times Bold" | "Courier" | "Courier Bold";
-            /** @default 8 */
-            acrf_font_size?: number;
-            /** @default #141F3D */
-            acrf_text_color?: string;
-            /** @default #EBF2FF */
-            acrf_fill_color?: string;
+            /** aCRF annotations */
+            acrf_annotations?: components["schemas"]["SDTMACRFAnnotation"][];
             /** Length */
             length?: number | null;
             /** Format */
@@ -1530,6 +1530,14 @@ export interface components {
              * @default Tabulation
              */
             purpose: string;
+            /** @default Helvetica */
+            acrf_font_family?: "Helvetica" | "Helvetica Bold" | "Times" | "Times Bold" | "Courier" | "Courier Bold";
+            /** @default 8 */
+            acrf_font_size?: number;
+            /** @default #141F3D */
+            acrf_text_color?: string;
+            /** @default #EBF2FF */
+            acrf_fill_color?: string;
             /** Variables */
             variables: components["schemas"]["SDTMVariable"][];
             /**

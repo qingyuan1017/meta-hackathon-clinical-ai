@@ -69,6 +69,11 @@ export interface SDTMValueLevelMetadataDraft {
   controlled_terms: string[];
 }
 
+export interface SDTMACRFAnnotationDraft {
+  source_label: string;
+  mapping_text: string;
+}
+
 export interface SDTMVariableDraft {
   name: string;
   label: string;
@@ -80,6 +85,8 @@ export interface SDTMVariableDraft {
   controlled_terms: string[];
   value_level_metadata: SDTMValueLevelMetadataDraft[];
   crf_source_label: string | null;
+  acrf_annotations?: SDTMACRFAnnotationDraft[];
+  // Legacy per-variable style fields are read only for migration to domain styling.
   acrf_font_family?: "Helvetica" | "Helvetica Bold" | "Times" | "Times Bold" | "Courier" | "Courier Bold";
   acrf_font_size?: number;
   acrf_text_color?: string;
@@ -385,10 +392,7 @@ function variableMetadataSignature(variable: SDTMVariableDraft): string {
     mapping_expression: variable.mapping_expression,
     controlled_terms: variable.controlled_terms,
     crf_source_label: variable.crf_source_label,
-    acrf_font_family: variable.acrf_font_family,
-    acrf_font_size: variable.acrf_font_size,
-    acrf_text_color: variable.acrf_text_color,
-    acrf_fill_color: variable.acrf_fill_color,
+    acrf_annotations: variable.acrf_annotations,
   });
 }
 
@@ -491,13 +495,13 @@ export function VariableMappingCards({ variables, onChange, inventory, allowedDa
     <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-sm font-black text-violet-200">{variable.name || "[unnamed]"}</p><p className="mt-1 text-xs text-zinc-600">{variable.sources.length} source reference{variable.sources.length === 1 ? "" : "s"} · {variable.mapping_type}</p></div>{removable && <RemoveButton label={`Remove ${variable.name || `variable ${index + 1}`}`} onClick={() => onChange(variables.filter((_, itemIndex) => itemIndex !== index))} />}</div>
     <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label><EditorLabel>SDTM variable</EditorLabel><input value={variable.name} onChange={(event) => update(index, { ...variable, name: event.target.value.toUpperCase() })} className={`${inputClass} font-mono font-bold`} /></label><label><EditorLabel>Label</EditorLabel><input value={variable.label} onChange={(event) => update(index, { ...variable, label: event.target.value })} className={inputClass} /></label><label><EditorLabel>Data type</EditorLabel><select value={variable.data_type} onChange={(event) => update(index, { ...variable, data_type: event.target.value as SDTMDataType })} className={inputClass}><option>Char</option><option>Num</option></select></label><label><EditorLabel>Mapping type</EditorLabel><select aria-label={`${variable.name} mapping type`} value={variable.mapping_type} onChange={(event) => update(index, { ...variable, mapping_type: event.target.value as SDTMMappingType })} className={inputClass}>{["direct", "assigned", "derived", "coalesce", "lookup", "transpose", "aggregate"].map((item) => <option key={item}>{item}</option>)}</select></label></div>
     <div className="mt-3"><SourceReferencesEditor value={variable.sources} onChange={(sources) => update(index, { ...variable, sources })} inventory={inventory} allowedDatasets={allowedDatasets} label={`${variable.name || `Variable ${index + 1}`} sources`} /></div>
-    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="md:col-span-2"><EditorLabel>Mapping logic</EditorLabel><textarea rows={3} value={variable.mapping_expression} onChange={(event) => update(index, { ...variable, mapping_expression: event.target.value })} className={inputClass} /></label><label><EditorLabel>Origin</EditorLabel><input value={variable.origin} onChange={(event) => update(index, { ...variable, origin: event.target.value })} className={inputClass} /></label><label><EditorLabel>Controlled terms</EditorLabel><input value={variable.controlled_terms.join(", ")} onChange={(event) => update(index, { ...variable, controlled_terms: splitList(event.target.value) })} className={inputClass} /></label><label><EditorLabel>aCRF source label</EditorLabel><input value={variable.crf_source_label ?? ""} onChange={(event) => update(index, { ...variable, crf_source_label: event.target.value || null })} className={inputClass} /></label></div>
+    <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4"><label className="md:col-span-2"><EditorLabel>Mapping logic</EditorLabel><textarea rows={3} value={variable.mapping_expression} onChange={(event) => update(index, { ...variable, mapping_expression: event.target.value })} className={inputClass} /></label><label><EditorLabel>Origin</EditorLabel><input value={variable.origin} onChange={(event) => update(index, { ...variable, origin: event.target.value })} className={inputClass} /></label><label><EditorLabel>Controlled terms</EditorLabel><input value={variable.controlled_terms.join(", ")} onChange={(event) => update(index, { ...variable, controlled_terms: splitList(event.target.value) })} className={inputClass} /></label><div><EditorLabel>aCRF annotations</EditorLabel><p className="rounded-md border border-white/10 bg-[#101012] px-2.5 py-2 text-xs text-zinc-500">{variable.acrf_annotations?.length ?? (variable.crf_source_label ? 1 : 0)} managed in aCRF review</p></div></div>
     <div className="mt-4 border-t border-white/[0.07] pt-3"><div className="flex items-center justify-between"><div><p className="text-[10px] font-black uppercase tracking-[0.12em] text-cyan-300">Value-level metadata</p><p className="mt-1 text-[11px] text-zinc-600">Each value-level row owns its own source lineage.</p></div><button type="button" onClick={() => update(index, { ...variable, value_level_metadata: [...variable.value_level_metadata, newVlm()] })} className="flex items-center gap-1 text-[10px] font-bold text-cyan-300"><Plus size={11} />VLM row</button></div>{variable.value_level_metadata.map((vlm, vlmIndex) => <div key={vlmIndex} className="mt-3 rounded-lg border border-cyan-500/15 bg-cyan-500/[0.03] p-3"><div className="grid gap-2 md:grid-cols-[1fr_1fr_100px_36px]"><input aria-label={`${variable.name} VLM ${vlmIndex + 1} where clause`} value={vlm.where_clause} onChange={(event) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, where_clause: event.target.value }) })} placeholder="Where clause" className={inputClass} /><input value={vlm.label} onChange={(event) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, label: event.target.value }) })} placeholder="Label" className={inputClass} /><select value={vlm.data_type} onChange={(event) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, data_type: event.target.value as SDTMDataType }) })} className={inputClass}><option>Char</option><option>Num</option></select><RemoveButton label={`Remove VLM ${vlmIndex + 1}`} onClick={() => update(index, { ...variable, value_level_metadata: variable.value_level_metadata.filter((_, itemIndex) => itemIndex !== vlmIndex) })} /></div><textarea rows={2} value={vlm.mapping_expression} onChange={(event) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, mapping_expression: event.target.value }) })} placeholder="Value-level mapping logic" className={`${inputClass} mt-2`} /><div className="mt-2"><SourceReferencesEditor value={vlm.sources} onChange={(sources) => update(index, { ...variable, value_level_metadata: replaceAt(variable.value_level_metadata, vlmIndex, { ...vlm, sources }) })} inventory={inventory} allowedDatasets={allowedDatasets} label={`${variable.name} VLM ${vlmIndex + 1} sources`} /></div></div>)}</div>
   </article>)}</div>;
 }
 
 export function newSourceVariable(name = "NEWVAR", source = ""): SDTMVariableDraft {
-  return { name, label: "New SDTM variable", data_type: "Char", mapping_type: source ? "direct" : "assigned", sources: source ? [{ dataset: source, variable: "", role: "value" }] : [], origin: source ? "CRF" : "Assigned", mapping_expression: source ? "Direct" : "TODO: review assigned value", controlled_terms: [], value_level_metadata: [], crf_source_label: null, acrf_font_family: "Helvetica", acrf_font_size: 8, acrf_text_color: "#141F3D", acrf_fill_color: "#EBF2FF" };
+  return { name, label: "New SDTM variable", data_type: "Char", mapping_type: source ? "direct" : "assigned", sources: source ? [{ dataset: source, variable: "", role: "value" }] : [], origin: source ? "CRF" : "Assigned", mapping_expression: source ? "Direct" : "TODO: review assigned value", controlled_terms: [], value_level_metadata: [], crf_source_label: null, acrf_annotations: [] };
 }
 
 export function normalizeRecordPlan(value: unknown): SDTMRecordPlan {
@@ -506,7 +510,7 @@ export function normalizeRecordPlan(value: unknown): SDTMRecordPlan {
 }
 
 export function normalizeVariable(value: SDTMVariableDraft): SDTMVariableDraft {
-  return { ...value, mapping_type: validMappingType(value.mapping_type) ? value.mapping_type : "direct", sources: arrayValue<SDTMSourceReference>(value.sources).map((item) => ({ dataset: stringValue(item.dataset, ""), variable: stringValue(item.variable, ""), role: roles.includes(item.role) ? item.role : "value" })), controlled_terms: arrayValue<string>(value.controlled_terms), value_level_metadata: arrayValue<SDTMValueLevelMetadataDraft>(value.value_level_metadata).map((item) => ({ ...item, data_type: item.data_type === "Num" ? "Num" : "Char", sources: arrayValue<SDTMSourceReference>(item.sources), controlled_terms: arrayValue<string>(item.controlled_terms) })) };
+  return { ...value, acrf_annotations: arrayValue<SDTMACRFAnnotationDraft>(value.acrf_annotations).map((item) => ({ source_label: stringValue(item.source_label, ""), mapping_text: stringValue(item.mapping_text, "") })), mapping_type: validMappingType(value.mapping_type) ? value.mapping_type : "direct", sources: arrayValue<SDTMSourceReference>(value.sources).map((item) => ({ dataset: stringValue(item.dataset, ""), variable: stringValue(item.variable, ""), role: roles.includes(item.role) ? item.role : "value" })), controlled_terms: arrayValue<string>(value.controlled_terms), value_level_metadata: arrayValue<SDTMValueLevelMetadataDraft>(value.value_level_metadata).map((item) => ({ ...item, data_type: item.data_type === "Num" ? "Num" : "Char", sources: arrayValue<SDTMSourceReference>(item.sources), controlled_terms: arrayValue<string>(item.controlled_terms) })) };
 }
 
 export function vlmMatrixIssues(domain: string, variables: SDTMVariableDraft[]): string[] {
