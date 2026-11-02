@@ -5,7 +5,7 @@ This package re-exports the schema API that was previously defined in
 """
 
 from .agents import AgentEventRead, AgentProgressRead, AgentRead
-from .artifacts import ArtifactRead
+from .artifacts import ArtifactPackageMemberRead, ArtifactRead
 from .clinical_document import ClinicalDocument, DocumentSection
 from .common import DISCLAIMER
 from .edc import (
@@ -116,6 +116,7 @@ __all__ = [
     "AgentProgressRead",
     "AgentRead",
     "ArtifactRead",
+    "ArtifactPackageMemberRead",
     "CDISCDatasetRead",
     "ClinicalDocument",
     "CodeList",

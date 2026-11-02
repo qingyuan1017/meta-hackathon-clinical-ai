@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Download, FileArchive, FileText, RotateCcw, Save, Trash2 } from "lucide-react";
+import { AlertCircle, Download, FileArchive, FileText, Folder, RotateCcw, Save, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Job } from "@/lib/types";
+import type { Artifact, Job } from "@/lib/types";
 import { formatBytes } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader } from "./ui/card";
@@ -167,13 +167,17 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
           )}
           {tab === "json" && job.workflow === "tlf" && <TLFJsonEditor value={tlfDraft} onSave={(next) => updateMutation.mutate(next)} saving={updateMutation.isPending} error={updateMutation.error?.message} />}
           {tab === "artifacts" && (job.artifacts.length ? (
-            <div className="space-y-2">
-              {job.artifacts.map((artifact) => (
+            <div className="space-y-5">
+              {job.workflow === "sdtm" && <SubmissionPackageTree artifact={job.artifacts.find((artifact) => artifact.name === "sdtm-submission-package.zip")} />}
+              <section className="space-y-2">
+                <div className="pb-1"><p className="text-sm font-extrabold text-zinc-200">Individual artifacts</p><p className="mt-1 text-xs text-zinc-500">Download standalone review files or the complete evidence bundle.</p></div>
+              {job.artifacts.filter((artifact) => artifact.name !== "sdtm-submission-package.zip").map((artifact) => (
                 <a key={artifact.id} href={api.artifactUrl(artifact.download_url)} className="focus-ring flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.02] px-4 py-3 transition hover:border-clinical-500 hover:bg-clinical-500/[0.06]">
                   <div className="flex min-w-0 items-center gap-3"><FileText size={18} className="shrink-0 text-violet-300" /><div className="min-w-0"><p className="truncate text-sm font-bold text-zinc-200">{artifact.name}</p><p className="text-xs text-zinc-500">{formatBytes(artifact.size_bytes)}</p></div></div><Download size={17} className="text-zinc-500" />
                 </a>
               ))}
-              <Button asChild variant="clinical" className="mt-4"><a href={api.bundleUrl(job.id)}><FileArchive size={17} /> Download complete bundle</a></Button>
+              <Button asChild variant="clinical" className="mt-4"><a href={api.bundleUrl(job.id)}><FileArchive size={17} /> {job.workflow === "sdtm" ? "Download audit evidence bundle" : "Download complete bundle"}</a></Button>
+              </section>
             </div>
           ) : <EmptyState text="Downloads will appear after successful generation." />)}
           {tab === "warnings" && (job.warnings.length ? <ul className="space-y-2">{job.warnings.map((warning, index) => <li className="rounded-lg border border-amber-500/20 bg-amber-500/[0.07] px-4 py-3 text-sm leading-6 text-amber-200" key={`${warning}-${index}`}>{warning}</li>)}</ul> : <EmptyState text="No workflow warnings have been recorded yet." />)}
@@ -187,6 +191,39 @@ export function ResultView({ job, onReset }: { job: Job; onReset: () => void }) 
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+const submissionFolders = ["data", "define", "raw", "spec", "program"] as const;
+
+export function SubmissionPackageTree({ artifact }: { artifact?: Artifact }) {
+  if (!artifact) return (
+    <section className="rounded-xl border border-dashed border-white/15 bg-white/[0.02] p-4">
+      <p className="text-sm font-extrabold text-zinc-200">SDTM submission package</p>
+      <p className="mt-1 text-xs leading-5 text-zinc-500">Rebuild the current SDTM artifacts to create the structured submission ZIP.</p>
+    </section>
+  );
+  const members = artifact.package_members ?? [];
+  const rootFiles = members.filter((member) => !member.is_directory && !member.path.includes("/"));
+  return (
+    <section className="overflow-hidden rounded-xl border border-violet-400/20 bg-violet-500/[0.05]">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4">
+        <div><p className="text-sm font-extrabold text-zinc-100">SDTM submission package</p><p className="mt-1 text-xs leading-5 text-zinc-400">The folder view mirrors the contents of the downloadable ZIP. Empty optional folders remain visible.</p></div>
+        <Button asChild variant="clinical" size="sm"><a href={api.artifactUrl(artifact.download_url)}><FileArchive size={16} />Download package</a></Button>
+      </header>
+      <div className="grid gap-3 p-4 lg:grid-cols-2">
+        {submissionFolders.map((folder) => {
+          const files = members.filter((member) => !member.is_directory && member.path.startsWith(`${folder}/`));
+          return (
+            <div key={folder} className="min-w-0 rounded-lg border border-white/10 bg-[#111113] p-3">
+              <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2"><Folder size={17} className="text-violet-300" /><p className="font-mono text-sm font-bold text-zinc-200">{folder}/</p></div><span className="rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-bold text-zinc-500">{files.length}</span></div>
+              {files.length ? <ul className="mt-3 max-h-56 space-y-1.5 overflow-y-auto pr-1">{files.map((member) => <li key={member.path} className="flex items-center justify-between gap-3 rounded-md bg-white/[0.025] px-2.5 py-2"><span className="min-w-0 truncate font-mono text-[11px] text-zinc-300">{member.path.slice(folder.length + 1)}</span><span className="shrink-0 text-[10px] text-zinc-600">{formatBytes(member.size_bytes)}</span></li>)}</ul> : <p className="mt-3 text-xs italic text-zinc-600">No files available</p>}
+            </div>
+          );
+        })}
+      </div>
+      {rootFiles.length > 0 && <div className="flex flex-wrap gap-2 border-t border-white/10 px-4 py-3">{rootFiles.map((member) => <span key={member.path} className="rounded-md bg-white/[0.04] px-2.5 py-1 font-mono text-[10px] text-zinc-400">{member.path} · {formatBytes(member.size_bytes)}</span>)}</div>}
+    </section>
   );
 }
 

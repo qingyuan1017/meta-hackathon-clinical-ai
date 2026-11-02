@@ -27,6 +27,36 @@ class PackageMember:
     payload: bytes
 
 
+@dataclass(frozen=True)
+class PackageIndexEntry:
+    path: str
+    size_bytes: int
+    is_directory: bool
+
+
+def read_submission_package_index(path: Path) -> list[PackageIndexEntry]:
+    """Read a safe filename-only index for display in the artifact UI."""
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            entries = []
+            for info in archive.infolist():
+                raw_name = info.filename
+                normalized = PurePosixPath(raw_name.rstrip("/"))
+                if not raw_name or normalized.is_absolute() or ".." in normalized.parts:
+                    continue
+                entries.append(
+                    PackageIndexEntry(
+                        path=normalized.as_posix(),
+                        size_bytes=info.file_size,
+                        is_directory=info.is_dir(),
+                    )
+                )
+            return sorted(entries, key=lambda item: (not item.is_directory, item.path.casefold()))
+    except (OSError, zipfile.BadZipFile):
+        return []
+
+
 def refresh_submission_package(job_dir: Path, plan: SDTMPlan, output_dir: Path | None = None) -> Path:
     """Build the explicit, reviewable SDTM package without changing the audit bundle."""
 

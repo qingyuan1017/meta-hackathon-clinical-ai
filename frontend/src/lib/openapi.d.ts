@@ -743,6 +743,15 @@ export interface components {
             /** Attempt Id */
             attempt_id?: string | null;
         };
+        /** ArtifactPackageMemberRead */
+        ArtifactPackageMemberRead: {
+            /** Path */
+            path: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Is Directory */
+            is_directory?: boolean;
+        };
         /** ArtifactRead */
         ArtifactRead: {
             /** Id */
@@ -757,6 +766,8 @@ export interface components {
             sha256: string;
             /** Download Url */
             download_url: string;
+            /** Package Members */
+            package_members?: components["schemas"]["ArtifactPackageMemberRead"][];
         };
         /** Body_create_job_api_v1_jobs__workflow__post */
         Body_create_job_api_v1_jobs__workflow__post: {

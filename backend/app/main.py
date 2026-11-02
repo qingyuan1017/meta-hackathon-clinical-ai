@@ -33,6 +33,7 @@ from .schemas import (
     AgentProgressRead,
     AgentRead,
     ArtifactRead,
+    ArtifactPackageMemberRead,
     CDISCDatasetRead,
     DISCLAIMER,
     EDCSourceSpecificationUpdate,
@@ -91,7 +92,7 @@ from .sdtm_validation import (
 )
 from .csdrg import build_csdrg, render_csdrg, render_csdrg_document
 from .sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
-from .sdtm_submission import refresh_submission_package
+from .sdtm_submission import PACKAGE_NAME, read_submission_package_index, refresh_submission_package
 from .review_patches import (
     load_patch_record,
     new_patch_request,
@@ -1761,17 +1762,38 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
         "tlf_programming",
     }:
         review_stage = None
-    artifacts = [
-        ArtifactRead(
-            id=item.id,
-            name=item.name,
-            media_type=item.media_type,
-            size_bytes=item.size_bytes,
-            sha256=item.sha256,
-            download_url=f"{settings.api_prefix}/jobs/{job.id}/artifacts/{item.id}",
+    job_dir = settings.jobs_dir / job.id
+    artifacts = []
+    for item in job.artifacts:
+        package_members: list[ArtifactPackageMemberRead] = []
+        if include_result and item.name == PACKAGE_NAME:
+            candidate = (job_dir / item.relative_path).resolve()
+            try:
+                candidate.relative_to(job_dir.resolve())
+            except ValueError:
+                package_path = None
+            else:
+                package_path = candidate
+            if package_path is not None and package_path.is_file():
+                package_members = [
+                    ArtifactPackageMemberRead(
+                        path=member.path,
+                        size_bytes=member.size_bytes,
+                        is_directory=member.is_directory,
+                    )
+                    for member in read_submission_package_index(package_path)
+                ]
+        artifacts.append(
+            ArtifactRead(
+                id=item.id,
+                name=item.name,
+                media_type=item.media_type,
+                size_bytes=item.size_bytes,
+                sha256=item.sha256,
+                download_url=f"{settings.api_prefix}/jobs/{job.id}/artifacts/{item.id}",
+                package_members=package_members,
+            )
         )
-        for item in job.artifacts
-    ]
     return JobRead(
         id=job.id,
         workflow=job.workflow,
@@ -1786,7 +1808,7 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
         warnings=warnings,
         error=job.error,
         artifacts=artifacts,
-        sdtm_workbench=read_state(settings.jobs_dir / job.id) if job.workflow == "sdtm" else None,
+        sdtm_workbench=read_state(job_dir) if job.workflow == "sdtm" else None,
         result_revision=result_revision(result) if result is not None else None,
         review_patch=public_patch(pending_patch) if isinstance(pending_patch, dict) else None,
     )

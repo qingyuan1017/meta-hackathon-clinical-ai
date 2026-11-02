@@ -2,6 +2,7 @@ import io
 import json
 import shutil
 import wave
+import zipfile
 from threading import Event
 from types import SimpleNamespace
 
@@ -89,6 +90,48 @@ def test_artifact_can_be_requested_inline_for_review() -> None:
         assert response.status_code == 200
         assert response.headers["content-disposition"].startswith("inline;")
         assert response.text == "<ODM />"
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def test_sdtm_submission_package_exposes_filename_only_folder_index() -> None:
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm",
+            title="Structured package index",
+            status="succeeded",
+            options_json="{}",
+            input_files_json="[]",
+        )
+        session.add(job)
+        session.flush()
+        job_dir = settings.jobs_dir / job.id
+        package = job_dir / "output" / "sdtm-submission-package.zip"
+        package.parent.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(package, "w") as archive:
+            for folder in ("data", "define", "raw", "spec", "program"):
+                archive.writestr(f"{folder}/", b"")
+            archive.writestr("data/dm.xpt", b"synthetic-xpt")
+            archive.writestr("raw/dm.csv", b"SUBJID\nSYN-001\n")
+            archive.writestr("package-manifest.json", b"{}")
+        job.artifacts.append(Artifact(**artifact_record(package, job_dir)))
+        session.commit()
+        job_id = job.id
+    try:
+        with TestClient(app) as client:
+            response = client.get(f"/api/v1/jobs/{job_id}")
+        assert response.status_code == 200
+        package_payload = next(item for item in response.json()["artifacts"] if item["name"] == package.name)
+        members = {item["path"]: item for item in package_payload["package_members"]}
+        assert {"data", "define", "raw", "spec", "program", "data/dm.xpt", "raw/dm.csv", "package-manifest.json"} <= set(members)
+        assert members["data"]["is_directory"] is True
+        assert members["data/dm.xpt"]["size_bytes"] == len(b"synthetic-xpt")
+        assert "SYN-001" not in json.dumps(package_payload)
     finally:
         with SessionLocal() as session:
             stored = session.get(Job, job_id)
