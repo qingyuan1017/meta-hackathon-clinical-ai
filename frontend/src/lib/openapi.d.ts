@@ -1472,6 +1472,14 @@ export interface components {
             value_level_metadata?: components["schemas"]["SDTMValueLevelMetadata"][];
             /** Crf Source Label */
             crf_source_label?: string | null;
+            /** @default Helvetica */
+            acrf_font_family?: "Helvetica" | "Helvetica Bold" | "Times" | "Times Bold" | "Courier" | "Courier Bold";
+            /** @default 8 */
+            acrf_font_size?: number;
+            /** @default #141F3D */
+            acrf_text_color?: string;
+            /** @default #EBF2FF */
+            acrf_fill_color?: string;
             /** Length */
             length?: number | null;
             /** Format */

@@ -115,6 +115,10 @@ class SDTMVariable(BaseModel):
     controlled_terms: list[str] = Field(default_factory=list)
     value_level_metadata: list[SDTMValueLevelMetadata] = Field(default_factory=list)
     crf_source_label: str | None = None
+    acrf_font_family: Literal["Helvetica", "Helvetica Bold", "Times", "Times Bold", "Courier", "Courier Bold"] = "Helvetica"
+    acrf_font_size: float = Field(default=8.0, ge=6.0, le=18.0)
+    acrf_text_color: str = Field(default="#141F3D", pattern=r"^#[0-9A-Fa-f]{6}$")
+    acrf_fill_color: str = Field(default="#EBF2FF", pattern=r"^#[0-9A-Fa-f]{6}$")
     length: int | None = Field(default=None, ge=1, le=32767)
     format: str | None = None
     role: str | None = None

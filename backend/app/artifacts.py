@@ -584,14 +584,29 @@ def _insert_acrf_mapping_box(
     question_rect: fitz.Rect,
     target_variable: str,
     occupied_boxes: list[fitz.Rect],
+    *,
+    font_family: str,
+    font_size: float,
+    text_color: str,
+    fill_color: str,
 ) -> fitz.Rect:
     """Draw one visible target-variable label beside a matched CRF question."""
 
-    font_size = 8.0
+    font_names = {
+        "Helvetica": "helv",
+        "Helvetica Bold": "hebo",
+        "Times": "tiro",
+        "Times Bold": "tibo",
+        "Courier": "cour",
+        "Courier Bold": "cobo",
+    }
+    font_name = font_names[font_family]
+    text_rgb = tuple(int(text_color[index:index + 2], 16) / 255 for index in (1, 3, 5))
+    fill_rgb = tuple(int(fill_color[index:index + 2], 16) / 255 for index in (1, 3, 5))
     margin = 8.0
     gap = 6.0
-    box_height = 20.0
-    box_width = min(max(fitz.get_text_length(target_variable, fontname="helv", fontsize=font_size) + 16.0, 52.0), 120.0)
+    box_height = max(24.0, font_size * 2.0 + 6.0)
+    box_width = min(max(fitz.get_text_length(target_variable, fontname=font_name, fontsize=font_size) + 16.0, 52.0), 180.0)
     page_rect = page.rect
     centered_y = min(max(question_rect.y0 + (question_rect.height - box_height) / 2, margin), page_rect.y1 - margin - box_height)
     vertical_offsets = [0.0, 23.0, -23.0, 46.0, -46.0, 69.0, -69.0]
@@ -612,14 +627,14 @@ def _insert_acrf_mapping_box(
         (candidate for candidate in candidates if not any(candidate.intersects(existing) for existing in occupied_boxes)),
         candidates[0],
     )
-    page.draw_rect(box, color=(0.20, 0.30, 0.58), fill=(0.92, 0.95, 1.0), width=0.8, overlay=True)
+    page.draw_rect(box, color=text_rgb, fill=fill_rgb, width=0.8, overlay=True)
     text_rect = fitz.Rect(box.x0 + 4, box.y0 + 3, box.x1 - 4, box.y1 - 2)
     page.insert_textbox(
         text_rect,
         target_variable,
-        fontname="helv",
+        fontname=font_name,
         fontsize=font_size,
-        color=(0.08, 0.12, 0.24),
+        color=text_rgb,
         align=fitz.TEXT_ALIGN_CENTER,
         overlay=True,
     )
@@ -652,11 +667,15 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
                     rect,
                     target_variable,
                     occupied_boxes.setdefault(page.number, []),
+                    font_family=variable.acrf_font_family,
+                    font_size=variable.acrf_font_size,
+                    text_color=variable.acrf_text_color,
+                    fill_color=variable.acrf_fill_color,
                 )
             else:
                 box = None
             status = "unmatched" if not matches else "ambiguous" if len(matches) > 1 else "matched"
-            coverage.append({"domain": dataset.domain, "variable": variable.name, "origin": variable.origin, "mapping": variable.mapping_expression, "label": needle, "status": status, "page": matches[0][0].number + 1 if matches else None, "match_count": len(matches), "rendering": "textbox" if box else None, "textbox": [round(value, 2) for value in box] if box else None})
+            coverage.append({"domain": dataset.domain, "variable": variable.name, "origin": variable.origin, "mapping": variable.mapping_expression, "label": needle, "status": status, "page": matches[0][0].number + 1 if matches else None, "match_count": len(matches), "rendering": "textbox" if box else None, "textbox": [round(value, 2) for value in box] if box else None, "style": {"font_family": variable.acrf_font_family, "font_size": variable.acrf_font_size, "text_color": variable.acrf_text_color.upper(), "fill_color": variable.acrf_fill_color.upper()}})
     appendix = document.new_page()
     appendix.insert_textbox(fitz.Rect(48, 48, appendix.rect.width - 48, 110), "Draft aCRF annotation appendix", fontsize=16, color=(0.1, 0.2, 0.35))
     appendix.insert_textbox(fitz.Rect(48, 100, appendix.rect.width - 48, 155), DISCLAIMER.replace("—", "-"), fontsize=9, color=(0.65, 0.05, 0.15))

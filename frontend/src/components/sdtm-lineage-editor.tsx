@@ -80,6 +80,10 @@ export interface SDTMVariableDraft {
   controlled_terms: string[];
   value_level_metadata: SDTMValueLevelMetadataDraft[];
   crf_source_label: string | null;
+  acrf_font_family?: "Helvetica" | "Helvetica Bold" | "Times" | "Times Bold" | "Courier" | "Courier Bold";
+  acrf_font_size?: number;
+  acrf_text_color?: string;
+  acrf_fill_color?: string;
   length?: number | null;
   format?: string | null;
   role?: string | null;
@@ -381,6 +385,10 @@ function variableMetadataSignature(variable: SDTMVariableDraft): string {
     mapping_expression: variable.mapping_expression,
     controlled_terms: variable.controlled_terms,
     crf_source_label: variable.crf_source_label,
+    acrf_font_family: variable.acrf_font_family,
+    acrf_font_size: variable.acrf_font_size,
+    acrf_text_color: variable.acrf_text_color,
+    acrf_fill_color: variable.acrf_fill_color,
   });
 }
 
@@ -489,7 +497,7 @@ export function VariableMappingCards({ variables, onChange, inventory, allowedDa
 }
 
 export function newSourceVariable(name = "NEWVAR", source = ""): SDTMVariableDraft {
-  return { name, label: "New SDTM variable", data_type: "Char", mapping_type: source ? "direct" : "assigned", sources: source ? [{ dataset: source, variable: "", role: "value" }] : [], origin: source ? "CRF" : "Assigned", mapping_expression: source ? "Direct" : "TODO: review assigned value", controlled_terms: [], value_level_metadata: [], crf_source_label: null };
+  return { name, label: "New SDTM variable", data_type: "Char", mapping_type: source ? "direct" : "assigned", sources: source ? [{ dataset: source, variable: "", role: "value" }] : [], origin: source ? "CRF" : "Assigned", mapping_expression: source ? "Direct" : "TODO: review assigned value", controlled_terms: [], value_level_metadata: [], crf_source_label: null, acrf_font_family: "Helvetica", acrf_font_size: 8, acrf_text_color: "#141F3D", acrf_fill_color: "#EBF2FF" };
 }
 
 export function normalizeRecordPlan(value: unknown): SDTMRecordPlan {
