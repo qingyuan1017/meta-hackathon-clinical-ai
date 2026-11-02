@@ -841,6 +841,22 @@ export interface components {
             body: string;
             /** Todos */
             todos?: string[];
+            /** Tables */
+            tables?: components["schemas"]["CSDRGTable"][];
+            /**
+             * Evidence Controlled
+             * @default false
+             */
+            evidence_controlled?: boolean;
+        };
+        /** CSDRGTable */
+        CSDRGTable: {
+            /** Title */
+            title?: string | null;
+            /** Columns */
+            columns: string[];
+            /** Rows */
+            rows?: string[][];
         };
         /** EDCSourceCodeList */
         EDCSourceCodeList: {

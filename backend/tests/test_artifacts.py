@@ -196,7 +196,7 @@ def test_acrf_coverage_and_define_review_diagnostics(tmp_path) -> None:
     plan = SDTMPlan(
         study_name="SYN-ACRF",
         domain_mappings=[SDTMDomainMapping(source_dataset="RAW_DM", target_domain="DM", rationale="Synthetic")],
-        datasets=[SDTMDataset(domain="DM", description="Demographics", record_plan=read_plan("DM", "RAW_DM"), variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", sources=[source("RAW_DM", "AGE")], crf_source_label="Age", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGEU = 'YEARS'", label="Age in years", data_type="Num", mapping_expression="Direct", sources=[source("RAW_DM", "AGE")])]), SDTMVariable(name="SEX", label="Sex", sources=[source("RAW_DM", "SEX")], crf_source_label="Sex"), SDTMVariable(name="RACE", label="Race", sources=[source("RAW_DM", "RACE")])])],
+        datasets=[SDTMDataset(domain="DM", description="Demographics", record_plan=read_plan("DM", "RAW_DM"), variables=[SDTMVariable(name="AGE", label="Age", data_type="Num", sources=[source("RAW_DM", "AGE")], crf_source_label="Age", value_level_metadata=[SDTMValueLevelMetadata(where_clause="AGE = 18", label="Age in years", data_type="Num", mapping_expression="Direct", sources=[source("RAW_DM", "AGE")])]), SDTMVariable(name="SEX", label="Sex", sources=[source("RAW_DM", "SEX")], crf_source_label="Sex"), SDTMVariable(name="RACE", label="Race", sources=[source("RAW_DM", "RACE")], comment="Multiple selections are represented using sponsor-defined lineage.")])],
         rule_augmentations=[SDTMRuleAugmentation(rule_id="DM-AGE", target_domain="DM", target_variable="AGE", description="Direct", logic="Direct", r_expression='.data[["AGE"]]', sas_expression="AGE"), SDTMRuleAugmentation(rule_id="DM-SEX", target_domain="DM", target_variable="SEX", description="Direct", logic="Direct", r_expression='.data[["SEX"]]', sas_expression="SEX"), SDTMRuleAugmentation(rule_id="DM-RACE", target_domain="DM", target_variable="RACE", description="Direct", logic="Direct", r_expression='.data[["RACE"]]', sas_expression="RACE")],
     )
     paths = render_sdtm(plan, crf, tmp_path, ["r"])
@@ -223,8 +223,17 @@ def test_acrf_coverage_and_define_review_diagnostics(tmp_path) -> None:
     assert diagnostics["internal_references_valid"] is True
     assert diagnostics["xsd_validation"] == "not_run"
     tree = etree.parse(str(tmp_path / "define.xml"))
+    assert tree.docinfo.xml_version == "1.0"
+    assert tree.xpath("//*[local-name()='Standard'][@OID='STD.SDTMIG'][@Version='3.4']")
+    assert tree.xpath("//*[local-name()='ItemGroupDef'][@Name='DM'][@Domain='DM'][@SASDatasetName='DM']/*[local-name()='Class'][@Name='SPECIAL PURPOSE']")
+    assert tree.xpath("//*[local-name()='ItemRef'][@ItemOID='IT.DM.AGE'][@MethodOID='MT.DM.AGE']")
+    assert not tree.xpath("//*[local-name()='ItemDef'][@MethodOID]")
     assert tree.xpath("//*[local-name()='ValueListDef'][@OID='VL.DM.AGE']")
     assert tree.xpath("//*[local-name()='WhereClauseDef'][@OID='WC.DM.AGE.1']")
+    assert tree.xpath("//*[local-name()='ValueListDef']/*[local-name()='ItemRef']/*[local-name()='WhereClauseRef'][@WhereClauseOID='WC.DM.AGE.1']")
+    assert tree.xpath("//*[local-name()='WhereClauseDef'][@OID='WC.DM.AGE.1']/*[local-name()='RangeCheck'][@Comparator='EQ']/*[local-name()='CheckValue'][text()='18']")
+    assert tree.xpath("//*[local-name()='ItemDef'][@OID='IT.DM.RACE'][@*[local-name()='CommentOID']='COM.DM.RACE']")
+    assert tree.xpath("//*[local-name()='CommentDef'][@OID='COM.DM.RACE']")
     assert tree.xpath("//*[local-name()='leaf'][@ID='LF.ACRF'][@*[local-name()='href']='annotated-crf.pdf']")
     assert tree.xpath("//*[local-name()='DocumentRef'][@leafID='LF.ACRF']/*[local-name()='PDFPageRef'][@PageRefs='1']")
     item_ref = tree.xpath("//*[local-name()='ItemRef']")[0]
