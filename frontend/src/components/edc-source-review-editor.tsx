@@ -50,7 +50,7 @@ export interface EDCSourceSpecificationDraft extends Record<string, unknown> {
   unresolved_items: string[];
 }
 
-const inputClass = "focus-ring min-h-9 w-full rounded-md border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs text-slate-800 placeholder:text-slate-400";
+const inputClass = "focus-ring min-h-9 w-full rounded-md border border-white/10 bg-[#101012] px-2.5 py-2 text-xs text-zinc-200 placeholder:text-zinc-600";
 
 export function EDCSourceReviewEditor({ value, onChange, onApprove, saving, error }: {
   value: Record<string, unknown>;
@@ -103,45 +103,45 @@ export function EDCSourceReviewEditor({ value, onChange, onApprove, saving, erro
         <p className="mt-1 text-sm leading-6 text-amber-100/80">The uploaded EDC was normalized into a complete source-schema draft. Confirm dataset and variable identifiers before SDTM domain mapping begins.</p>
       </div>
 
-      <section className="rounded-xl border border-slate-200 bg-white/[0.02] p-4">
+      <section className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
         <label><EditorLabel>Study name</EditorLabel><input value={specification.study_name} onChange={(event) => update((next) => { next.study_name = event.target.value; })} className={inputClass} /></label>
       </section>
 
       <div className="flex flex-wrap items-center gap-2">
-        {specification.datasets.map((dataset) => <button type="button" key={dataset.name} onClick={() => setSelectedDataset(dataset.name)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${activeDataset?.name === dataset.name ? "border-teal-500/40 bg-teal-500/10 text-teal-800" : "border-slate-200 bg-white/[0.02] text-slate-500"}`}>{dataset.name}</button>)}
+        {specification.datasets.map((dataset) => <button type="button" key={dataset.name} onClick={() => setSelectedDataset(dataset.name)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${activeDataset?.name === dataset.name ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 bg-white/[0.02] text-zinc-500"}`}>{dataset.name}</button>)}
         <Button type="button" variant="outline" size="sm" onClick={addDataset}><Plus size={14} />Dataset</Button>
       </div>
 
       {activeDataset ? (
-        <section className="overflow-hidden rounded-xl border border-slate-200 bg-[#fffefa]">
-          <div className="grid gap-3 border-b border-slate-200 p-4 lg:grid-cols-[160px_minmax(180px,1fr)_130px_minmax(180px,1fr)_auto]">
+        <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]">
+          <div className="grid gap-3 border-b border-white/10 p-4 lg:grid-cols-[160px_minmax(180px,1fr)_130px_minmax(180px,1fr)_auto]">
             <label><EditorLabel>Dataset</EditorLabel><input value={activeDataset.name} onChange={(event) => update((next) => {
               const dataset = next.datasets.find((item) => item.name === activeDataset.name);
               if (!dataset) return;
               dataset.name = event.target.value.toUpperCase();
               setSelectedDataset(dataset.name);
-            })} className={`${inputClass} font-mono font-bold text-teal-800`} /></label>
+            })} className={`${inputClass} font-mono font-bold text-violet-200`} /></label>
             <label><EditorLabel>Label</EditorLabel><input value={activeDataset.label} onChange={(event) => updateDataset(update, activeDataset.name, "label", event.target.value)} className={inputClass} /></label>
             <label><EditorLabel>Source type</EditorLabel><select value={activeDataset.source_type} onChange={(event) => updateDataset(update, activeDataset.name, "source_type", event.target.value)} className={inputClass}><option value="raw">Raw</option><option value="sdtm">Existing SDTM</option></select></label>
             <label><EditorLabel>Structure</EditorLabel><input value={activeDataset.structure} onChange={(event) => updateDataset(update, activeDataset.name, "structure", event.target.value)} className={inputClass} /></label>
             <button type="button" aria-label={`Remove ${activeDataset.name}`} onClick={() => update((next) => {
               next.datasets = next.datasets.filter((dataset) => dataset.name !== activeDataset.name);
               setSelectedDataset(next.datasets[0]?.name ?? "");
-            })} className="mt-5 grid h-9 w-9 place-items-center rounded-md text-slate-400 hover:bg-rose-500/10 hover:text-rose-700"><Trash2 size={15} /></button>
+            })} className="mt-5 grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={15} /></button>
           </div>
-          <div className="grid gap-3 border-b border-slate-200 px-4 py-3 md:grid-cols-[minmax(220px,1fr)_minmax(180px,1fr)_120px_minmax(240px,1fr)]">
+          <div className="grid gap-3 border-b border-white/10 px-4 py-3 md:grid-cols-[minmax(220px,1fr)_minmax(180px,1fr)_120px_minmax(240px,1fr)]">
             <label><EditorLabel>Dataset source file</EditorLabel><input value={activeDataset.provenance.file} onChange={(event) => updateDataset(update, activeDataset.name, "provenance", { ...activeDataset.provenance, file: event.target.value })} className={inputClass} /></label>
             <label><EditorLabel>Dataset source sheet</EditorLabel><input value={activeDataset.provenance.sheet ?? ""} onChange={(event) => updateDataset(update, activeDataset.name, "provenance", { ...activeDataset.provenance, sheet: event.target.value || null })} className={inputClass} /></label>
             <label><EditorLabel>Dataset source row</EditorLabel><input type="number" min={1} value={activeDataset.provenance.row ?? ""} onChange={(event) => updateDataset(update, activeDataset.name, "provenance", { ...activeDataset.provenance, row: event.target.value ? Number(event.target.value) : null })} className={inputClass} /></label>
-            <label><EditorLabel>JSON path</EditorLabel><input value={activeDataset.provenance.json_path ?? ""} readOnly placeholder="Not a JSON source" className={`${inputClass} font-mono text-slate-600`} /></label>
+            <label><EditorLabel>JSON path</EditorLabel><input value={activeDataset.provenance.json_path ?? ""} readOnly placeholder="Not a JSON source" className={`${inputClass} font-mono text-zinc-400`} /></label>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3">
-            <p className="text-xs text-slate-500">Check Key for variables that identify records. Provenance remains editable when the agent could not resolve a location.</p>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+            <p className="text-xs text-zinc-500">Check Key for variables that identify records. Provenance remains editable when the agent could not resolve a location.</p>
             <Button type="button" variant="outline" size="sm" onClick={addVariable}><Plus size={14} />Variable</Button>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[1700px] border-collapse text-left text-xs">
-              <thead className="bg-slate-50 text-[10px] uppercase tracking-wider text-slate-500"><tr>{["Variable", "Label", "Type", "Length / format", "Required / key", "Codelist", "Form / question", "Provenance", ""].map((heading) => <th key={heading} className="border-b border-r border-slate-200 px-3 py-2.5 font-black last:border-r-0">{heading}</th>)}</tr></thead>
+              <thead className="bg-white/[0.03] text-[10px] uppercase tracking-wider text-zinc-500"><tr>{["Variable", "Label", "Type", "Length / format", "Required / key", "Codelist", "Form / question", "Provenance", ""].map((heading) => <th key={heading} className="border-b border-r border-white/10 px-3 py-2.5 font-black last:border-r-0">{heading}</th>)}</tr></thead>
               <tbody>{activeDataset.variables.map((variable, index) => <VariableRow key={`${variable.name}-${index}`} variable={variable} isKey={activeDataset.key_variables.includes(variable.name)} codelistNames={codelistNames} onUpdate={(key, nextValue) => update((next) => {
                 const dataset = next.datasets.find((item) => item.name === activeDataset.name);
                 const target = dataset?.variables[index];
@@ -162,10 +162,10 @@ export function EDCSourceReviewEditor({ value, onChange, onApprove, saving, erro
             </table>
           </div>
         </section>
-      ) : <div className="grid min-h-52 place-items-center rounded-xl border border-dashed border-slate-300 text-sm text-slate-500">Add at least one source dataset.</div>}
+      ) : <div className="grid min-h-52 place-items-center rounded-xl border border-dashed border-white/15 text-sm text-zinc-500">Add at least one source dataset.</div>}
 
-      <section className="space-y-3 rounded-xl border border-slate-200 bg-white/[0.02] p-4">
-        <div className="flex items-center justify-between"><div><p className="text-xs font-black uppercase tracking-[0.12em] text-slate-600">Source codelists</p><p className="mt-1 text-xs text-slate-400">Variables may reference one of these names.</p></div><Button type="button" variant="outline" size="sm" onClick={() => update((next) => { next.codelists.push({ name: uniqueName("NEW_CODELIST", next.codelists.map((item) => item.name)), values: [] }); })}><Plus size={14} />Codelist</Button></div>
+      <section className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+        <div className="flex items-center justify-between"><div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">Source codelists</p><p className="mt-1 text-xs text-zinc-600">Variables may reference one of these names.</p></div><Button type="button" variant="outline" size="sm" onClick={() => update((next) => { next.codelists.push({ name: uniqueName("NEW_CODELIST", next.codelists.map((item) => item.name)), values: [] }); })}><Plus size={14} />Codelist</Button></div>
         {specification.codelists.map((codelist, index) => <div key={`${codelist.name}-${index}`} className="grid gap-2 md:grid-cols-[220px_minmax(0,1fr)_36px]"><input value={codelist.name} onChange={(event) => update((next) => {
           const previous = next.codelists[index].name;
           next.codelists[index].name = event.target.value;
@@ -174,7 +174,7 @@ export function EDCSourceReviewEditor({ value, onChange, onApprove, saving, erro
           const removed = next.codelists[index].name;
           next.codelists.splice(index, 1);
           next.datasets.forEach((dataset) => dataset.variables.forEach((variable) => { if (variable.codelist === removed) variable.codelist = null; }));
-        })} className="grid h-9 w-9 place-items-center rounded-md text-slate-400 hover:bg-rose-500/10 hover:text-rose-700"><Trash2 size={14} /></button></div>)}
+        })} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={14} /></button></div>)}
       </section>
 
       <section className="grid gap-4 md:grid-cols-2">
@@ -182,8 +182,8 @@ export function EDCSourceReviewEditor({ value, onChange, onApprove, saving, erro
         <label><EditorLabel>Unresolved items — one per line</EditorLabel><textarea value={specification.unresolved_items.join("\n")} onChange={(event) => update((next) => { next.unresolved_items = splitLines(event.target.value); })} className={`${inputClass} min-h-28`} /></label>
       </section>
 
-      <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-slate-300 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-        <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="flex items-center gap-2 text-xs font-bold text-emerald-700"><Database size={15} />Source references are ready for backend validation.</p>}{error && <p className="mt-1 text-xs text-rose-700">{error}</p>}</div>
+      <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+        <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="flex items-center gap-2 text-xs font-bold text-emerald-300"><Database size={15} />Source references are ready for backend validation.</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div>
         <Button type="button" variant="clinical" onClick={() => onApprove(specification)} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Approving and resuming…" : "Approve source and begin SDTM mapping"}</Button>
       </div>
     </div>
@@ -191,7 +191,7 @@ export function EDCSourceReviewEditor({ value, onChange, onApprove, saving, erro
 }
 
 function VariableRow({ variable, isKey, codelistNames, onUpdate, onToggleKey, onRemove }: { variable: SourceVariable; isKey: boolean; codelistNames: Set<string>; onUpdate: (key: keyof SourceVariable, value: unknown) => void; onToggleKey: (checked: boolean) => void; onRemove: () => void }) {
-  return <tr className="align-top hover:bg-white/[0.015]"><td className="border-b border-r border-slate-200 p-2"><input value={variable.name} onChange={(event) => onUpdate("name", event.target.value.toUpperCase())} className={`${inputClass} font-mono font-bold text-teal-800`} /></td><td className="border-b border-r border-slate-200 p-2"><input value={variable.label} onChange={(event) => onUpdate("label", event.target.value)} className={inputClass} /></td><td className="border-b border-r border-slate-200 p-2"><select value={variable.data_type} onChange={(event) => onUpdate("data_type", event.target.value)} className={inputClass}>{["text", "integer", "decimal", "date", "datetime", "boolean", "coded", "unknown"].map((type) => <option key={type} value={type}>{type}</option>)}</select></td><td className="min-w-44 border-b border-r border-slate-200 p-2"><input type="number" min={1} value={variable.length ?? ""} onChange={(event) => onUpdate("length", event.target.value ? Number(event.target.value) : null)} placeholder="Length" className={inputClass} /><input value={variable.format ?? ""} onChange={(event) => onUpdate("format", event.target.value || null)} placeholder="Format" className={`${inputClass} mt-1`} /></td><td className="border-b border-r border-slate-200 p-2"><label className="flex items-center gap-2 py-1 text-slate-700"><input type="checkbox" checked={variable.required} onChange={(event) => onUpdate("required", event.target.checked)} />Required</label><label className="flex items-center gap-2 py-1 text-slate-700"><input type="checkbox" checked={isKey} onChange={(event) => onToggleKey(event.target.checked)} />Key</label></td><td className="border-b border-r border-slate-200 p-2"><input value={variable.codelist ?? ""} onChange={(event) => onUpdate("codelist", event.target.value || null)} placeholder="Codelist" className={`${inputClass} ${variable.codelist && !codelistNames.has(variable.codelist) ? "border-amber-500/50" : ""}`} /></td><td className="min-w-52 border-b border-r border-slate-200 p-2"><input value={variable.form_id ?? ""} onChange={(event) => onUpdate("form_id", event.target.value || null)} placeholder="Form ID" className={inputClass} /><input value={variable.question ?? ""} onChange={(event) => onUpdate("question", event.target.value || null)} placeholder="Question / prompt" className={`${inputClass} mt-1`} /></td><td className="min-w-60 border-b border-r border-slate-200 p-2"><input value={variable.provenance.file} onChange={(event) => onUpdate("provenance", { ...variable.provenance, file: event.target.value })} placeholder="File" className={inputClass} /><input value={variable.provenance.json_path ?? ""} readOnly placeholder="JSON path" className={`${inputClass} mt-1 font-mono text-slate-500`} /><div className="mt-1 grid grid-cols-[1fr_90px] gap-1"><input value={variable.provenance.sheet ?? ""} onChange={(event) => onUpdate("provenance", { ...variable.provenance, sheet: event.target.value || null })} placeholder="Sheet" className={inputClass} /><input type="number" min={1} value={variable.provenance.row ?? ""} onChange={(event) => onUpdate("provenance", { ...variable.provenance, row: event.target.value ? Number(event.target.value) : null })} placeholder="Row" className={inputClass} /></div></td><td className="border-b border-slate-200 p-2"><button type="button" aria-label={`Remove ${variable.name}`} onClick={onRemove} className="grid h-9 w-9 place-items-center rounded-md text-slate-400 hover:bg-rose-500/10 hover:text-rose-700"><Trash2 size={14} /></button></td></tr>;
+  return <tr className="align-top hover:bg-white/[0.015]"><td className="border-b border-r border-white/[0.07] p-2"><input value={variable.name} onChange={(event) => onUpdate("name", event.target.value.toUpperCase())} className={`${inputClass} font-mono font-bold text-violet-200`} /></td><td className="border-b border-r border-white/[0.07] p-2"><input value={variable.label} onChange={(event) => onUpdate("label", event.target.value)} className={inputClass} /></td><td className="border-b border-r border-white/[0.07] p-2"><select value={variable.data_type} onChange={(event) => onUpdate("data_type", event.target.value)} className={inputClass}>{["text", "integer", "decimal", "date", "datetime", "boolean", "coded", "unknown"].map((type) => <option key={type} value={type}>{type}</option>)}</select></td><td className="min-w-44 border-b border-r border-white/[0.07] p-2"><input type="number" min={1} value={variable.length ?? ""} onChange={(event) => onUpdate("length", event.target.value ? Number(event.target.value) : null)} placeholder="Length" className={inputClass} /><input value={variable.format ?? ""} onChange={(event) => onUpdate("format", event.target.value || null)} placeholder="Format" className={`${inputClass} mt-1`} /></td><td className="border-b border-r border-white/[0.07] p-2"><label className="flex items-center gap-2 py-1 text-zinc-300"><input type="checkbox" checked={variable.required} onChange={(event) => onUpdate("required", event.target.checked)} />Required</label><label className="flex items-center gap-2 py-1 text-zinc-300"><input type="checkbox" checked={isKey} onChange={(event) => onToggleKey(event.target.checked)} />Key</label></td><td className="border-b border-r border-white/[0.07] p-2"><input value={variable.codelist ?? ""} onChange={(event) => onUpdate("codelist", event.target.value || null)} placeholder="Codelist" className={`${inputClass} ${variable.codelist && !codelistNames.has(variable.codelist) ? "border-amber-500/50" : ""}`} /></td><td className="min-w-52 border-b border-r border-white/[0.07] p-2"><input value={variable.form_id ?? ""} onChange={(event) => onUpdate("form_id", event.target.value || null)} placeholder="Form ID" className={inputClass} /><input value={variable.question ?? ""} onChange={(event) => onUpdate("question", event.target.value || null)} placeholder="Question / prompt" className={`${inputClass} mt-1`} /></td><td className="min-w-60 border-b border-r border-white/[0.07] p-2"><input value={variable.provenance.file} onChange={(event) => onUpdate("provenance", { ...variable.provenance, file: event.target.value })} placeholder="File" className={inputClass} /><input value={variable.provenance.json_path ?? ""} readOnly placeholder="JSON path" className={`${inputClass} mt-1 font-mono text-zinc-500`} /><div className="mt-1 grid grid-cols-[1fr_90px] gap-1"><input value={variable.provenance.sheet ?? ""} onChange={(event) => onUpdate("provenance", { ...variable.provenance, sheet: event.target.value || null })} placeholder="Sheet" className={inputClass} /><input type="number" min={1} value={variable.provenance.row ?? ""} onChange={(event) => onUpdate("provenance", { ...variable.provenance, row: event.target.value ? Number(event.target.value) : null })} placeholder="Row" className={inputClass} /></div></td><td className="border-b border-white/[0.07] p-2"><button type="button" aria-label={`Remove ${variable.name}`} onClick={onRemove} className="grid h-9 w-9 place-items-center rounded-md text-zinc-600 hover:bg-rose-500/10 hover:text-rose-300"><Trash2 size={14} /></button></td></tr>;
 }
 
 function normalizeSpecification(value: Record<string, unknown>): EDCSourceSpecificationDraft {
@@ -244,4 +244,4 @@ function splitLines(value: string): string[] { return value.split("\n").map((ite
 function stringValue(value: unknown, fallback: string): string { return typeof value === "string" ? value : fallback; }
 function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
 function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
-function EditorLabel({ children }: { children: ReactNode }) { return <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-slate-500">{children}</span>; }
+function EditorLabel({ children }: { children: ReactNode }) { return <span className="mb-1.5 block text-[10px] font-black uppercase tracking-[0.12em] text-zinc-500">{children}</span>; }
