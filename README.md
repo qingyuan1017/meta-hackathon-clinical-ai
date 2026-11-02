@@ -174,6 +174,7 @@ See [`mobile/README.md`](mobile/README.md) for physical-device networking and na
 | `META_API_KEY` | Server-side Meta API credential |
 | `META_API_BASE_URL` | OpenAI-compatible Meta Model API endpoint; defaults to `https://api.meta.ai/v1` |
 | `META_MODEL` | Exact model ID enabled for the account |
+| `AI_TIMEOUT_SECONDS` | Timeout for each Meta model request; defaults to 180 seconds. Use 360 for slower structured SDTM responses |
 | `AGENT_MAX_TURNS` | Maximum turns for one specialist-agent run; defaults to 20 |
 | `AGENT_MAX_REMOTE_TOOL_CALLS` | Maximum optional MCP calls per agent run; defaults to 6 |
 | `SDTM_DOMAIN_AGENT_CONCURRENCY` | Maximum simultaneous SDTM per-domain agents for variable mapping and rule augmentation; defaults to 4 |
