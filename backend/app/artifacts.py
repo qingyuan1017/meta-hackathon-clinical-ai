@@ -639,10 +639,7 @@ def _annotate_crf(result: SDTMPlan, crf_path: Path, path: Path, coverage_path: P
     for dataset in result.datasets:
         for variable in dataset.variables:
             matches: list[tuple[fitz.Page, fitz.Rect]] = []
-            needle = (
-                variable.crf_source_label
-                or (variable.sources[0].variable if len(variable.sources) == 1 else "")
-            ).strip()
+            needle = (variable.crf_source_label or "").strip()
             if needle and len(needle) >= 2:
                 for page in document:
                     for rect in page.search_for(needle):
