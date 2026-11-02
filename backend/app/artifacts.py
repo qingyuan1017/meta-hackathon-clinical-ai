@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import copy
+from datetime import datetime, timezone
 import hashlib
 import json
 import re
@@ -421,8 +422,20 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
     odm_ns = "http://www.cdisc.org/ns/odm/v1.3"
     def_ns = "http://www.cdisc.org/ns/def/v2.1"
     xlink_ns = "http://www.w3.org/1999/xlink"
-    root = etree.Element(f"{{{odm_ns}}}ODM", nsmap={None: odm_ns, "def": def_ns, "xlink": xlink_ns}, FileOID="WORKBENCH.DEFINE", ODMVersion="1.3.2", FileType="Snapshot")
+    root = etree.Element(
+        f"{{{odm_ns}}}ODM",
+        nsmap={None: odm_ns, "def": def_ns, "xlink": xlink_ns},
+        FileOID=f"WORKBENCH.DEFINE.{_define_oid_token(result.study_name)}",
+        ODMVersion="1.3.2",
+        FileType="Snapshot",
+        CreationDateTime=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        Originator="Clinical AI Artifact Workbench",
+        SourceSystem="Clinical AI Artifact Workbench",
+        SourceSystemVersion="0.1.0",
+    )
+    root.set(f"{{{def_ns}}}Context", "Other")
     root.addprevious(etree.Comment(DISCLAIMER))
+    root.addprevious(etree.ProcessingInstruction("xml-stylesheet", 'type="text/xsl" href="define.xsl"'))
     study = etree.SubElement(root, f"{{{odm_ns}}}Study", OID="STUDY.1")
     global_variables = etree.SubElement(study, f"{{{odm_ns}}}GlobalVariables")
     etree.SubElement(global_variables, f"{{{odm_ns}}}StudyName").text = result.study_name
@@ -432,6 +445,16 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
     metadata.set(f"{{{def_ns}}}DefineVersion", result.define_standard.replace("Define-XML ", ""))
     metadata.set(f"{{{def_ns}}}StandardName", "SDTM-IG")
     metadata.set(f"{{{def_ns}}}StandardVersion", result.standard.replace("SDTMIG ", ""))
+    standards = etree.SubElement(metadata, f"{{{def_ns}}}Standards")
+    etree.SubElement(
+        standards,
+        f"{{{def_ns}}}Standard",
+        OID="STD.SDTMIG",
+        Name="SDTMIG",
+        Type="IG",
+        Version=result.standard.replace("SDTMIG ", ""),
+        Status="Final",
+    )
     annotations = {
         (str(item.get("domain", "")).upper(), str(item.get("variable", "")).upper()): item
         for item in (acrf_annotations or [])
@@ -444,28 +467,53 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
     csdrg_leaf.set(f"{{{xlink_ns}}}href", "csdrg.pdf")
     etree.SubElement(csdrg_leaf, f"{{{def_ns}}}title").text = "Clinical Study Data Reviewer's Guide"
     methods = {(rule.target_domain.upper(), rule.target_variable.upper()): rule for rule in result.rule_augmentations}
+    comments: list[tuple[str, str]] = []
     for dataset in result.datasets:
-        group = etree.SubElement(metadata, f"{{{odm_ns}}}ItemGroupDef", OID=f"IG.{dataset.domain}", Name=dataset.domain, Repeating="Yes", IsReferenceData="No", Purpose=dataset.purpose)
-        group.set(f"{{{def_ns}}}Class", dataset.dataset_class)
+        domain = dataset.domain.upper()
+        is_reference = domain in {"TA", "TD", "TE", "TI", "TM", "TS", "TV"}
+        group = etree.SubElement(
+            metadata,
+            f"{{{odm_ns}}}ItemGroupDef",
+            OID=f"IG.{domain}",
+            Name=domain,
+            Domain=domain,
+            Repeating="No" if is_reference else "Yes",
+            IsReferenceData="Yes" if is_reference else "No",
+            SASDatasetName=domain,
+            Purpose=dataset.purpose,
+        )
         group.set(f"{{{def_ns}}}Structure", dataset.structure)
-        group.set(f"{{{def_ns}}}ArchiveLocationID", f"LF.{dataset.domain}")
+        group.set(f"{{{def_ns}}}StandardOID", "STD.SDTMIG")
+        group.set(f"{{{def_ns}}}ArchiveLocationID", f"LF.{domain}")
         etree.SubElement(group, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, dataset.description))
+        key_variables = [item.upper() for item in dataset.key_variables]
         for order, variable in enumerate(dataset.variables, 1):
-            reference = etree.SubElement(group, f"{{{odm_ns}}}ItemRef", ItemOID=f"IT.{dataset.domain}.{variable.name}", OrderNumber=str(order), Mandatory="Yes" if variable.core == "Req" else "No")
-            if variable.name in dataset.key_variables:
-                reference.set(f"{{{def_ns}}}KeySequence", str(dataset.key_variables.index(variable.name) + 1))
+            variable_name = variable.name.upper()
+            reference = etree.SubElement(group, f"{{{odm_ns}}}ItemRef", ItemOID=f"IT.{domain}.{variable_name}", OrderNumber=str(order), Mandatory="Yes" if variable.core == "Req" else "No")
+            if variable_name in key_variables:
+                reference.set("KeySequence", str(key_variables.index(variable_name) + 1))
             if variable.role:
-                reference.set(f"{{{def_ns}}}Role", variable.role)
-            item = etree.SubElement(metadata, f"{{{odm_ns}}}ItemDef", OID=f"IT.{dataset.domain}.{variable.name}", Name=variable.name, DataType="text" if variable.data_type == "Char" else "float", Length=str(variable.length or (200 if variable.data_type == "Char" else 8)))
-            if variable.core:
-                item.set(f"{{{def_ns}}}Core", variable.core)
+                reference.set("Role", variable.role)
+            rule = methods.get((domain, variable_name))
+            if rule:
+                reference.set("MethodOID", f"MT.{domain}.{variable_name}")
+            item = etree.SubElement(
+                metadata,
+                f"{{{odm_ns}}}ItemDef",
+                OID=f"IT.{domain}.{variable_name}",
+                Name=variable_name,
+                DataType="text" if variable.data_type == "Char" else "float",
+                Length=str(variable.length or (200 if variable.data_type == "Char" else 8)),
+                SASFieldName=variable_name[:8],
+            )
             if variable.format:
                 item.set("DisplayFormat", variable.format)
             if variable.value_level_metadata:
-                item.set(f"{{{def_ns}}}ValueListOID", f"VL.{dataset.domain}.{variable.name}")
+                item.set(f"{{{def_ns}}}ValueListOID", f"VL.{domain}.{variable_name}")
             description = etree.SubElement(item, f"{{{odm_ns}}}Description")
             description.append(_translated_text(odm_ns, variable.label))
-            origin = etree.SubElement(item, f"{{{def_ns}}}Origin", Type=variable.origin)
+            origin_type, origin_source = _define_origin(variable.origin)
+            origin = etree.SubElement(item, f"{{{def_ns}}}Origin", Type=origin_type, Source=origin_source)
             origin_description = etree.SubElement(origin, f"{{{odm_ns}}}Description")
             origin_description.append(
                 _translated_text(
@@ -473,7 +521,7 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
                     _source_reference_text(variable.sources) or variable.mapping_expression,
                 )
             )
-            annotation = annotations.get((dataset.domain.upper(), variable.name.upper()))
+            annotation = annotations.get((domain, variable_name))
             if annotation and annotation.get("page"):
                 document_reference = etree.SubElement(origin, f"{{{def_ns}}}DocumentRef", leafID="LF.ACRF")
                 etree.SubElement(
@@ -482,70 +530,158 @@ def _render_define_xml(result: SDTMPlan, path: Path, acrf_annotations: list[dict
                     PageRefs=str(annotation["page"]),
                     Type="PhysicalRef",
                 )
-            rule = methods.get((dataset.domain.upper(), variable.name.upper()))
-            if rule:
-                item.set(f"{{{def_ns}}}MethodOID", f"MT.{dataset.domain}.{variable.name}")
             if variable.controlled_terms:
-                etree.SubElement(item, f"{{{odm_ns}}}CodeListRef", CodeListOID=f"CL.{dataset.domain}.{variable.name}")
+                etree.SubElement(item, f"{{{odm_ns}}}CodeListRef", CodeListOID=f"CL.{domain}.{variable_name}")
             if variable.comment:
-                comment = etree.SubElement(item, f"{{{def_ns}}}CommentDef", OID=f"COM.{dataset.domain}.{variable.name}")
-                etree.SubElement(comment, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, variable.comment))
-        leaf = etree.SubElement(group, f"{{{def_ns}}}leaf", ID=f"LF.{dataset.domain}")
-        leaf.set(f"{{{xlink_ns}}}href", f"{dataset.domain.lower()}.xpt")
-        etree.SubElement(leaf, f"{{{def_ns}}}title").text = f"{dataset.domain.lower()}.xpt"
+                comment_oid = f"COM.{domain}.{variable_name}"
+                item.set(f"{{{def_ns}}}CommentOID", comment_oid)
+                comments.append((comment_oid, variable.comment))
+        etree.SubElement(group, f"{{{def_ns}}}Class", Name=dataset.dataset_class.upper())
+        leaf = etree.SubElement(group, f"{{{def_ns}}}leaf", ID=f"LF.{domain}")
+        leaf.set(f"{{{xlink_ns}}}href", f"{domain.lower()}.xpt")
+        etree.SubElement(leaf, f"{{{def_ns}}}title").text = f"{domain.lower()}.xpt"
     for dataset in result.datasets:
+        available_variable_names = {item.name.upper() for item in dataset.variables}
         for variable in dataset.variables:
-            rule = methods.get((dataset.domain.upper(), variable.name.upper()))
+            domain = dataset.domain.upper()
+            variable_name = variable.name.upper()
+            rule = methods.get((domain, variable_name))
             if rule:
-                method = etree.SubElement(metadata, f"{{{def_ns}}}MethodDef", OID=f"MT.{dataset.domain}.{variable.name}", Name=rule.description, Type="Computation")
+                method = etree.SubElement(metadata, f"{{{odm_ns}}}MethodDef", OID=f"MT.{domain}.{variable_name}", Name=rule.description, Type="Computation")
                 etree.SubElement(method, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, rule.logic))
             if variable.controlled_terms:
-                codelist = etree.SubElement(metadata, f"{{{odm_ns}}}CodeList", OID=f"CL.{dataset.domain}.{variable.name}", Name=f"{dataset.domain}.{variable.name}", DataType="text")
-                for term in variable.controlled_terms:
-                    coded = etree.SubElement(codelist, f"{{{odm_ns}}}CodeListItem", CodedValue=term)
+                codelist = etree.SubElement(metadata, f"{{{odm_ns}}}CodeList", OID=f"CL.{domain}.{variable_name}", Name=f"{domain}.{variable_name}", DataType="text")
+                for order, term in enumerate(variable.controlled_terms, 1):
+                    coded = etree.SubElement(codelist, f"{{{odm_ns}}}CodeListItem", CodedValue=term, OrderNumber=str(order))
                     etree.SubElement(coded, f"{{{odm_ns}}}Decode").append(_translated_text(odm_ns, term))
             if variable.value_level_metadata:
-                value_list = etree.SubElement(metadata, f"{{{def_ns}}}ValueListDef", OID=f"VL.{dataset.domain}.{variable.name}")
+                value_list = etree.SubElement(metadata, f"{{{def_ns}}}ValueListDef", OID=f"VL.{domain}.{variable_name}")
                 for index, value_metadata in enumerate(variable.value_level_metadata, 1):
-                    item_oid = f"IT.{dataset.domain}.{variable.name}.VL{index}"
-                    where_oid = f"WC.{dataset.domain}.{variable.name}.{index}"
+                    item_oid = f"IT.{domain}.{variable_name}.VL{index}"
+                    where_oid = f"WC.{domain}.{variable_name}.{index}"
                     etree.SubElement(
-                        value_list,
-                        f"{{{odm_ns}}}ItemRef",
-                        ItemOID=item_oid,
-                        OrderNumber=str(index),
-                        Mandatory="No",
-                        **{f"{{{def_ns}}}WhereClauseOID": where_oid},
+                        value_list, f"{{{odm_ns}}}ItemRef", ItemOID=item_oid, OrderNumber=str(index), Mandatory="No"
                     )
+                    value_reference = value_list[-1]
+                    etree.SubElement(value_reference, f"{{{def_ns}}}WhereClauseRef", WhereClauseOID=where_oid)
                     value_item = etree.SubElement(
                         metadata,
                         f"{{{odm_ns}}}ItemDef",
                         OID=item_oid,
-                        Name=variable.name,
+                        Name=variable_name,
                         DataType="text" if value_metadata.data_type == "Char" else "float",
+                        Length="200" if value_metadata.data_type == "Char" else "8",
+                        SASFieldName=variable_name[:8],
                     )
                     etree.SubElement(value_item, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, value_metadata.label))
-                    value_origin = etree.SubElement(value_item, f"{{{def_ns}}}Origin", Type=value_metadata.origin)
+                    value_origin_type, value_origin_source = _define_origin(value_metadata.origin)
+                    value_origin = etree.SubElement(value_item, f"{{{def_ns}}}Origin", Type=value_origin_type, Source=value_origin_source)
                     etree.SubElement(value_origin, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, value_metadata.mapping_expression))
                     if value_metadata.controlled_terms:
-                        value_codelist_oid = f"CL.{dataset.domain}.{variable.name}.VL{index}"
+                        value_codelist_oid = f"CL.{domain}.{variable_name}.VL{index}"
                         etree.SubElement(value_item, f"{{{odm_ns}}}CodeListRef", CodeListOID=value_codelist_oid)
-                        value_codelist = etree.SubElement(metadata, f"{{{odm_ns}}}CodeList", OID=value_codelist_oid, Name=f"{dataset.domain}.{variable.name} value-level {index}", DataType="text")
-                        for term in value_metadata.controlled_terms:
-                            coded = etree.SubElement(value_codelist, f"{{{odm_ns}}}CodeListItem", CodedValue=term)
+                        value_codelist = etree.SubElement(metadata, f"{{{odm_ns}}}CodeList", OID=value_codelist_oid, Name=f"{domain}.{variable_name} value-level {index}", DataType="text")
+                        for order, term in enumerate(value_metadata.controlled_terms, 1):
+                            coded = etree.SubElement(value_codelist, f"{{{odm_ns}}}CodeListItem", CodedValue=term, OrderNumber=str(order))
                             etree.SubElement(coded, f"{{{odm_ns}}}Decode").append(_translated_text(odm_ns, term))
                     where = etree.SubElement(metadata, f"{{{def_ns}}}WhereClauseDef", OID=where_oid)
                     etree.SubElement(where, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, value_metadata.where_clause))
+                    for condition_variable, comparator, values in _parse_define_where_clause(value_metadata.where_clause):
+                        if condition_variable not in available_variable_names:
+                            continue
+                        range_check = etree.SubElement(where, f"{{{odm_ns}}}RangeCheck", Comparator=comparator, SoftHard="Soft")
+                        range_check.set(f"{{{def_ns}}}ItemOID", f"IT.{domain}.{condition_variable}")
+                        for value in values:
+                            etree.SubElement(range_check, f"{{{odm_ns}}}CheckValue").text = value
+    for comment_oid, text in comments:
+        comment = etree.SubElement(metadata, f"{{{def_ns}}}CommentDef", OID=comment_oid)
+        etree.SubElement(comment, f"{{{odm_ns}}}Description").append(_translated_text(odm_ns, text))
     tree = etree.ElementTree(root)
     tree.write(str(path), encoding="UTF-8", xml_declaration=True, pretty_print=True)
     etree.parse(str(path))
     return path
 
 
+def _define_oid_token(value: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-.")
+    return token or "STUDY"
+
+
+def _define_origin(value: str) -> tuple[str, str]:
+    normalized = value.strip().lower()
+    if normalized in {"crf", "collected", "edc"}:
+        return "Collected", "Investigator"
+    if normalized == "protocol":
+        return "Protocol", "Sponsor"
+    if normalized in {"derived", "assigned"}:
+        return normalized.title(), "Sponsor"
+    return value.strip() or "Assigned", "Sponsor"
+
+
+def _parse_define_where_clause(expression: str) -> list[tuple[str, str, list[str]]]:
+    """Translate common reviewed VLM predicates into Define-XML RangeCheck nodes."""
+
+    comparator_map = {"=": "EQ", "==": "EQ", "!=": "NE", "<>": "NE", "<": "LT", "<=": "LE", ">": "GT", ">=": "GE"}
+    results: list[tuple[str, str, list[str]]] = []
+    for clause in re.split(r"\s+AND\s+", expression.strip(), flags=re.IGNORECASE):
+        in_match = re.fullmatch(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s+(NOT\s+IN|IN)\s*\((.*)\)\s*", clause, flags=re.IGNORECASE)
+        if in_match:
+            values = [item.strip().strip("'\"") for item in re.split(r"\s*,\s*", in_match.group(3)) if item.strip()]
+            if values:
+                results.append((in_match.group(1).upper(), "NOTIN" if in_match.group(2).upper().startswith("NOT") else "IN", values))
+                continue
+        comparison = re.fullmatch(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*(==|!=|<>|<=|>=|=|<|>)\s*(.*?)\s*", clause)
+        if comparison and comparison.group(3):
+            results.append(
+                (
+                    comparison.group(1).upper(),
+                    comparator_map[comparison.group(2)],
+                    [comparison.group(3).strip().strip("'\"")],
+                )
+            )
+            continue
+        return []
+    return results
+
+
 def _render_define_stylesheet(path: Path) -> Path:
     path.write_text("""<?xml version="1.0" encoding="UTF-8"?>
-<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:odm="http://www.cdisc.org/ns/odm/v1.3">
-<xsl:output method="html" encoding="UTF-8"/><xsl:template match="/"><html><head><meta charset="utf-8"/><title>Define-XML review</title><style>body{font-family:system-ui;margin:2rem;color:#20242b}table{border-collapse:collapse;width:100%;margin:1rem 0}th,td{border:1px solid #ccd2da;padding:.5rem;text-align:left}th{background:#eef1f5}.notice{padding:1rem;background:#fff4ce;border:1px solid #e4b849}</style></head><body><h1>Define-XML review</h1><p class="notice">Draft review rendering. This view is not XSD or standards validation.</p><xsl:for-each select="//odm:ItemGroupDef"><h2><xsl:value-of select="@Name"/> — <xsl:value-of select="odm:Description/odm:TranslatedText"/></h2><table><tr><th>Variable</th><th>Order</th><th>Mandatory</th></tr><xsl:for-each select="odm:ItemRef"><tr><td><xsl:value-of select="@ItemOID"/></td><td><xsl:value-of select="@OrderNumber"/></td><td><xsl:value-of select="@Mandatory"/></td></tr></xsl:for-each></table></xsl:for-each></body></html></xsl:template></xsl:stylesheet>""", encoding="utf-8")
+<xsl:stylesheet version="1.0"
+  xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+  xmlns:odm="http://www.cdisc.org/ns/odm/v1.3"
+  xmlns:def="http://www.cdisc.org/ns/def/v2.1"
+  xmlns:xlink="http://www.w3.org/1999/xlink"
+  exclude-result-prefixes="odm def xlink">
+<xsl:output method="html" encoding="UTF-8"/>
+<xsl:template match="/">
+<html><head><meta charset="utf-8"/><title>Define-XML review</title>
+<style>
+:root{color-scheme:light}body{font-family:Inter,system-ui,sans-serif;margin:0;color:#172033;background:#f8fafc;line-height:1.45}.page{max-width:1500px;margin:auto;padding:2rem}.hero{background:#172554;color:white;padding:1.5rem 2rem;border-radius:14px}.hero h1{margin:0 0 .35rem}.hero p{margin:.2rem 0;color:#cbd5e1}.notice{padding:1rem;margin:1rem 0;background:#fff7ed;border:1px solid #fdba74;border-radius:10px;color:#9a3412}.card{background:white;border:1px solid #dbe3ee;border-radius:12px;padding:1.2rem;margin:1rem 0;box-shadow:0 2px 8px rgba(15,23,42,.05)}table{border-collapse:collapse;width:100%;margin:.75rem 0;font-size:.82rem}th,td{border:1px solid #cbd5e1;padding:.48rem;text-align:left;vertical-align:top}th{background:#e2e8f0;color:#0f172a;position:sticky;top:0}tr:nth-child(even) td{background:#f8fafc}.muted{color:#64748b}.pill{display:inline-block;padding:.15rem .45rem;border-radius:99px;background:#dbeafe;color:#1e40af;font-weight:700;font-size:.72rem}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.75rem}.metric{padding:.75rem;background:#eff6ff;border-radius:8px}.metric strong{display:block;font-size:1.2rem;color:#1e3a8a}a{color:#1d4ed8}code{font-family:ui-monospace,monospace;font-size:.78rem}h2{color:#172554;margin-bottom:.25rem}h3{color:#1e3a8a}</style></head>
+<body><div class="page">
+<div class="hero"><h1>Define-XML 2.1 metadata review</h1><p><strong><xsl:value-of select="//odm:StudyName"/></strong></p><p><xsl:value-of select="//odm:MetaDataVersion/@Name"/></p></div>
+<p class="notice"><strong>Draft review rendering.</strong> This human-readable view does not replace XSD validation, controlled terminology checks, or qualified standards review.</p>
+<div class="card"><h2>Submission metadata</h2><div class="grid">
+<div class="metric"><span class="muted">Define version</span><strong><xsl:value-of select="//odm:MetaDataVersion/@def:DefineVersion"/></strong></div>
+<div class="metric"><span class="muted">Standard</span><strong><xsl:value-of select="//odm:MetaDataVersion/@def:StandardName"/> <xsl:value-of select="//odm:MetaDataVersion/@def:StandardVersion"/></strong></div>
+<div class="metric"><span class="muted">Datasets</span><strong><xsl:value-of select="count(//odm:ItemGroupDef)"/></strong></div>
+<div class="metric"><span class="muted">Variables</span><strong><xsl:value-of select="count(//odm:ItemDef[not(contains(@OID,'.VL'))])"/></strong></div>
+<div class="metric"><span class="muted">Value lists</span><strong><xsl:value-of select="count(//def:ValueListDef)"/></strong></div>
+<div class="metric"><span class="muted">Methods</span><strong><xsl:value-of select="count(//odm:MethodDef)"/></strong></div>
+</div></div>
+<div class="card"><h2>Dataset inventory</h2><table><thead><tr><th>Dataset</th><th>Label</th><th>Class</th><th>Structure</th><th>Purpose</th><th>Variables</th><th>Location</th></tr></thead><tbody>
+<xsl:for-each select="//odm:ItemGroupDef"><tr><td><a href="#{@OID}"><strong><xsl:value-of select="@Name"/></strong></a></td><td><xsl:value-of select="odm:Description/odm:TranslatedText"/></td><td><xsl:value-of select="def:Class/@Name"/></td><td><xsl:value-of select="@def:Structure"/></td><td><xsl:value-of select="@Purpose"/></td><td><xsl:value-of select="count(odm:ItemRef)"/></td><td><a href="{def:leaf/@xlink:href}"><xsl:value-of select="def:leaf/def:title"/></a></td></tr></xsl:for-each>
+</tbody></table></div>
+<xsl:for-each select="//odm:ItemGroupDef"><div class="card" id="{@OID}"><h2><xsl:value-of select="@Name"/> - <xsl:value-of select="odm:Description/odm:TranslatedText"/></h2><p class="muted"><xsl:value-of select="@def:Structure"/> | Class: <xsl:value-of select="def:Class/@Name"/> | Purpose: <xsl:value-of select="@Purpose"/></p>
+<table><thead><tr><th>Order</th><th>Variable</th><th>Label</th><th>Type</th><th>Mandatory</th><th>Key</th><th>Role</th><th>Origin</th><th>Codelist</th><th>Method/comment</th></tr></thead><tbody>
+<xsl:for-each select="odm:ItemRef"><xsl:variable name="itemOID" select="@ItemOID"/><xsl:variable name="item" select="//odm:ItemDef[@OID=$itemOID]"/><tr>
+<td><xsl:value-of select="@OrderNumber"/></td><td><code><xsl:value-of select="$item/@Name"/></code></td><td><xsl:value-of select="$item/odm:Description/odm:TranslatedText"/></td><td><xsl:value-of select="$item/@DataType"/><xsl:if test="$item/@Length"> (<xsl:value-of select="$item/@Length"/>)</xsl:if></td><td><xsl:value-of select="@Mandatory"/></td><td><xsl:value-of select="@KeySequence"/></td><td><xsl:value-of select="@Role"/></td><td><xsl:value-of select="$item/def:Origin/@Type"/><xsl:if test="$item/def:Origin/@Source"> / <xsl:value-of select="$item/def:Origin/@Source"/></xsl:if></td><td><code><xsl:value-of select="$item/odm:CodeListRef/@CodeListOID"/></code></td><td><xsl:if test="@MethodOID"><span class="pill"><xsl:value-of select="@MethodOID"/></span></xsl:if><xsl:if test="$item/@def:CommentOID"><br/><code><xsl:value-of select="$item/@def:CommentOID"/></code></xsl:if></td>
+</tr></xsl:for-each></tbody></table></div></xsl:for-each>
+<xsl:if test="//def:ValueListDef"><div class="card"><h2>Value-level metadata</h2><table><thead><tr><th>Value list</th><th>Item</th><th>Where clause</th><th>Label</th><th>Origin</th></tr></thead><tbody>
+<xsl:for-each select="//def:ValueListDef/odm:ItemRef"><xsl:variable name="itemOID" select="@ItemOID"/><xsl:variable name="whereOID" select="def:WhereClauseRef/@WhereClauseOID"/><xsl:variable name="item" select="//odm:ItemDef[@OID=$itemOID]"/><tr><td><code><xsl:value-of select="../@OID"/></code></td><td><code><xsl:value-of select="$item/@OID"/></code></td><td><xsl:value-of select="//def:WhereClauseDef[@OID=$whereOID]/odm:Description/odm:TranslatedText"/></td><td><xsl:value-of select="$item/odm:Description/odm:TranslatedText"/></td><td><xsl:value-of select="$item/def:Origin/@Type"/></td></tr></xsl:for-each>
+</tbody></table></div></xsl:if>
+<xsl:if test="//odm:MethodDef"><div class="card"><h2>Computational methods</h2><table><thead><tr><th>Method</th><th>Name</th><th>Description</th></tr></thead><tbody><xsl:for-each select="//odm:MethodDef"><tr><td><code><xsl:value-of select="@OID"/></code></td><td><xsl:value-of select="@Name"/></td><td><xsl:value-of select="odm:Description/odm:TranslatedText"/></td></tr></xsl:for-each></tbody></table></div></xsl:if>
+</div></body></html>
+</xsl:template></xsl:stylesheet>""", encoding="utf-8")
     return path
 
 
@@ -557,24 +693,61 @@ def _render_define_html(xml_path: Path, stylesheet_path: Path, path: Path) -> Pa
 
 
 def diagnose_define(path: Path) -> dict:
-    diagnostics = {"well_formed": False, "internal_references_valid": False, "missing_references": [], "xsd_validation": "not_run", "standards_validation": "not_run", "limitations": ["No Define-XML 2.1 XSD package is bundled; full schema and standards validation were not run."]}
+    diagnostics = {
+        "well_formed": False,
+        "internal_references_valid": False,
+        "missing_references": [],
+        "duplicate_identifiers": [],
+        "element_counts": {},
+        "semantic_warnings": [],
+        "xsd_validation": "not_run",
+        "standards_validation": "not_run",
+        "limitations": ["No Define-XML 2.1 XSD package is bundled; full schema and standards validation were not run."],
+    }
     try:
         tree = etree.parse(str(path))
     except etree.XMLSyntaxError as exc:
         diagnostics["parse_error"] = str(exc)
         return diagnostics
     diagnostics["well_formed"] = True
-    identifiers = {value for element in tree.iter() for key, value in element.attrib.items() if key.split("}")[-1] in {"OID", "ID"}}
-    reference_names = {"ItemOID", "MethodOID", "CodeListOID", "WhereClauseOID", "ItemGroupOID", "ValueListOID", "leafID"}
+    identifier_values = [value for element in tree.iter() for key, value in element.attrib.items() if key.split("}")[-1] in {"OID", "ID"}]
+    identifiers = set(identifier_values)
+    duplicate_identifiers = sorted({value for value in identifier_values if identifier_values.count(value) > 1})
+    reference_names = {
+        "ArchiveLocationID",
+        "CodeListOID",
+        "CommentOID",
+        "ItemGroupOID",
+        "ItemOID",
+        "MethodOID",
+        "StandardOID",
+        "ValueListOID",
+        "WhereClauseOID",
+        "leafID",
+    }
     references = [value for element in tree.iter() for key, value in element.attrib.items() if key.split("}")[-1] in reference_names]
     missing = sorted(set(references) - identifiers)
     diagnostics["missing_references"] = missing
-    diagnostics["internal_references_valid"] = not missing
+    diagnostics["duplicate_identifiers"] = duplicate_identifiers
+    diagnostics["internal_references_valid"] = not missing and not duplicate_identifiers
+    diagnostics["element_counts"] = {
+        name: int(tree.xpath(f"count(//*[local-name()='{name}'])"))
+        for name in ["ItemGroupDef", "ItemDef", "CodeList", "ValueListDef", "WhereClauseDef", "MethodDef", "CommentDef", "leaf"]
+    }
+    warnings = []
+    if tree.xpath("//*[local-name()='WhereClauseDef'][not(*[local-name()='RangeCheck'])]"):
+        warnings.append("One or more value-level where clauses could not be translated into Define-XML RangeCheck metadata.")
+    if tree.xpath("//*[local-name()='ItemGroupDef'][not(*[local-name()='Class'])]"):
+        warnings.append("One or more datasets do not have a Define-XML Class element.")
+    if tree.xpath("//*[local-name()='ItemDef'][not(*[local-name()='Origin'])]"):
+        warnings.append("One or more item definitions do not have origin metadata.")
+    diagnostics["semantic_warnings"] = warnings
     return diagnostics
 
 
 def _translated_text(namespace: str, text: str) -> etree._Element:
-    node = etree.Element(f"{{{namespace}}}TranslatedText", lang="en")
+    node = etree.Element(f"{{{namespace}}}TranslatedText")
+    node.set("{http://www.w3.org/XML/1998/namespace}lang", "en")
     node.text = text
     return node
 

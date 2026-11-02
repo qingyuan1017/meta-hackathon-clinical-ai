@@ -1313,11 +1313,19 @@ def update_csdrg(job_id: str, document: CSDRGDocument, db: Session = Depends(get
     if document.study_name != plan.study_name:
         raise HTTPException(status_code=422, detail="The cSDRG study name must match the approved SDTM plan.")
     authoritative = build_csdrg(job_dir, plan)
-    protected = {"3. Source data and conversion approach", "5. Conformance and validation summary", "6. Reviewer-approved explanations", "7. Unresolved issues", "9. Software, execution, and traceability", "10. Limitations"}
     expected = {section.heading: section for section in authoritative.sections}
     received = {section.heading: section for section in document.sections}
-    if any(heading not in received or received[heading].body != expected[heading].body or received[heading].todos != expected[heading].todos for heading in protected):
+    protected = {section.heading for section in authoritative.sections if section.evidence_controlled}
+    if any(
+        heading not in received
+        or received[heading].body != expected[heading].body
+        or received[heading].todos != expected[heading].todos
+        or received[heading].tables != expected[heading].tables
+        for heading in protected
+    ):
         raise HTTPException(status_code=422, detail="Execution, validation, approved-explanation, unresolved-issue, and limitation sections are evidence-controlled and cannot be overwritten.")
+    for heading in protected:
+        received[heading].evidence_controlled = True
     document.generated_at = datetime.now(timezone.utc)
     for path in render_csdrg_document(document, job_dir / "output"):
         _upsert_artifact(job, path, job_dir)

@@ -70,10 +70,25 @@ class ValidationRunRequest(BaseModel):
     provider: Literal["internal", "pinnacle21-cli"]
 
 
+class CSDRGTable(BaseModel):
+    title: str | None = None
+    columns: list[str] = Field(min_length=1)
+    rows: list[list[str]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def require_rectangular_rows(self):
+        width = len(self.columns)
+        if any(len(row) != width for row in self.rows):
+            raise ValueError("Every cSDRG table row must match the number of columns.")
+        return self
+
+
 class CSDRGSection(BaseModel):
     heading: str
     body: str
     todos: list[str] = Field(default_factory=list)
+    tables: list[CSDRGTable] = Field(default_factory=list)
+    evidence_controlled: bool = False
 
 
 class CSDRGDocument(BaseModel):

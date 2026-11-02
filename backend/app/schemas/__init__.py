@@ -85,6 +85,7 @@ from .sdtm_workbench import (
 from .validation import (
     CSDRGDocument,
     CSDRGSection,
+    CSDRGTable,
     ValidationFinding,
     ValidationFindingUpdate,
     ValidationImportDiagnostics,
@@ -192,6 +193,7 @@ __all__ = [
     "VoiceTranscriptionRead",
     "CSDRGDocument",
     "CSDRGSection",
+    "CSDRGTable",
     "ValidationFinding",
     "ValidationFindingUpdate",
     "ValidationImportDiagnostics",

@@ -83,12 +83,18 @@ def test_csdrg_includes_only_approved_explanations_and_truthful_metadata_only_to
     approved_section = next(section for section in document.sections if "Reviewer-approved" in section.heading)
     assert "Synthetic source" in approved_section.body
     assert "Unapproved explanation" not in approved_section.body
+    assert approved_section.evidence_controlled is True
+    assert approved_section.tables[0].columns == ["Dataset", "Rule", "Severity", "Diagnostic message", "Explanation", "Reviewer", "Approved"]
+    assert approved_section.tables[0].rows[0][1] == "SD0001"
+    dataset_section = next(section for section in document.sections if "Dataset descriptions" in section.heading)
+    assert dataset_section.tables[0].rows[0][0] == "DM"
     execution_section = next(section for section in document.sections if "execution" in section.heading.lower())
     assert "were not executed" in execution_section.body
     assert execution_section.todos
     paths = render_csdrg(job_dir, _plan())
     assert {path.name for path in paths} == {"csdrg.json", "csdrg.md", "csdrg.pdf"}
     assert "were not executed" in (job_dir / "output" / "csdrg.md").read_text(encoding="utf-8")
+    assert "| Dataset | Rule | Severity |" in (job_dir / "output" / "csdrg.md").read_text(encoding="utf-8")
 
 
 def test_evidence_manifest_and_bundle_include_audit_records_without_raw_rows(tmp_path) -> None:
