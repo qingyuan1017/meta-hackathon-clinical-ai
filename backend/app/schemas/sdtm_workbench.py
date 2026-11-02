@@ -95,6 +95,12 @@ class RepairApproval(BaseModel):
     reviewer: str = Field(min_length=1, max_length=120)
 
 
+class SDTMProgramUpdate(BaseModel):
+    code: str = Field(min_length=1, max_length=1_000_000)
+    expected_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    reviewer: str = Field(default="Workbench reviewer", min_length=1, max_length=120)
+
+
 class ExecutionAttempt(BaseModel):
     attempt_id: str
     parent_attempt_id: str | None = None

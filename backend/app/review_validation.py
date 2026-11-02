@@ -42,7 +42,11 @@ def validate_review_result(
                 review.variable_mapping,
             )
         return review.model_dump(mode="json")
-    if workflow == "sdtm" and stage in {"variable_mapping_domain", "rule_augmentation_domain"}:
+    if workflow == "sdtm" and stage in {
+        "domain_mapping_completed",
+        "variable_mapping_domain",
+        "rule_augmentation_domain",
+    }:
         plan = SDTMPlan.model_validate(value)
         validated = SDTMUseCase().validate_result(plan.model_dump(mode="json"))
         return validated.model_dump(mode="json")

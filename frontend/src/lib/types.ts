@@ -2,7 +2,7 @@ import type { components } from "./openapi";
 
 export type Workflow = "protocol-extraction" | "clinical-document" | "edc-design" | "sdtm" | "tlf";
 export type JobStatus = "queued" | "running" | "review_required" | "succeeded" | "failed";
-export type ReviewStage = "edc_source" | "domain_mapping" | "variable_mapping" | "variable_mapping_domain" | "rule_augmentation_domain" | "tlf_inventory" | "tlf_shell" | "tlf_programming";
+export type ReviewStage = "edc_source" | "domain_mapping" | "domain_mapping_completed" | "variable_mapping" | "variable_mapping_domain" | "rule_augmentation_domain" | "tlf_inventory" | "tlf_shell" | "tlf_programming";
 
 export type Artifact = components["schemas"]["ArtifactRead"];
 

@@ -191,7 +191,7 @@ function RecordOperationFields({ step, priorSteps, allowedDatasets, onChange }: 
   return <div className="space-y-3"><div className="grid gap-3 md:grid-cols-2"><StepSelect label="Input step" value={step.inputs[0] ?? null} options={priorOptions} onChange={(input) => onChange({ inputs: input ? [input] : [] })} /><ListInput label="Group by" value={step.group_by} onChange={(group_by) => onChange({ group_by })} /></div><div className="flex items-center justify-between"><EditorLabel>Aggregations</EditorLabel><button type="button" onClick={() => onChange({ aggregations: [...step.aggregations, { output_variable: "", operation: "count", source_variable: null }] })} className="text-[10px] font-bold text-violet-300">+ aggregation</button></div>{step.aggregations.map((item, index) => <div key={index} className="grid gap-2 md:grid-cols-[1fr_140px_1fr_36px]"><input value={item.output_variable} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, output_variable: event.target.value.toUpperCase() }) })} placeholder="Output variable" className={inputClass} /><select value={item.operation} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, operation: event.target.value as SDTMAggregation["operation"] }) })} className={inputClass}>{["count", "sum", "min", "max", "mean", "first", "last"].map((operation) => <option key={operation}>{operation}</option>)}</select><input disabled={item.operation === "count"} value={item.source_variable ?? ""} onChange={(event) => onChange({ aggregations: replaceAt(step.aggregations, index, { ...item, source_variable: event.target.value.toUpperCase() || null }) })} placeholder="Source variable" className={inputClass} /><RemoveButton label={`Remove aggregation ${index + 1}`} onClick={() => onChange({ aggregations: step.aggregations.filter((_, itemIndex) => itemIndex !== index) })} /></div>)}</div>;
 }
 
-export function VariableMappingMatrix({ variables, onChange, inventory, allowedDatasets, sourceRelationships, domain, proposalOperations = [] }: {
+export function VariableMappingMatrix({ variables, onChange, inventory, allowedDatasets, sourceRelationships, domain, proposalOperations = [], onSelectedVariableChange }: {
   variables: SDTMVariableDraft[];
   onChange: (variables: SDTMVariableDraft[]) => void;
   inventory: SourceInventoryDataset[];
@@ -199,6 +199,7 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
   sourceRelationships: Array<{ dataset: string; relationship: SDTMSourceRelationship }>;
   domain?: string;
   proposalOperations?: ReviewPatchOperation[];
+  onSelectedVariableChange?: (variable: string | null) => void;
 }) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [addingVlmColumn, setAddingVlmColumn] = useState(false);
@@ -206,6 +207,7 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
   const [vlmWhereClause, setVlmWhereClause] = useState("");
   const [vlmTargetIndexes, setVlmTargetIndexes] = useState<number[]>([]);
   const selected = selectedIndex === null ? null : variables[selectedIndex] ?? null;
+  const closeSelection = () => { setSelectedIndex(null); onSelectedVariableChange?.(null); };
   const proposedVariables = proposalOperations.length && domain
     ? projectVariableMappingProposal(domain, variables, proposalOperations)
     : variables;
@@ -284,7 +286,7 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
               const metadataChanged = variableMetadataSignature(variable) !== variableMetadataSignature(proposed);
               return <tr key={`${variable.name}-${index}`} className="group border-b border-white/[0.05] last:border-b-0">
               <th className="sticky left-0 z-[5] border-r border-white/[0.07] bg-[#121214] p-0 group-hover:bg-[#17171a]">
-                <button type="button" aria-label={`Edit ${variable.name || `variable ${index + 1}`} mapping`} onClick={() => setSelectedIndex(index)} className="flex w-full items-start justify-between gap-3 px-3 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
+                <button type="button" aria-label={`Edit ${variable.name || `variable ${index + 1}`} mapping`} onClick={() => { setSelectedIndex(index); onSelectedVariableChange?.(variable.name || null); }} className="flex w-full items-start justify-between gap-3 px-3 py-3 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400">
                   <span><span className="block font-mono text-sm font-black text-violet-200">{variable.name || "[unnamed]"}</span><span className="mt-1 block font-normal text-zinc-500">{variable.label || "No label"} · {variable.data_type} · {variable.mapping_type}</span>{metadataChanged && <span className="mt-2 block rounded-md border border-amber-400/20 bg-amber-400/[0.07] p-2 text-[10px] font-normal leading-4"><span className="font-black uppercase tracking-wider text-amber-200">Proposed metadata</span><span className="mt-1 block text-emerald-200">{proposed.label || "No label"} · {proposed.data_type} · {proposed.mapping_type}</span>{variable.mapping_expression !== proposed.mapping_expression && <span className="mt-1 block whitespace-normal text-zinc-400">Logic: {proposed.mapping_expression || "Not present"}</span>}</span>}</span><Pencil size={13} className="mt-1 shrink-0 text-zinc-600 group-hover:text-violet-300" />
                 </button>
               </th>
@@ -310,11 +312,11 @@ export function VariableMappingMatrix({ variables, onChange, inventory, allowedD
         </div>
       </div>
     </div>}
-    {selected && <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/75 p-4 pt-[5vh] backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="variable-mapping-dialog-title" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedIndex(null); }}>
+    {selected && <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/75 p-4 pt-[5vh] backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="variable-mapping-dialog-title" onMouseDown={(event) => { if (event.currentTarget === event.target) closeSelection(); }}>
       <div className="w-full max-w-6xl rounded-2xl border border-violet-500/25 bg-[#0d0d0f] shadow-2xl shadow-black/60">
         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 rounded-t-2xl border-b border-white/10 bg-[#0d0d0f]/95 px-5 py-4 backdrop-blur">
           <div><p id="variable-mapping-dialog-title" className="font-mono text-base font-black text-violet-200">Edit {selected.name || "SDTM variable"}</p><p className="mt-1 text-xs text-zinc-500">Edit target name, label, data type, derivation, source lineage, and value-level metadata.</p></div>
-          <button type="button" aria-label="Close variable mapping dialog" onClick={() => setSelectedIndex(null)} className="grid h-9 w-9 place-items-center rounded-md text-zinc-500 hover:bg-white/5 hover:text-white"><X size={16} /></button>
+          <button type="button" aria-label="Close variable mapping dialog" onClick={closeSelection} className="grid h-9 w-9 place-items-center rounded-md text-zinc-500 hover:bg-white/5 hover:text-white"><X size={16} /></button>
         </div>
         <div className="p-5"><VariableMappingCards variables={[selected]} onChange={updateSelected} inventory={inventory} allowedDatasets={allowedDatasets} removable={false} /></div>
       </div>
@@ -402,7 +404,7 @@ function variableMetadataSignature(variable: SDTMVariableDraft): string {
 export function projectVariableMappingProposal(domain: string, variables: SDTMVariableDraft[], operations: ReviewPatchOperation[]): SDTMVariableDraft[] {
   const projected = structuredClone(variables);
   for (const operation of operations) {
-    const match = operation.path.match(/^\/variable_mapping\/datasets\/domain=([^/]+)\/variables\/name=([^/]+)(?:\/(.*))?$/);
+    const match = operation.path.match(/^\/(?:variable_mapping\/)?datasets\/domain=([^/]+)\/variables\/name=([^/]+)(?:\/(.*))?$/);
     if (!match || decodePatchSelector(match[1]).toUpperCase() !== domain.toUpperCase()) continue;
     const variableName = decodePatchSelector(match[2]).toUpperCase();
     const variableIndex = projected.findIndex((variable) => variable.name.toUpperCase() === variableName);

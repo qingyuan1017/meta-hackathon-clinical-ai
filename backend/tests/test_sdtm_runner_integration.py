@@ -137,6 +137,10 @@ def test_live_missing_column_repair_is_reviewed_rerun_and_retained(tmp_path: Pat
     failed = service.execute(job_dir, plan)
     assert failed.status == "failed"
     assert failed.failure_classification == "missing_source_column"
+    assert {item.name for item in failed.outputs} == {"dm.xpt"}
+    assert any(check.check_id == "domain-execution" and check.domain == "DM" and check.status == "passed" for check in failed.checks)
+    assert any(check.check_id == "domain-execution" and check.domain == "AE" and check.status == "failed" for check in failed.checks)
+    assert not any(check.domain == "DM" and check.status == "failed" for check in failed.checks)
     assert failed.repair_proposal is not None
     assert failed.repair_proposal.change.from_source_variable == "AETERM"
     assert failed.repair_proposal.change.to_source_variable == "AETERM_RAW"

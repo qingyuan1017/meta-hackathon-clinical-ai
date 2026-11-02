@@ -3,22 +3,25 @@ import json
 import shutil
 import wave
 import zipfile
+from datetime import datetime, timezone
 from threading import Event
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import pytest
 from reportlab.pdfgen import canvas
 
-from app.artifacts import artifact_record
+from app.artifacts import artifact_record, sha256_file
 from app.db import SessionLocal
 from app.core_conformance import CoreConformanceResult
 from app.main import app, settings
 from app.jobs import runner
 from app.models import Artifact, Job
-from app.schemas import StudySummary
+from app.schemas import CSDRGDocument, ExecutionAttempt, ExecutionCheck, StudySummary
 from app.review_patches import build_patch_record, new_patch_request, public_patch, result_revision, write_patch_record
 from app.schemas.reviews import ReviewScope
 from app.sdtm_workbench import read_state, write_state
+from app.sdtm_execution import save_attempt
 from app.workflows import WorkflowResult
 
 
@@ -90,6 +93,77 @@ def test_artifact_can_be_requested_inline_for_review() -> None:
         assert response.status_code == 200
         assert response.headers["content-disposition"].startswith("inline;")
         assert response.text == "<ODM />"
+    finally:
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def test_completed_sdtm_program_can_be_manually_edited_with_audit_and_evidence_reset(monkeypatch) -> None:
+    monkeypatch.setattr("app.main._refresh_csdrg_artifacts", lambda _job, _db: None)
+    plan = _completed_sdtm_plan()
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm",
+            title="Manual program review",
+            status="succeeded",
+            options_json="{}",
+            input_files_json="[]",
+            result_json=json.dumps(plan),
+        )
+        session.add(job)
+        session.flush()
+        job_dir = settings.jobs_dir / job.id
+        program = job_dir / "output" / "build-dm.R"
+        program.parent.mkdir(parents=True, exist_ok=True)
+        program.write_text("# generated\ndm <- raw_dm\n", encoding="utf-8")
+        job.artifacts.append(Artifact(**artifact_record(program, job_dir)))
+        session.commit()
+        job_id = job.id
+    state = read_state(job_dir)
+    state.lifecycle.program_generation = "completed"
+    state.lifecycle.execution = "passed"
+    state.lifecycle.validation = "passed"
+    state.lifecycle.submission_readiness = "ready"
+    write_state(job_dir, state)
+    original_sha256 = sha256_file(program)
+
+    try:
+        with TestClient(app) as client:
+            response = client.put(
+                f"/api/v1/jobs/{job_id}/sdtm-programs/DM/r",
+                json={
+                    "code": "# manually reviewed\ndm <- raw_dm |> dplyr::mutate(AGE = as.numeric(AGE))\n",
+                    "expected_sha256": original_sha256,
+                    "reviewer": "Clinical programmer",
+                },
+            )
+            stale = client.put(
+                f"/api/v1/jobs/{job_id}/sdtm-programs/DM/r",
+                json={"code": "# stale edit\n", "expected_sha256": original_sha256},
+            )
+        assert response.status_code == 200, response.text
+        assert stale.status_code == 409
+        assert "manually reviewed" in program.read_text(encoding="utf-8")
+        current_state = read_state(job_dir)
+        assert current_state.lifecycle.program_generation == "completed"
+        assert current_state.lifecycle.execution == "not_run"
+        assert current_state.lifecycle.validation == "not_run"
+        assert current_state.lifecycle.submission_readiness == "blocked"
+        assert any("Clinical programmer" in item for item in current_state.limitations)
+        reviews = list((job_dir / "sdtm" / "program-reviews").glob("review-*.json"))
+        assert len(reviews) == 1
+        audit = json.loads(reviews[0].read_text(encoding="utf-8"))
+        assert audit["domain"] == "DM"
+        assert audit["previous_sha256"] == original_sha256
+        assert audit["reviewed_sha256"] == sha256_file(program)
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            artifact = next(item for item in stored.artifacts if item.name == "build-dm.R")
+            assert artifact.sha256 == sha256_file(program)
     finally:
         with SessionLocal() as session:
             stored = session.get(Job, job_id)
@@ -1201,7 +1275,11 @@ def test_completed_sdtm_domain_rerun_is_queued_without_removing_current_result(m
         with TestClient(app) as client:
             response = client.post(
                 f"/api/v1/jobs/{job_id}/sdtm-domain-reruns",
-                json={"stage": "variable_mapping", "domain": "ae"},
+                json={
+                    "stage": "variable_mapping",
+                    "domain": "ae",
+                    "scope": {"variables": [{"domain": "AE", "variable": "AETERM", "fields": ["mapping_expression"]}]},
+                },
             )
         assert response.status_code == 202, response.text
         payload = response.json()
@@ -1214,6 +1292,7 @@ def test_completed_sdtm_domain_rerun_is_queued_without_removing_current_result(m
             assert request["stage"] == "variable_mapping_domain"
             assert request["rerun_stage"] == "variable_mapping"
             assert request["target_domain"] == "AE"
+            assert request["scope"]["variables"] == [{"domain": "AE", "variable": "AETERM", "fields": ["mapping_expression"]}]
     finally:
         settings.meta_api_key, settings.meta_model = original_key, original_model
         with SessionLocal() as session:
@@ -1222,6 +1301,149 @@ def test_completed_sdtm_domain_rerun_is_queued_without_removing_current_result(m
                 session.delete(stored)
                 session.commit()
         shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
+def test_completed_sdtm_domain_mapping_revision_is_queued_with_human_guidance(monkeypatch) -> None:
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key, settings.meta_model = "test", "test-model"
+    queued: list[str] = []
+    monkeypatch.setattr(runner, "enqueue_sdtm_domain_rerun", queued.append)
+    baseline = _completed_sdtm_plan()
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm", title="Completed SDTM domain revision", status="succeeded",
+            options_json="{}", input_files_json="[]", result_json=json.dumps(baseline),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/sdtm-domain-reruns",
+                json={"stage": "domain_mapping", "guidance": "Split RAW_AE into AE and SUPPAE."},
+            )
+        assert response.status_code == 202, response.text
+        assert response.json()["status"] == "queued"
+        assert response.json()["result"] == baseline
+        assert queued == [job_id]
+        with SessionLocal() as session:
+            options = json.loads(session.get(Job, job_id).options_json)
+        request = options["_sdtm_domain_rerun_request"]
+        assert request["stage"] == "domain_mapping_completed"
+        assert request["rerun_stage"] == "domain_mapping"
+        assert request["target_domain"] is None
+        assert options["review_feedback"][-1]["stage"] == "domain_mapping"
+        assert "Split RAW_AE" in options["review_feedback"][-1]["message"]
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(settings.jobs_dir / job_id, ignore_errors=True)
+
+
+def test_execution_informed_rule_revision_rejects_unrelated_domain_and_attaches_runtime_evidence(monkeypatch) -> None:
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key, settings.meta_model = "test", "test-model"
+    queued: list[str] = []
+    monkeypatch.setattr(runner, "enqueue_sdtm_domain_rerun", queued.append)
+    baseline = _completed_sdtm_plan()
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm", title="Execution-informed revision", status="succeeded",
+            options_json="{}", input_files_json="[]", result_json=json.dumps(baseline),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    job_dir = settings.jobs_dir / job_id
+    try:
+        (job_dir / "sdtm" / "executions" / "attempt-abcdef123456").mkdir(parents=True, exist_ok=True)
+        save_attempt(job_dir, ExecutionAttempt(
+            attempt_id="attempt-abcdef123456",
+            status="failed",
+            created_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+            program_hash="c" * 64,
+            runtime={"r": "4.4.1"},
+            exit_code=1,
+            stdout="runner output",
+            stderr="object 'AETERM' not found",
+            checks=[ExecutionCheck(check_id="r-exit", status="failed", message="R exited with status 1", domain="AE")],
+            failure_classification="runtime_error",
+            program_artifact="output/build-all.R",
+        ))
+        with TestClient(app) as client:
+            unrelated = client.post(
+                f"/api/v1/jobs/{job_id}/sdtm-domain-reruns",
+                json={"stage": "rule_augmentation", "domain": "DM", "execution_attempt_id": "attempt-abcdef123456"},
+            )
+            accepted = client.post(
+                f"/api/v1/jobs/{job_id}/sdtm-domain-reruns",
+                json={"stage": "rule_augmentation", "domain": "AE", "execution_attempt_id": "attempt-abcdef123456"},
+            )
+        assert unrelated.status_code == 422, unrelated.text
+        assert accepted.status_code == 202, accepted.text
+        assert queued == [job_id]
+        with SessionLocal() as session:
+            options = json.loads(session.get(Job, job_id).options_json)
+        message = options["review_feedback"][-1]["message"]
+        assert '"program_hash": "' + "c" * 64 + '"' in message
+        assert '"runtime": {"r": "4.4.1"}' in message
+        assert "object 'AETERM' not found" in message
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(job_dir, ignore_errors=True)
+
+
+def test_csdrg_agent_revision_returns_unsaved_narrative_and_preserves_evidence(monkeypatch) -> None:
+    original_key, original_model = settings.meta_api_key, settings.meta_model
+    settings.meta_api_key, settings.meta_model = "test", "test-model"
+
+    async def fake_run(agent, **kwargs):
+        candidate = CSDRGDocument.model_validate_json(kwargs["source"])
+        editable = next(section for section in candidate.sections if not section.evidence_controlled)
+        editable.body = "Agent-revised reviewer narrative."
+        agent.result_validator(candidate)
+        return SimpleNamespace(value=candidate)
+
+    monkeypatch.setattr("app.main.ClinicalAgentRunner.run", fake_run)
+    baseline = _completed_sdtm_plan()
+    with SessionLocal() as session:
+        job = Job(
+            workflow="sdtm", title="cSDRG agent revision", status="succeeded",
+            options_json="{}", input_files_json="[]", result_json=json.dumps(baseline),
+        )
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    job_dir = settings.jobs_dir / job_id
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                f"/api/v1/jobs/{job_id}/csdrg/agent-revision",
+                json={"guidance": "Clarify the reviewer narrative."},
+            )
+        assert response.status_code == 200, response.text
+        revised = response.json()
+        assert any(section["body"] == "Agent-revised reviewer narrative." for section in revised["sections"])
+        assert not (job_dir / "output" / "csdrg.json").exists()
+    finally:
+        settings.meta_api_key, settings.meta_model = original_key, original_model
+        with SessionLocal() as session:
+            stored = session.get(Job, job_id)
+            if stored:
+                session.delete(stored)
+                session.commit()
+        shutil.rmtree(job_dir, ignore_errors=True)
 
 
 def test_approved_completed_domain_rerun_rebuilds_artifacts_and_resets_evidence(monkeypatch) -> None:
@@ -1312,7 +1534,14 @@ def test_approved_completed_domain_rerun_rebuilds_artifacts_and_resets_evidence(
         shutil.rmtree(job_dir, ignore_errors=True)
 
 
-def test_voice_guidance_is_transcribed_for_review_without_storing_audio(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("workflow", "job_status", "options", "result"),
+    [
+        ("tlf", "review_required", {"_review_stage": "tlf_inventory"}, None),
+        ("sdtm", "succeeded", {}, _completed_sdtm_plan()),
+    ],
+)
+def test_voice_guidance_is_transcribed_for_review_without_storing_audio(monkeypatch, workflow, job_status, options, result) -> None:
     captured: list[bytes] = []
 
     async def fake_transcribe(_client, audio: bytes, filename: str = "guidance.wav") -> dict:
@@ -1330,11 +1559,12 @@ def test_voice_guidance_is_transcribed_for_review_without_storing_audio(monkeypa
     settings.meta_transcription_model = "muse-voice-transcribe-1.0"
     with SessionLocal() as session:
         job = Job(
-            workflow="tlf",
-            title="TLF voice review",
-            status="review_required",
-            options_json=json.dumps({"_review_stage": "tlf_inventory"}),
+            workflow=workflow,
+            title="Voice review",
+            status=job_status,
+            options_json=json.dumps(options),
             input_files_json="[]",
+            result_json=json.dumps(result) if result else None,
         )
         session.add(job)
         session.commit()

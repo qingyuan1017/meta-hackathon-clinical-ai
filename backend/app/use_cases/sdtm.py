@@ -1055,6 +1055,91 @@ class SDTMUseCase(ClinicalUseCase):
             warnings=list(dict.fromkeys([*warnings, *rule_warnings, *self.result_warnings(validated)])),
         )
 
+    async def regenerate_completed_domain_mapping(
+        self,
+        context: UseCaseContext,
+        *,
+        baseline: SDTMPlan,
+    ) -> GeneratedContent:
+        """Regenerate a completed source-to-domain plan and all dependent mapping/code drafts."""
+
+        crf, edc = self._workflow_inputs(context.inputs)
+        source_spec = self._approved_source_spec(context.options)
+        context_inputs = self._mapping_context_inputs(context, crf, edc)
+        agent_options = self._agent_options(context.options)
+        stage_count = len(self.descriptor.stages)
+        outcome = await ClinicalAgentRunner(
+            definition=_STAGE_AGENTS["domain-mapping"],
+            result_model=SDTMDomainMappingPlan,
+            ai=context.ai,
+            settings=context.settings,
+            progress_path=context.agent_progress_path,
+            result_validator=lambda value: self.validate_domain_mapping(
+                source_spec,
+                cast(SDTMDomainMappingPlan, value),
+            ),
+        ).run(
+            objective=(
+                "Revise the complete, previously approved source-to-SDTM domain plan according to the human "
+                "guidance. Consider every approved source dataset, preserve supported decisions, explicitly "
+                "classify direct, stack, join, split, and derived relationships, and retain intentionally unused "
+                "sources in unmapped_datasets. Return the complete revised domain plan for review."
+            ),
+            source=self._domain_mapping_source(source_spec, context_inputs),
+            options=agent_options,
+            stage=self.descriptor.stages[0],
+            stage_index=1,
+            stage_count=stage_count,
+        )
+        domain_mapping = cast(SDTMDomainMappingPlan, outcome.value)
+        self.validate_domain_mapping(source_spec, domain_mapping)
+
+        variable_mapping, variable_warnings = await self._generate_variable_mapping_batches(
+            context,
+            source_spec=source_spec,
+            domain_mapping=domain_mapping,
+            context_inputs=context_inputs,
+            crf=crf,
+            agent_options=agent_options,
+            stage_count=stage_count,
+        )
+        self.validate_variable_mapping(source_spec, domain_mapping, variable_mapping)
+        rule_plan, rule_warnings = await self._generate_rule_batches(
+            context,
+            domain_mapping=domain_mapping,
+            variable_mapping=variable_mapping,
+        )
+        proposed = SDTMPlan(
+            study_name=variable_mapping.study_name,
+            standard=variable_mapping.standard,
+            define_standard=variable_mapping.define_standard,
+            datasets=self._apply_record_plans(variable_mapping.datasets, rule_plan.record_plans),
+            domain_mappings=domain_mapping.domain_mappings,
+            unmapped_datasets=domain_mapping.unmapped_datasets,
+            rule_augmentations=rule_plan.rule_augmentations,
+            acrf_free_annotations=baseline.acrf_free_annotations,
+            assumptions=list(dict.fromkeys([
+                *domain_mapping.assumptions,
+                *variable_mapping.assumptions,
+                *rule_plan.assumptions,
+            ])),
+            unresolved_mappings=list(dict.fromkeys([
+                *domain_mapping.unresolved_mappings,
+                *variable_mapping.unresolved_mappings,
+                *rule_plan.unresolved_mappings,
+            ])),
+        )
+        validated = cast(SDTMPlan, self.validate_result(proposed.model_dump(mode="json")))
+        return GeneratedContent(
+            value=validated,
+            warnings=list(dict.fromkeys([
+                *outcome.warnings,
+                *variable_warnings,
+                *rule_warnings,
+                *self.result_warnings(validated),
+            ])),
+        )
+
     async def _generate_rule_batches(
         self,
         context: UseCaseContext,

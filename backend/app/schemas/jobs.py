@@ -22,6 +22,7 @@ class JobRead(BaseModel):
     review_stage: Literal[
         "edc_source",
         "domain_mapping",
+        "domain_mapping_completed",
         "variable_mapping",
         "variable_mapping_domain",
         "rule_augmentation_domain",

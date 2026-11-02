@@ -164,6 +164,7 @@ venv.bak/
 # Frontend and local workbench state
 node_modules/
 .next/
+*.tsbuildinfo
 backend/data/
 frontend/coverage/
 samples/blank-crf.pdf

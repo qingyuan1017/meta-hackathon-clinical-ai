@@ -91,11 +91,22 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ variable_mapping: variableMapping }),
     }),
-  rerunSdtmDomain: (id: string, stage: "variable_mapping" | "rule_augmentation", domain: string) =>
+  rerunSdtmDomain: (
+    id: string,
+    stage: "domain_mapping" | "variable_mapping" | "rule_augmentation",
+    domain?: string,
+    options?: { guidance?: string; executionAttemptId?: string; scope?: ReviewScope },
+  ) =>
     request<Job>(`/api/v1/jobs/${id}/sdtm-domain-reruns`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stage, domain }),
+      body: JSON.stringify({
+        stage,
+        ...(domain ? { domain } : {}),
+        ...(options?.guidance ? { guidance: options.guidance } : {}),
+        ...(options?.executionAttemptId ? { execution_attempt_id: options.executionAttemptId } : {}),
+        ...(options?.scope ? { scope: options.scope } : {}),
+      }),
     }),
   approveTlfInventory: (id: string, inventoryPlan: Record<string, unknown>) =>
     request<Job>(`/api/v1/jobs/${id}/tlf-inventory`, {
@@ -122,6 +133,12 @@ export const api = {
       body: JSON.stringify({ result }),
     }),
   sdtmExecutions: (id: string) => request<{ items: ExecutionAttempt[] }>(`/api/v1/jobs/${id}/sdtm-executions`),
+  updateSdtmProgram: (id: string, domain: string, language: "r" | "sas", code: string, expectedSha256: string, reviewer = "Workbench reviewer") =>
+    request<Job>(`/api/v1/jobs/${id}/sdtm-programs/${encodeURIComponent(domain)}/${language}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, expected_sha256: expectedSha256, reviewer }),
+    }),
   executeSdtm: (id: string, rawFiles: File[] = []) => {
     const data = new FormData();
     rawFiles.forEach((file) => data.append("raw_files", file));
@@ -142,6 +159,7 @@ export const api = {
   runValidation: (id: string, provider: "internal" | "pinnacle21-cli") => request<ValidationRecord>(`/api/v1/jobs/${id}/validations/run`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) }),
   updateValidationFinding: (id: string, findingId: string, update: Record<string, unknown>) => request<ValidationFinding>(`/api/v1/jobs/${id}/validation-findings/${findingId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) }),
   updateCsdrg: (id: string, document: Record<string, unknown>) => request<Record<string, unknown>>(`/api/v1/jobs/${id}/csdrg`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(document) }),
+  reviseCsdrgWithAgent: (id: string, guidance: string, scope?: ReviewScope) => request<Record<string, unknown>>(`/api/v1/jobs/${id}/csdrg/agent-revision`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ guidance, ...(scope ? { scope } : {}) }) }),
   deleteJob: (id: string) => request<void>(`/api/v1/jobs/${id}`, { method: "DELETE" }),
   artifactUrl: (path: string) => `${API_URL}${path}`,
   artifactPreviewUrl: (path: string) => `${API_URL}${path}?inline=true`,

@@ -1,4 +1,4 @@
-from app.review_patches import diff_operations, propose_scope, scope_candidate, three_way_merge, validate_scope
+from app.review_patches import diff_operations, propose_scope, scope_candidate, scope_completed_sdtm_candidate, three_way_merge, validate_scope
 from app.schemas.reviews import ReviewScope, ReviewVariableScope
 
 
@@ -42,6 +42,35 @@ def test_variable_scope_discards_unselected_domain_and_field_changes() -> None:
     assert [item.path for item in diff_operations(baseline, proposed)] == [
         "/variable_mapping/datasets/domain=DM/variables/name=AGE/mapping_expression"
     ]
+
+
+def test_completed_variable_scope_keeps_other_variables_and_rules_approved() -> None:
+    baseline = {
+        "datasets": [{"domain": "DM", "record_plan": {"steps": ["old"]}, "variables": [
+            {"name": "AGE", "label": "Age", "mapping_expression": "Direct"},
+            {"name": "SEX", "label": "Sex", "mapping_expression": "Direct"},
+        ]}],
+        "rule_augmentations": [
+            {"target_domain": "DM", "target_variable": "AGE", "logic": "old age"},
+            {"target_domain": "DM", "target_variable": "SEX", "logic": "old sex"},
+        ],
+    }
+    candidate = {
+        "datasets": [{"domain": "DM", "record_plan": {"steps": ["new"]}, "variables": [
+            {"name": "AGE", "label": "Age changed outside field lock", "mapping_expression": "as.numeric(AGE)"},
+            {"name": "SEX", "label": "Changed outside scope", "mapping_expression": "strip(SEX)"},
+        ]}],
+        "rule_augmentations": [
+            {"target_domain": "DM", "target_variable": "AGE", "logic": "new age"},
+            {"target_domain": "DM", "target_variable": "SEX", "logic": "new sex"},
+        ],
+    }
+    scope = ReviewScope(variables=[ReviewVariableScope(domain="DM", variable="AGE", fields=["mapping_expression"])])
+    proposed = scope_completed_sdtm_candidate(baseline, candidate, rerun_stage="variable_mapping", target_domain="DM", scope=scope)
+    assert proposed["datasets"][0]["variables"][0] == {"name": "AGE", "label": "Age", "mapping_expression": "as.numeric(AGE)"}
+    assert proposed["datasets"][0]["variables"][1] == baseline["datasets"][0]["variables"][1]
+    assert proposed["datasets"][0]["record_plan"] == {"steps": ["new"]}
+    assert proposed["rule_augmentations"] == [baseline["rule_augmentations"][1], candidate["rule_augmentations"][0]]
 
 
 def test_three_way_merge_reports_same_path_conflict() -> None:

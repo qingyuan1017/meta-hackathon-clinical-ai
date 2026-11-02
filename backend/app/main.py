@@ -19,10 +19,11 @@ from reportlab.pdfgen import canvas
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .agents import AGENTS, get_agent
+from .agents import AGENTS, ClinicalAgentRunner, get_agent
+from .agents.sdtm import CSDRG_REVISION_AGENT
 from .agents.runtime import verify_result
 from .ai import AIResponseError, MetaAIClient
-from .artifacts import artifact_record
+from .artifacts import artifact_record, sdtm_program_filename, sha256_file
 from .config import get_settings
 from .db import get_db, initialize_database
 from .jobs import runner
@@ -53,11 +54,13 @@ from .schemas import (
     ExecutionAttempt,
     ExecutionAttemptList,
     RepairApproval,
+    SDTMProgramUpdate,
     ValidationFinding,
     ValidationFindingUpdate,
     ValidationRecord,
     ValidationRunRequest,
     CSDRGDocument,
+    CSDRGAgentRevisionRequest,
     SDTMPlan,
     SDTMVariableMappingUpdate,
     SDTMVariableMappingPlan,
@@ -80,6 +83,7 @@ from .sdtm_execution import (
     save_attempt,
     apply_typed_repair,
     ensure_repair_allowed,
+    validate_reviewed_program,
 )
 from .sdtm_validation import (
     InternalChecksProvider,
@@ -618,6 +622,7 @@ async def decide_review_patch(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     completed_domain_rerun = str(pending.get("stage")) in {
+        "domain_mapping_completed",
         "variable_mapping_domain",
         "rule_augmentation_domain",
     }
@@ -693,7 +698,9 @@ async def transcribe_review_guidance(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found.")
     options = json.loads(job.options_json)
-    if job.status != "review_required" or not isinstance(options.get("_review_stage"), str):
+    is_stage_review = job.status == "review_required" and isinstance(options.get("_review_stage"), str)
+    is_completed_sdtm_revision = job.status == "succeeded" and job.workflow == "sdtm"
+    if not is_stage_review and not is_completed_sdtm_revision:
         raise HTTPException(status_code=409, detail="This job is not waiting for human review guidance.")
     if audio.content_type not in {"audio/wav", "audio/wave", "audio/x-wav"}:
         raise HTTPException(status_code=415, detail="Voice guidance must be a WAV recording.")
@@ -1002,7 +1009,7 @@ async def rerun_completed_sdtm_domain(
     update: SDTMDomainRerunRequest,
     db: Session = Depends(get_db),
 ) -> JobRead:
-    """Propose a variable/VLM or rule refresh for one completed SDTM domain."""
+    """Propose an agent-assisted mapping or code revision for a completed SDTM job."""
 
     if not settings.meta_configured:
         raise HTTPException(status_code=503, detail="Meta API key and model are not configured.")
@@ -1021,24 +1028,88 @@ async def rerun_completed_sdtm_domain(
     if not isinstance(baseline_raw, dict):
         raise HTTPException(status_code=409, detail="The completed SDTM result is unavailable or invalid.")
     domains = {dataset.domain.upper() for dataset in baseline.datasets}
-    if update.domain not in domains:
+    if update.domain is not None and update.domain not in domains:
         raise HTTPException(status_code=422, detail=f"The completed SDTM plan does not contain domain {update.domain}.")
 
-    review_stage = "variable_mapping_domain" if update.stage == "variable_mapping" else "rule_augmentation_domain"
-    message = (
-        f"Regenerate {update.domain} variable and value-level mappings and refresh dependent {update.domain} rules/code."
-        if update.stage == "variable_mapping"
-        else f"Regenerate the record pipeline and rule/code augmentation for {update.domain}."
-    )
+    if update.stage == "domain_mapping":
+        review_stage = "domain_mapping_completed"
+        message = "Regenerate the complete source-to-domain plan and every dependent mapping and program."
+        scope = ReviewScope(paths=[
+            "/domain_mappings", "/unmapped_datasets", "/datasets", "/rule_augmentations",
+            "/assumptions", "/unresolved_mappings",
+        ])
+    else:
+        review_stage = "variable_mapping_domain" if update.stage == "variable_mapping" else "rule_augmentation_domain"
+        message = (
+            f"Regenerate {update.domain} variable and value-level mappings and refresh dependent {update.domain} rules/code."
+            if update.stage == "variable_mapping"
+            else f"Regenerate the record pipeline and rule/code augmentation for {update.domain}."
+        )
+        scope = ReviewScope(target_domains=[update.domain])
+        if update.scope is not None:
+            if update.scope.paths or update.scope.source_datasets:
+                raise HTTPException(status_code=422, detail="Completed domain revisions use target-domain or variable scope.")
+            selected_domains = {
+                *update.scope.target_domains,
+                *(item.domain for item in update.scope.variables),
+            }
+            if selected_domains != {update.domain}:
+                raise HTTPException(status_code=422, detail=f"Revision scope must stay within selected domain {update.domain}.")
+            known_variables = {
+                variable.name.upper()
+                for dataset in baseline.datasets
+                if dataset.domain.upper() == update.domain
+                for variable in dataset.variables
+            }
+            unknown_variables = sorted(item.variable for item in update.scope.variables if item.variable not in known_variables)
+            if unknown_variables:
+                raise HTTPException(status_code=422, detail=f"Revision scope contains unknown {update.domain} variables: {', '.join(unknown_variables)}.")
+            scope = update.scope
+    if update.guidance:
+        message = f"{message} Reviewer guidance: {update.guidance}"
+    if update.execution_attempt_id:
+        try:
+            attempt = load_attempt(settings.jobs_dir / job.id, update.execution_attempt_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if attempt.status not in {"failed", "timed_out", "review_required"}:
+            raise HTTPException(status_code=409, detail="Only failed, timed-out, or review-required execution attempts can be used as code-repair evidence.")
+        failed_domains = {check.domain for check in attempt.checks if check.status == "failed" and check.domain}
+        proposal_domain = attempt.repair_proposal.change.domain if attempt.repair_proposal else None
+        implicated_domains = failed_domains | ({proposal_domain} if proposal_domain else set())
+        if implicated_domains and update.domain not in implicated_domains:
+            raise HTTPException(status_code=422, detail="The selected domain is not implicated by this execution failure.")
+        evidence = {
+            "attempt_id": attempt.attempt_id,
+            "status": attempt.status,
+            "failure_classification": attempt.failure_classification,
+            "exit_code": attempt.exit_code,
+            "program_hash": attempt.program_hash,
+            "runtime": attempt.runtime,
+            "failed_checks": [check.model_dump(mode="json") for check in attempt.checks if check.status == "failed"],
+            "stdout": attempt.stdout[-3000:],
+            "stderr": attempt.stderr[-3000:],
+        }
+        message = f"{message} Use this sanitized execution evidence to correct the generated code: {json.dumps(evidence, ensure_ascii=False)}"
     request = new_patch_request(
         stage=review_stage,
         message=message,
-        scope=ReviewScope(target_domains=[update.domain]),
+        scope=scope,
         baseline=baseline_raw,
     )
     request["rerun_stage"] = update.stage
     request["target_domain"] = update.domain
     options["_sdtm_domain_rerun_request"] = request
+    options["_review_revision_result"] = baseline_raw
+    options["review_feedback"] = [
+        *[item for item in options.get("review_feedback", []) if isinstance(item, dict)],
+        {
+            "transaction_id": request["transaction_id"],
+            "stage": update.stage,
+            "message": message,
+            "scope": scope.model_dump(mode="json"),
+        },
+    ]
     job.options_json = json.dumps(options, ensure_ascii=False)
     job.status = "queued"
     job.error = None
@@ -1068,6 +1139,103 @@ def read_sdtm_executions(job_id: str, db: Session = Depends(get_db)) -> Executio
     if job.workflow != "sdtm":
         raise HTTPException(status_code=409, detail="Execution history is available only for SDTM jobs.")
     return ExecutionAttemptList(items=list_attempts(settings.jobs_dir / job_id))
+
+
+@app.put(
+    f"{settings.api_prefix}/jobs/{{job_id}}/sdtm-programs/{{domain}}/{{language}}",
+    response_model=JobRead,
+)
+def update_sdtm_program(
+    job_id: str,
+    domain: str,
+    language: Literal["r", "sas"],
+    update: SDTMProgramUpdate,
+    db: Session = Depends(get_db),
+) -> JobRead:
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm" or job.status != "succeeded" or not job.result_json:
+        raise HTTPException(status_code=409, detail="A completed SDTM plan is required before program editing.")
+    options = json.loads(job.options_json)
+    _ensure_no_pending_review_patch(options)
+    plan = SDTMPlan.model_validate(json.loads(job.result_json))
+    normalized_domain = domain.strip().upper()
+    if normalized_domain not in {dataset.domain.upper() for dataset in plan.datasets}:
+        raise HTTPException(status_code=404, detail=f"SDTM domain {normalized_domain or domain!r} is not in this plan.")
+
+    job_dir = settings.jobs_dir / job_id
+    program_path = job_dir / "output" / sdtm_program_filename(normalized_domain, language)
+    if not program_path.is_file():
+        raise HTTPException(status_code=404, detail=f"The {normalized_domain} {language.upper()} program is unavailable.")
+    current_sha256 = sha256_file(program_path)
+    if current_sha256 != update.expected_sha256:
+        raise HTTPException(
+            status_code=409,
+            detail="The program changed after it was loaded. Reload the latest artifact before saving your edit.",
+        )
+    try:
+        reviewed_code = validate_reviewed_program(update.code, language)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    previous_bytes = program_path.read_bytes()
+    review_path: Path | None = None
+    temporary = program_path.with_suffix(f"{program_path.suffix}.tmp")
+    try:
+        temporary.write_text(reviewed_code, encoding="utf-8")
+        temporary.replace(program_path)
+        new_sha256 = sha256_file(program_path)
+        reviewed_at = datetime.now(timezone.utc)
+        review_path = job_dir / "sdtm" / "program-reviews" / f"review-{uuid4().hex}.json"
+        review_path.parent.mkdir(parents=True, exist_ok=True)
+        review_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "domain": normalized_domain,
+                    "language": language,
+                    "artifact": program_path.relative_to(job_dir).as_posix(),
+                    "previous_sha256": current_sha256,
+                    "reviewed_sha256": new_sha256,
+                    "reviewer": update.reviewer,
+                    "reviewed_at": reviewed_at.isoformat(),
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        state = read_state(job_dir)
+        state.lifecycle.program_generation = "completed"
+        state.lifecycle.execution = "not_run"
+        state.lifecycle.validation = "not_run"
+        state.lifecycle.submission_readiness = "blocked"
+        limitation = (
+            f"{normalized_domain} {language.upper()} was manually edited by {update.reviewer}; "
+            "prior execution and validation evidence is historical only."
+        )
+        if limitation not in state.limitations:
+            state.limitations.append(limitation)
+        write_state(job_dir, state)
+        _upsert_artifact(job, program_path, job_dir)
+        _refresh_csdrg_artifacts(job, db)
+        warnings = json.loads(job.warnings_json)
+        warning = f"{normalized_domain} {language.upper()} program was manually reviewed; execute and validate the revised program before use."
+        if warning not in warnings:
+            warnings.append(warning)
+        job.warnings_json = json.dumps(warnings, ensure_ascii=False)
+        db.commit()
+        db.refresh(job)
+        return _job_read(job)
+    except Exception:
+        db.rollback()
+        program_path.write_bytes(previous_bytes)
+        if review_path is not None:
+            review_path.unlink(missing_ok=True)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 @app.post(
@@ -1337,6 +1505,83 @@ def update_csdrg(job_id: str, document: CSDRGDocument, db: Session = Depends(get
     _upsert_artifact(job, refresh_evidence_bundle(job_dir), job_dir)
     db.commit()
     return document
+
+
+@app.post(
+    f"{settings.api_prefix}/jobs/{{job_id}}/csdrg/agent-revision",
+    response_model=CSDRGDocument,
+)
+async def revise_csdrg_with_agent(
+    job_id: str,
+    update: CSDRGAgentRevisionRequest,
+    db: Session = Depends(get_db),
+) -> CSDRGDocument:
+    """Draft reviewer-editable cSDRG narrative without changing evidence-controlled sections."""
+
+    if not settings.meta_configured:
+        raise HTTPException(status_code=503, detail="Meta API key and model are not configured.")
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    if job.workflow != "sdtm" or job.status != "succeeded" or not job.result_json:
+        raise HTTPException(status_code=409, detail="A completed SDTM plan is required before cSDRG revision.")
+    job_dir = settings.jobs_dir / job.id
+    plan = SDTMPlan.model_validate(json.loads(job.result_json))
+    authoritative = build_csdrg(job_dir, plan)
+    current = authoritative
+    current_path = job_dir / "output" / "csdrg.json"
+    if current_path.is_file():
+        try:
+            current = CSDRGDocument.model_validate_json(current_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            current = authoritative
+    protected = {
+        section.heading: section
+        for section in authoritative.sections
+        if section.evidence_controlled
+    }
+    current_sections = {section.heading: section for section in current.sections}
+    for heading, expected in protected.items():
+        current_sections[heading] = expected
+    current.sections = [current_sections.get(section.heading, section) for section in current.sections]
+
+    def validate_candidate(value) -> None:
+        candidate = CSDRGDocument.model_validate(value)
+        if candidate.study_name != plan.study_name:
+            raise ValueError("The cSDRG study name must match the approved SDTM plan.")
+        expected_headings = [section.heading for section in current.sections]
+        candidate_headings = [section.heading for section in candidate.sections]
+        if candidate_headings != expected_headings:
+            raise ValueError("The cSDRG revision must preserve the complete section order and headings.")
+        received = {section.heading: section for section in candidate.sections}
+        for heading, expected in protected.items():
+            if received.get(heading) != expected:
+                raise ValueError(f"Evidence-controlled cSDRG section {heading!r} must remain unchanged.")
+
+    outcome = await ClinicalAgentRunner(
+        definition=CSDRG_REVISION_AGENT,
+        result_model=CSDRGDocument,
+        ai=MetaAIClient(settings),
+        settings=settings,
+        progress_path=job_dir / "agent" / "progress.json",
+        result_validator=validate_candidate,
+    ).run(
+        objective=(
+            "Revise the reviewer-editable cSDRG narrative using this guidance: "
+            f"{update.guidance} Confirmed review scope: {update.scope.model_dump_json() if update.scope else 'all reviewer-editable narrative sections'}. "
+            "Preserve every evidence-controlled section exactly and return the complete document."
+        ),
+        source=current.model_dump_json(indent=2),
+        options={},
+        stage="cSDRG narrative revision",
+    )
+    candidate = CSDRGDocument.model_validate(outcome.value)
+    received = {section.heading: section for section in candidate.sections}
+    for heading, expected in protected.items():
+        received[heading] = expected
+    candidate.sections = [received[section.heading] for section in candidate.sections]
+    candidate.generated_at = datetime.now(timezone.utc)
+    return candidate
 
 
 @app.put(
@@ -1754,6 +1999,7 @@ def _job_read(job: Job, include_result: bool = True) -> JobRead:
     if review_stage not in {
         "edc_source",
         "domain_mapping",
+        "domain_mapping_completed",
         "variable_mapping",
         "variable_mapping_domain",
         "rule_augmentation_domain",

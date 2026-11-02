@@ -62,6 +62,16 @@ RULE_AUGMENTATION_AGENT = AgentDefinition(
 )
 
 
+CSDRG_REVISION_AGENT = AgentDefinition(
+    id="clinical-sdtm-csdrg-revision-agent",
+    workflow="sdtm-csdrg-revision",
+    name="Clinical SDTM cSDRG Revision Agent",
+    description="Revises reviewer-editable cSDRG narrative while preserving evidence-controlled sections.",
+    instruction_file=_DIRECTORY / "csdrg_revision.md",
+    policy_files=(SDTM_POLICY,),
+)
+
+
 STAGE_AGENTS = (
     ("domain-mapping", DOMAIN_MAPPING_AGENT),
     ("variable-mapping", VARIABLE_MAPPING_AGENT),

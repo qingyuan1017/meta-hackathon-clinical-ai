@@ -15,7 +15,7 @@ from .models import Artifact, Job
 from .schemas import DISCLAIMER, SDTMPlan
 from .sdtm_workbench import read_state, write_state
 from .sdtm_audit import refresh_evidence_bundle, refresh_evidence_manifest
-from .review_patches import build_patch_record, public_patch, scope_candidate, write_patch_record
+from .review_patches import build_patch_record, public_patch, scope_candidate, scope_completed_sdtm_candidate, write_patch_record
 from .schemas.reviews import ReviewScope
 from .review_validation import validate_review_result
 from .use_cases.base import UseCaseContext
@@ -62,19 +62,34 @@ class JobRunner:
         inputs = [(job_dir / "input" / name).resolve() for name in input_names]
         try:
             baseline = SDTMPlan.model_validate(baseline_raw)
-            generated = await SDTMUseCase().regenerate_completed_domain(
-                UseCaseContext(
-                    inputs=inputs,
-                    options=options,
-                    ai=MetaAIClient(settings),
-                    settings=settings,
-                    agent_progress_path=job_dir / "agent" / "progress.json",
-                ),
-                baseline=baseline,
-                stage=str(request["rerun_stage"]),
-                target_domain=str(request["target_domain"]),
+            context = UseCaseContext(
+                inputs=inputs,
+                options=options,
+                ai=MetaAIClient(settings),
+                settings=settings,
+                agent_progress_path=job_dir / "agent" / "progress.json",
             )
+            if request["rerun_stage"] == "domain_mapping":
+                generated = await SDTMUseCase().regenerate_completed_domain_mapping(
+                    context,
+                    baseline=baseline,
+                )
+            else:
+                generated = await SDTMUseCase().regenerate_completed_domain(
+                    context,
+                    baseline=baseline,
+                    stage=str(request["rerun_stage"]),
+                    target_domain=str(request["target_domain"]),
+                )
             proposed = generated.value.model_dump(mode="json")
+            proposed = scope_completed_sdtm_candidate(
+                baseline_raw,
+                proposed,
+                rerun_stage=str(request["rerun_stage"]),
+                target_domain=request.get("target_domain"),
+                scope=ReviewScope.model_validate(request.get("scope", {})),
+            )
+            proposed = SDTMUseCase().validate_result(proposed).model_dump(mode="json")
             patch_record = build_patch_record(request, baseline_raw, proposed)
             write_patch_record(job_dir, patch_record)
             with SessionLocal() as session:
@@ -90,7 +105,11 @@ class JobRunner:
                     [
                         DISCLAIMER,
                         *generated.warnings,
-                        f"A domain-scoped {request['rerun_stage'].replace('_', ' ')} proposal for {request['target_domain']} is awaiting human approval; current artifacts remain unchanged.",
+                        (
+                            "A complete domain-mapping proposal is awaiting human approval; current artifacts remain unchanged."
+                            if request["rerun_stage"] == "domain_mapping"
+                            else f"A domain-scoped {request['rerun_stage'].replace('_', ' ')} proposal for {request['target_domain']} is awaiting human approval; current artifacts remain unchanged."
+                        ),
                     ],
                     ensure_ascii=False,
                 )
@@ -113,6 +132,13 @@ class JobRunner:
                 saved_options = json.loads(job.options_json)
                 saved_options.pop("_sdtm_domain_rerun_request", None)
                 saved_options.pop("_review_stage", None)
+                saved_options.pop("_review_revision_result", None)
+                saved_options["review_feedback"] = [
+                    item for item in saved_options.get("review_feedback", [])
+                    if not isinstance(item, dict) or item.get("transaction_id") != request.get("transaction_id")
+                ]
+                if not saved_options["review_feedback"]:
+                    saved_options.pop("review_feedback", None)
                 job.options_json = json.dumps(saved_options, ensure_ascii=False)
                 existing_warnings = json.loads(job.warnings_json or "[]")
                 job.warnings_json = json.dumps(

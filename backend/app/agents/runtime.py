@@ -880,6 +880,7 @@ def _review_stage_matches(saved_stage: str, agent_stage: str) -> bool:
         "edc_source": "edc source normalization",
         "domain_mapping": "domain mapping",
         "variable_mapping": "variable & value-level mapping",
+        "rule_augmentation": "rule augmentation",
         "tlf_inventory": "output inventory",
         "tlf_shell": "analysis & display specification",
         "tlf_programming": "programming augmentation",

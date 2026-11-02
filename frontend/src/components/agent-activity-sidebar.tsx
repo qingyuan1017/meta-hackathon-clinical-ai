@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle, Maximize2, Mic, MicOff, Minimize2, PanelRightClose, PanelRightOpen, Send } from "lucide-react";
 import { api } from "@/lib/api";
 import { convertRecordingToWav } from "@/lib/audio";
-import { useReviewDraft } from "@/lib/review-draft-context";
+import { useReviewDraft, type SDTMRevisionContext } from "@/lib/review-draft-context";
 import type { Job, ReviewScope } from "@/lib/types";
 import { AgentTurnTimeline } from "./agent-turn-timeline";
 import { StatusBadge } from "./status-badge";
@@ -15,7 +15,7 @@ export function AgentActivitySidebar({ job, onOpenChange }: { job: Job; onOpenCh
   const [fullScreen, setFullScreen] = useState(false);
   const [message, setMessage] = useState("");
   const queryClient = useQueryClient();
-  const { currentResult } = useReviewDraft();
+  const { currentResult, sdtmRevisionContext, setCsdrgAgentDraft } = useReviewDraft();
   const query = useQuery({
     queryKey: ["agent-progress", job.id],
     queryFn: () => api.agentProgress(job.id),
@@ -35,12 +35,59 @@ export function AgentActivitySidebar({ job, onOpenChange }: { job: Job; onOpenCh
       queryClient.invalidateQueries({ queryKey: ["jobs"] });
     },
   });
+  const completedRevisionMutation = useMutation({
+    mutationFn: async ({ feedback, scope }: { feedback: string; scope: ReviewScope }) => {
+      const context = sdtmRevisionContext;
+      if (!context) throw new Error("Select an SDTM review tab before requesting a revision.");
+      if (context.surface === "csdrg") {
+        const document = await api.reviseCsdrgWithAgent(job.id, feedback, scope);
+        return { kind: "csdrg" as const, document };
+      }
+      if (context.surface === "domain_mapping") {
+        const updated = await api.rerunSdtmDomain(job.id, "domain_mapping", undefined, { guidance: feedback, scope });
+        return { kind: "job" as const, job: updated };
+      }
+      if (!context.domain) throw new Error("Select a target domain before requesting this revision.");
+      const stage = context.surface === "rule_augmentation" || context.surface === "execution"
+        ? "rule_augmentation" as const
+        : "variable_mapping" as const;
+      const prefix = context.surface === "acrf"
+        ? "aCRF metadata revision"
+        : context.surface === "define_xml"
+          ? "Define-XML source metadata revision"
+          : context.surface === "execution"
+            ? "Execution-informed rule/code revision"
+            : context.surface === "rule_augmentation"
+              ? "Rule/code revision"
+              : "Variable/VLM revision";
+      const updated = await api.rerunSdtmDomain(job.id, stage, context.domain, {
+        guidance: `${prefix}: ${feedback}`,
+        executionAttemptId: context.executionAttemptId,
+        scope,
+      });
+      return { kind: "job" as const, job: updated };
+    },
+    onSuccess: (result) => {
+      setMessage("");
+      if (result.kind === "csdrg") {
+        setCsdrgAgentDraft(result.document);
+        return;
+      }
+      queryClient.setQueryData(["job", job.id], result.job);
+      queryClient.invalidateQueries({ queryKey: ["agent-progress", job.id] });
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    },
+  });
 
   useEffect(() => {
     setDrawerOpen(false);
     setFullScreen(false);
     onOpenChange?.(false);
   }, [job.id, onOpenChange]);
+
+  useEffect(() => {
+    if (job.status === "succeeded") setMessage("");
+  }, [job.status, sdtmRevisionContext?.domain, sdtmRevisionContext?.executionAttemptId, sdtmRevisionContext?.surface]);
 
   const updateDrawerOpen = (open: boolean) => {
     setDrawerOpen(open);
@@ -64,16 +111,28 @@ export function AgentActivitySidebar({ job, onOpenChange }: { job: Job; onOpenCh
         {query.isError ? `Agent trace unavailable: ${query.error.message}` : "Loading agent activity…"}
       </div>;
   const composer = job.status === "review_required" && !job.review_patch ? (
-    <FeedbackComposer
-      job={job}
-      currentResult={currentResult ?? asRecord(job.result)}
-      message={message}
-      onMessageChange={setMessage}
-      onSubmit={(scope) => feedbackMutation.mutate({ feedback: message.trim(), scope })}
-      submitting={feedbackMutation.isPending}
-      error={feedbackMutation.error?.message}
-    />
-  ) : null;
+      <FeedbackComposer
+        job={job}
+        currentResult={currentResult ?? asRecord(job.result)}
+        message={message}
+        onMessageChange={setMessage}
+        onSubmit={(scope) => feedbackMutation.mutate({ feedback: message.trim(), scope })}
+        submitting={feedbackMutation.isPending}
+        error={feedbackMutation.error?.message}
+      />
+    ) : job.status === "succeeded" && job.workflow === "sdtm" && sdtmRevisionContext ? (
+      <CompletedSDTMRevisionComposer
+        job={job}
+        currentResult={currentResult ?? asRecord(job.result)}
+        context={sdtmRevisionContext}
+        message={message}
+        onMessageChange={setMessage}
+        onSubmit={(scope) => completedRevisionMutation.mutate({ feedback: message.trim(), scope })}
+        submitting={completedRevisionMutation.isPending}
+        error={completedRevisionMutation.error?.message}
+        producesDraft={sdtmRevisionContext.surface === "csdrg"}
+      />
+    ) : null;
 
   return (
     <>
@@ -119,15 +178,83 @@ export function AgentActivitySidebar({ job, onOpenChange }: { job: Job; onOpenCh
   );
 }
 
-function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubmit, submitting, error }: { job: Job; currentResult: Record<string, unknown>; message: string; onMessageChange: (value: string) => void; onSubmit: (scope: ReviewScope) => void; submitting: boolean; error?: string }) {
-  const stage = job.review_stage ? REVIEW_STAGE_LABELS[job.review_stage] : "current stage";
-  const [scope, setScope] = useState<ReviewScope>(emptyScope);
-  const scopeMutation = useMutation({
-    mutationFn: () => api.proposeReviewScope(job.id, message.trim(), currentResult),
-    onSuccess: (proposal) => setScope(proposal.scope),
-  });
+function CompletedSDTMRevisionComposer({ job, currentResult, context, message, onMessageChange, onSubmit, submitting, error, producesDraft }: {
+  job: Job;
+  currentResult: Record<string, unknown>;
+  context: SDTMRevisionContext;
+  message: string;
+  onMessageChange: (value: string) => void;
+  onSubmit: (scope: ReviewScope) => void;
+  submitting: boolean;
+  error?: string;
+  producesDraft: boolean;
+}) {
+  const [scope, setScope] = useState<ReviewScope>(() => completedRevisionScope(context));
+  useEffect(() => setScope(completedRevisionScope(context)), [context.domain, context.surface, context.variable]);
   const hasScope = scope.paths.length > 0 || scope.source_datasets.length > 0 || scope.target_domains.length > 0 || scope.variables.length > 0;
-  const canSubmit = Boolean(message.trim()) && hasScope && Boolean(job.result_revision) && !submitting;
+  const canSubmit = Boolean(message.trim()) && hasScope && !submitting;
+  return <form className="border-t border-white/[0.08] bg-[#151518] p-3" onSubmit={(event) => { event.preventDefault(); if (canSubmit) onSubmit(scope); }}>
+    <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300">Guide this revision</p>
+    <p className="mt-1 text-xs font-bold text-zinc-200">{context.label}</p>
+    <p className="mt-1 text-[11px] leading-4 text-zinc-500">The active tab and selected domain determine the agent and revision scope. Change the selection in the workspace to target something else.</p>
+    <VoiceGuidanceInput jobId={job.id} message={message} onMessageChange={onMessageChange} submitting={submitting} />
+    <textarea
+      aria-label="Review guidance for the agent"
+      value={message}
+      onChange={(event) => onMessageChange(event.target.value.slice(0, 4000))}
+      rows={4}
+      maxLength={4000}
+      placeholder="Describe the change for the current selection."
+      className="focus-ring mt-2 w-full resize-y rounded-lg border border-white/10 bg-[#0d0d0f] px-3 py-2 text-xs leading-5 text-zinc-200 placeholder:text-zinc-600"
+    />
+    <CompletedRevisionScopePicker context={context} currentResult={currentResult} scope={scope} onChange={setScope} />
+    <div className="mt-2 flex items-center justify-between gap-3">
+      <span className={`text-[10px] ${hasScope ? "text-emerald-300" : "text-amber-300"}`}>{hasScope ? `Scope confirmed · ${message.length}/4000` : "Select a scope before submitting"}</span>
+      <button type="submit" disabled={!canSubmit} className="focus-ring inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-40">
+        {submitting ? <LoaderCircle size={14} className="animate-spin" /> : <Send size={14} />}
+        {submitting ? "Agent is revising…" : producesDraft ? "Draft revision" : "Generate proposal"}
+      </button>
+    </div>
+    {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{error}</p>}
+    <p className="mt-2 text-[10px] leading-4 text-amber-200/70">{producesDraft ? "The cSDRG draft will appear in the existing editor for review and saving." : "Approved artifacts remain active until the proposal is accepted."}</p>
+  </form>;
+}
+
+function completedRevisionScope(context: SDTMRevisionContext): ReviewScope {
+  if (context.surface === "domain_mapping") return { ...emptyScope(), paths: ["/domain_mappings", "/unmapped_datasets", "/datasets", "/rule_augmentations", "/assumptions", "/unresolved_mappings"] };
+  if (context.surface === "csdrg") return { ...emptyScope(), paths: ["/sections"] };
+  if (context.domain && context.variable) return { ...emptyScope(), variables: [{ domain: context.domain, variable: context.variable, fields: [] }] };
+  if (context.domain) return { ...emptyScope(), target_domains: [context.domain] };
+  return emptyScope();
+}
+
+function CompletedRevisionScopePicker({ context, currentResult, scope, onChange }: {
+  context: SDTMRevisionContext;
+  currentResult: Record<string, unknown>;
+  scope: ReviewScope;
+  onChange: (scope: ReviewScope) => void;
+}) {
+  if (context.surface === "domain_mapping") return <FixedScope label="Revision scope" value="Complete source-to-domain plan and dependent mappings/programs" />;
+  if (context.surface === "csdrg") return <FixedScope label="Revision scope" value="Reviewer-editable cSDRG narrative; evidence-controlled sections stay locked" />;
+  const domain = context.domain ?? "";
+  const datasets = asRecords(currentResult.datasets);
+  const dataset = datasets.find((item) => String(item.domain).toUpperCase() === domain.toUpperCase());
+  const variables = asRecords(dataset?.variables);
+  const selectedVariable = scope.variables[0]?.variable ?? "";
+  const selectedFields = scope.variables[0]?.fields ?? [];
+  const fieldLockAvailable = context.surface === "variable_mapping" || context.surface === "acrf" || context.surface === "define_xml";
+  return <div className="mt-2 grid gap-2 rounded-lg border border-white/10 bg-black/15 p-2">
+    <div><p className="text-[10px] font-bold text-zinc-400">Affected target domain</p><p className="mt-1 rounded-md border border-violet-400/20 bg-violet-500/[0.08] px-2 py-1.5 font-mono text-[11px] font-bold text-violet-200">{domain}</p></div>
+    {variables.length > 0 && <label className="text-[10px] font-bold text-zinc-400">Narrow to one variable<select aria-label="Affected target variable" value={selectedVariable} onChange={(event) => onChange(event.target.value ? { ...emptyScope(), variables: [{ domain, variable: event.target.value, fields: [] }] } : { ...emptyScope(), target_domains: [domain] })} className={scopeInput}><option value="">Entire {domain} domain</option>{variables.map((item) => <option key={String(item.name)}>{String(item.name)}</option>)}</select></label>}
+    {selectedVariable && fieldLockAvailable && <div><p className="text-[10px] font-bold text-zinc-400">Optional field lock</p><div className="mt-1 flex max-h-24 flex-wrap gap-1 overflow-auto">{variableFields.map((field) => <label key={field} className="flex items-center gap-1 rounded border border-white/10 px-1.5 py-1 text-[9px] text-zinc-400"><input type="checkbox" checked={selectedFields.includes(field)} onChange={() => { const fields = selectedFields.includes(field) ? selectedFields.filter((item) => item !== field) : [...selectedFields, field]; onChange({ ...emptyScope(), variables: [{ domain, variable: selectedVariable, fields }] }); }} />{field}</label>)}</div><p className="mt-1 text-[9px] text-zinc-600">No checked fields means the full variable row and its dependent rule are in scope.</p></div>}
+  </div>;
+}
+
+function FixedScope({ label, value }: { label: string; value: string }) {
+  return <div className="mt-2 rounded-lg border border-white/10 bg-black/15 p-2"><p className="text-[10px] font-bold text-zinc-400">{label}</p><p className="mt-1 text-[10px] leading-4 text-zinc-300">{value}</p></div>;
+}
+
+function VoiceGuidanceInput({ jobId, message, onMessageChange, submitting }: { jobId: string; message: string; onMessageChange: (value: string) => void; submitting: boolean }) {
   const [voiceSupported, setVoiceSupported] = useState(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -139,12 +266,7 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   messageRef.current = message;
 
-  useEffect(() => { if (!message) setScope(emptyScope()); }, [message]);
-
-  useEffect(() => {
-    setVoiceSupported(typeof MediaRecorder !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia));
-  }, []);
-
+  useEffect(() => setVoiceSupported(typeof MediaRecorder !== "undefined" && Boolean(navigator.mediaDevices?.getUserMedia)), []);
   useEffect(() => {
     if (voiceState !== "recording") return;
     const interval = window.setInterval(() => setElapsedSeconds((value) => value + 1), 1000);
@@ -154,16 +276,12 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
     }, 180_000);
     return () => { window.clearInterval(interval); window.clearTimeout(limit); };
   }, [voiceState]);
-
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
       const recorder = recorderRef.current;
-      if (recorder && recorder.state !== "inactive") {
-        recorder.onstop = null;
-        recorder.stop();
-      }
+      if (recorder && recorder.state !== "inactive") { recorder.onstop = null; recorder.stop(); }
       streamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
@@ -178,8 +296,7 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
       if (!mountedRef.current) { stream.getTracks().forEach((track) => track.stop()); return; }
       streamRef.current = stream;
       chunksRef.current = [];
-      const preferredType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"]
-        .find((type) => MediaRecorder.isTypeSupported(type));
+      const preferredType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
       const recorder = preferredType ? new MediaRecorder(stream, { mimeType: preferredType }) : new MediaRecorder(stream);
       recorderRef.current = recorder;
       recorder.ondataavailable = (event) => { if (event.data.size) chunksRef.current.push(event.data); };
@@ -196,12 +313,11 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
           const recording = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
           if (!recording.size) throw new Error("No microphone audio was captured.");
           const wav = await convertRecordingToWav(recording);
-          const result = await api.transcribeReviewAudio(job.id, wav);
+          const result = await api.transcribeReviewAudio(jobId, wav);
           const existing = messageRef.current.trimEnd();
           onMessageChange(`${existing}${existing ? "\n" : ""}${result.transcript}`.slice(0, 4000));
         } catch (caught) {
-          const detail = caught instanceof Error ? caught.message : "Voice transcription failed.";
-          setVoiceError(detail);
+          setVoiceError(caught instanceof Error ? caught.message : "Voice transcription failed.");
         } finally {
           if (mountedRef.current) setVoiceState("idle");
         }
@@ -214,14 +330,37 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
       setVoiceState("idle");
     }
   };
-
   const stopVoiceInput = () => {
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
     setVoiceState("transcribing");
   };
-
   const minutes = Math.floor(elapsedSeconds / 60);
   const seconds = String(elapsedSeconds % 60).padStart(2, "0");
+  return <>
+    <div className="mt-2 flex items-center gap-2">
+      <button type="button" onClick={voiceState === "recording" ? stopVoiceInput : startVoiceInput} disabled={!voiceSupported || voiceState === "requesting" || voiceState === "transcribing" || submitting} aria-label={voiceState === "recording" ? "Stop voice input" : "Start voice input"} aria-pressed={voiceState === "recording"} className={`focus-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40 ${voiceState === "recording" ? "border-rose-400/40 bg-rose-500/15 text-rose-200" : "border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]"}`}>
+        {voiceState === "requesting" || voiceState === "transcribing" ? <LoaderCircle size={14} className="animate-spin" /> : voiceState === "recording" ? <MicOff size={14} /> : <Mic size={14} />}
+        {voiceState === "requesting" ? "Opening mic…" : voiceState === "transcribing" ? "Transcribing…" : voiceState === "recording" ? `Stop ${minutes}:${seconds}` : "Voice input"}
+      </button>
+      <span className="text-[10px] leading-4 text-zinc-600">Meta Muse adds editable text; it never auto-submits.</span>
+    </div>
+    {!voiceSupported && <p className="mt-1.5 text-[10px] leading-4 text-amber-300/80">Voice input is unavailable in this browser.</p>}
+    {voiceError && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{voiceError}</p>}
+    <p className="mt-2 text-[10px] leading-4 text-zinc-600">Record synthetic or de-identified guidance only. Audio is sent to the configured Meta Model API and is not stored by this workbench.</p>
+  </>;
+}
+
+function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubmit, submitting, error }: { job: Job; currentResult: Record<string, unknown>; message: string; onMessageChange: (value: string) => void; onSubmit: (scope: ReviewScope) => void; submitting: boolean; error?: string }) {
+  const stage = job.review_stage ? REVIEW_STAGE_LABELS[job.review_stage] : "current stage";
+  const [scope, setScope] = useState<ReviewScope>(emptyScope);
+  const scopeMutation = useMutation({
+    mutationFn: () => api.proposeReviewScope(job.id, message.trim(), currentResult),
+    onSuccess: (proposal) => setScope(proposal.scope),
+  });
+  const hasScope = scope.paths.length > 0 || scope.source_datasets.length > 0 || scope.target_domains.length > 0 || scope.variables.length > 0;
+  const canSubmit = Boolean(message.trim()) && hasScope && Boolean(job.result_revision) && !submitting;
+
+  useEffect(() => { if (!message) setScope(emptyScope()); }, [message]);
   return (
     <form
       className="border-t border-white/[0.08] bg-[#151518] p-3"
@@ -229,21 +368,7 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
     >
       <p className="text-[10px] font-black uppercase tracking-[0.14em] text-violet-300">Guide this revision</p>
       <p className="mt-1 text-[11px] leading-4 text-zinc-500">Ask the agent to revise {stage}. This does not approve or advance the workflow.</p>
-      <div className="mt-2 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={voiceState === "recording" ? stopVoiceInput : startVoiceInput}
-          disabled={!voiceSupported || voiceState === "requesting" || voiceState === "transcribing" || submitting}
-          aria-label={voiceState === "recording" ? "Stop voice input" : "Start voice input"}
-          aria-pressed={voiceState === "recording"}
-          className={`focus-ring inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40 ${voiceState === "recording" ? "border-rose-400/40 bg-rose-500/15 text-rose-200" : "border-white/10 bg-white/[0.04] text-zinc-300 hover:bg-white/[0.08]"}`}
-        >
-          {voiceState === "requesting" || voiceState === "transcribing" ? <LoaderCircle size={14} className="animate-spin" /> : voiceState === "recording" ? <MicOff size={14} /> : <Mic size={14} />}
-          {voiceState === "requesting" ? "Opening mic…" : voiceState === "transcribing" ? "Transcribing…" : voiceState === "recording" ? `Stop ${minutes}:${seconds}` : "Voice input"}
-        </button>
-        <span className="text-[10px] leading-4 text-zinc-600">Meta Muse adds editable text; it never auto-submits.</span>
-      </div>
-      {!voiceSupported && <p className="mt-1.5 text-[10px] leading-4 text-amber-300/80">Voice input is unavailable in this browser.</p>}
+      <VoiceGuidanceInput jobId={job.id} message={message} onMessageChange={onMessageChange} submitting={submitting} />
       <textarea
         aria-label="Review guidance for the agent"
         value={message}
@@ -268,8 +393,6 @@ function FeedbackComposer({ job, currentResult, message, onMessageChange, onSubm
         </button>
       </div>
       {error && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{error}</p>}
-      {voiceError && <p className="mt-2 rounded-md border border-rose-500/20 bg-rose-500/10 px-2.5 py-2 text-[11px] leading-4 text-rose-300">{voiceError}</p>}
-      <p className="mt-2 text-[10px] leading-4 text-zinc-600">Record synthetic or de-identified guidance only. Audio is sent to the configured Meta Model API and is not stored by this workbench.</p>
     </form>
   );
 }
@@ -353,6 +476,7 @@ const scopeInput = "mt-1 w-full rounded-md border border-white/10 bg-[#0d0d0f] p
 const REVIEW_STAGE_LABELS: Record<NonNullable<Job["review_stage"]>, string> = {
   edc_source: "EDC source specification",
   domain_mapping: "SDTM domain mapping",
+  domain_mapping_completed: "Completed SDTM domain-mapping rerun",
   variable_mapping: "SDTM variable and value-level mapping",
   variable_mapping_domain: "Completed SDTM domain variable/VLM rerun",
   rule_augmentation_domain: "Completed SDTM domain rule rerun",

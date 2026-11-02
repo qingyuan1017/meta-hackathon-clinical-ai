@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentActivitySidebar } from "@/components/agent-activity-sidebar";
 import { api } from "@/lib/api";
 import { convertRecordingToWav } from "@/lib/audio";
 import type { AgentProgress, Job } from "@/lib/types";
-import { ReviewDraftProvider } from "@/lib/review-draft-context";
+import { ReviewDraftProvider, useReviewDraft } from "@/lib/review-draft-context";
 
 const job = {
   id: "job-review",
@@ -40,6 +41,37 @@ const progress = {
   read_source_chunks: [1],
   events: [],
 } as AgentProgress;
+
+const completedSdtmJob = {
+  ...job,
+  id: "job-sdtm-complete",
+  workflow: "sdtm",
+  status: "succeeded",
+  review_stage: null,
+  completed_at: "2026-10-30T13:00:00Z",
+  result: { study_name: "SYN-101", datasets: [{ domain: "DM" }] },
+} as Job;
+
+function VariableSelection() {
+  const { setSdtmRevisionContext } = useReviewDraft();
+  useEffect(() => {
+    setSdtmRevisionContext({ surface: "variable_mapping", label: "Variable & VLM · DM", domain: "DM" });
+  }, [setSdtmRevisionContext]);
+  return null;
+}
+
+function ExecutionSelection() {
+  const { setSdtmRevisionContext } = useReviewDraft();
+  useEffect(() => {
+    setSdtmRevisionContext({
+      surface: "execution",
+      label: "Rule & Code repair · DM · attempt-abcdef123456",
+      domain: "DM",
+      executionAttemptId: "attempt-abcdef123456",
+    });
+  }, [setSdtmRevisionContext]);
+  return null;
+}
 
 vi.mock("@/lib/audio", () => ({
   convertRecordingToWav: vi.fn(async () => new Blob(["wav"], { type: "audio/wav" })),
@@ -94,6 +126,45 @@ describe("AgentActivitySidebar", () => {
       scope: expect.objectContaining({ paths: ["/study_name"] }),
     })));
     expect(screen.getAllByText(/does not approve or advance/i)).not.toHaveLength(0);
+  });
+
+  it("uses the current completed SDTM selection for right-side agent revisions", async () => {
+    vi.spyOn(api, "agentProgress").mockResolvedValue(progress);
+    const rerun = vi.spyOn(api, "rerunSdtmDomain").mockResolvedValue({ ...completedSdtmJob, status: "queued" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={completedSdtmJob.id}><VariableSelection /><AgentActivitySidebar job={completedSdtmJob} /></ReviewDraftProvider></QueryClientProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Agent history" }));
+    expect(await screen.findByText("Variable & VLM · DM")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start voice input" })).toBeInTheDocument();
+    expect(screen.getByText("DM")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Review guidance for the agent"), { target: { value: "Use RFSTDTC when deriving DM.RFSTDTC." } });
+    fireEvent.click(screen.getByRole("button", { name: "Generate proposal" }));
+
+    await waitFor(() => expect(rerun).toHaveBeenCalledWith(completedSdtmJob.id, "variable_mapping", "DM", {
+      guidance: "Variable/VLM revision: Use RFSTDTC when deriving DM.RFSTDTC.",
+      executionAttemptId: undefined,
+      scope: { paths: [], source_datasets: [], target_domains: ["DM"], variables: [] },
+    }));
+  });
+
+  it("submits selected execution evidence through the existing Rule & Code agent composer", async () => {
+    vi.spyOn(api, "agentProgress").mockResolvedValue(progress);
+    const rerun = vi.spyOn(api, "rerunSdtmDomain").mockResolvedValue({ ...completedSdtmJob, status: "queued" });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={completedSdtmJob.id}><ExecutionSelection /><AgentActivitySidebar job={completedSdtmJob} /></ReviewDraftProvider></QueryClientProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "Agent history" }));
+    expect(await screen.findByText("Rule & Code repair · DM · attempt-abcdef123456")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start voice input" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Review guidance for the agent"), { target: { value: "Correct the missing AGE reference." } });
+    fireEvent.click(screen.getByRole("button", { name: "Generate proposal" }));
+
+    await waitFor(() => expect(rerun).toHaveBeenCalledWith(completedSdtmJob.id, "rule_augmentation", "DM", {
+      guidance: "Execution-informed rule/code revision: Correct the missing AGE reference.",
+      executionAttemptId: "attempt-abcdef123456",
+      scope: { paths: [], source_datasets: [], target_domains: ["DM"], variables: [] },
+    }));
   });
 
   it("records voice guidance and inserts the Meta transcript without submitting", async () => {

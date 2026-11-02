@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .edc import EDCSourceSpecification
 from .sdtm import SDTMDomainMappingPlan, SDTMVariableMappingPlan
@@ -112,13 +112,42 @@ class SDTMVariableMappingUpdate(BaseModel):
 
 
 class SDTMDomainRerunRequest(BaseModel):
-    stage: Literal["variable_mapping", "rule_augmentation"]
-    domain: str = Field(min_length=2, max_length=8)
+    stage: Literal["domain_mapping", "variable_mapping", "rule_augmentation"]
+    domain: str | None = Field(default=None, min_length=2, max_length=8)
+    guidance: str | None = Field(default=None, min_length=1, max_length=4000)
+    execution_attempt_id: str | None = Field(default=None, pattern=r"^attempt-[a-f0-9]{12}$")
+    scope: ReviewScope | None = None
+
+    @field_validator("guidance")
+    @classmethod
+    def normalize_guidance(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value else None
+        return normalized or None
 
     @field_validator("domain")
     @classmethod
-    def normalize_domain(cls, value: str) -> str:
-        return value.strip().upper()
+    def normalize_domain(cls, value: str | None) -> str | None:
+        return value.strip().upper() if value else None
+
+    @model_validator(mode="after")
+    def require_domain_for_domain_scoped_stages(self):
+        if self.stage != "domain_mapping" and self.domain is None:
+            raise ValueError("A target domain is required for variable or rule/code revision.")
+        if self.stage == "domain_mapping" and self.domain is not None:
+            raise ValueError("Domain mapping revision operates on the complete source-to-domain plan.")
+        if self.execution_attempt_id and self.stage != "rule_augmentation":
+            raise ValueError("Execution evidence can be attached only to a rule/code revision.")
+        return self
+
+
+class CSDRGAgentRevisionRequest(BaseModel):
+    guidance: str = Field(min_length=1, max_length=4000)
+    scope: ReviewScope | None = None
+
+    @field_validator("guidance")
+    @classmethod
+    def normalize_csdrg_guidance(cls, value: str) -> str:
+        return value.strip()
 
 
 class TLFShellPlanUpdate(BaseModel):

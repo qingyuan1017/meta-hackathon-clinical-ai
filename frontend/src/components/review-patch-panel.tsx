@@ -26,7 +26,7 @@ export function ReviewPatchPanel({ job, domain, summaryOnly = false }: { job: Jo
     },
   });
   if (!patch) return null;
-  const completedDomainRerun = patch.stage === "variable_mapping_domain" || patch.stage === "rule_augmentation_domain";
+  const completedDomainRerun = patch.stage === "domain_mapping_completed" || patch.stage === "variable_mapping_domain" || patch.stage === "rule_augmentation_domain";
   const allGroups = groupOperationsByDomain(patch.operations, asRecord(job.result));
   const operationGroups = domain ? allGroups.filter((group) => group.domain === domain) : allGroups;
   if (domain) return operationGroups.length ? <div className="mt-3"><DomainPatchSection group={operationGroups[0]} /></div> : null;
@@ -45,7 +45,7 @@ export function ReviewPatchPanel({ job, domain, summaryOnly = false }: { job: Jo
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button type="button" variant="clinical" disabled={mutation.isPending || !job.result_revision} onClick={() => mutation.mutate(true)}><Check size={15} />{completedDomainRerun ? "Approve rerun and rebuild" : "Accept all domain sections"}</Button>
         <Button type="button" variant="outline" disabled={mutation.isPending || !job.result_revision} onClick={() => mutation.mutate(false)}><X size={15} />{completedDomainRerun ? "Reject rerun" : "Reject all domain sections"}</Button>
-        <span className="text-[11px] text-zinc-500">{completedDomainRerun ? "Approval replaces only the proposed domain content, rebuilds derived artifacts, and preserves all other domains." : "The patch is one transaction; this decision covers every domain section and does not approve the stage."}</span>
+        <span className="text-[11px] text-zinc-500">{completedDomainRerun ? "Approval applies the complete proposal, rebuilds all derived artifacts, and makes prior execution and validation evidence historical." : "The patch is one transaction; this decision covers every domain section and does not approve the stage."}</span>
       </div>
       {mutation.error && <p className="mt-3 rounded-lg border border-rose-500/20 bg-rose-500/10 p-2 text-xs text-rose-300">{mutation.error.message}</p>}
     </section>

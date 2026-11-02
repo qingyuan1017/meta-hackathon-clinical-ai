@@ -2,10 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState, type DragEvent, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, ListChecks, Play, Plus, RotateCcw, Save, ScrollText, Table2, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ArrowRight, BookOpen, Code2, Database, Download, FileCode2, FileScan, GripVertical, ListChecks, Play, Plus, Save, ScrollText, Table2, Trash2, Upload } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Artifact, CDISCDataset, SDTMWorkbenchState, ValidationFinding } from "@/lib/types";
+import type { Artifact, CDISCDataset, ExecutionAttempt, Job, SDTMWorkbenchState, ValidationFinding } from "@/lib/types";
+import type { RevisionFeedbackEvent } from "@/lib/revision-decision";
+import { useOptionalReviewDraft } from "@/lib/review-draft-context";
 import { Button } from "./ui/button";
+import { groupOperationsByDomain, ReviewPatchPanel } from "./review-patch-panel";
+import { RevisionDecisionPanel } from "./revision-decision-panel";
 import {
   VariableMappingMatrix,
   newSourceVariable,
@@ -40,6 +44,8 @@ interface SDTMDataset {
   acrf_text_color?: string;
   acrf_fill_color?: string;
   acrf_domain_annotation?: ACRFDomainAnnotation;
+  review_assumptions: string[];
+  review_unresolved_mappings: string[];
   variables: SDTMVariable[];
 }
 
@@ -82,7 +88,7 @@ type Stage = "domains" | "variables" | "rules" | "execution" | "acrf" | "define"
 const inputClass = "focus-ring min-h-9 w-full rounded-md border border-white/10 bg-[#101012] px-2.5 py-2 text-xs text-zinc-200 placeholder:text-zinc-600";
 const codeClass = "focus-ring min-h-28 w-full resize-y rounded-lg border border-white/10 bg-[#0a0a0c] p-3 font-mono text-xs leading-5 text-zinc-200 placeholder:text-zinc-700";
 
-export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onChange, onSave, saving, error }: {
+export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onChange, onSave, saving, error, reviewJob, feedbackEvents, initialStage = "domains" }: {
   jobId?: string;
   workbench?: SDTMWorkbenchState | null;
   value: Record<string, unknown>;
@@ -91,9 +97,12 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
   onSave: (value: SDTMPlanDraft) => void;
   saving: boolean;
   error?: string | null;
+  reviewJob?: Job;
+  feedbackEvents?: RevisionFeedbackEvent[];
+  initialStage?: Stage;
 }) {
   const plan = normalizePlan(value);
-  const [stage, setStage] = useState<Stage>("domains");
+  const [stage, setStage] = useState<Stage>(initialStage);
   const [selectedDomain, setSelectedDomain] = useState(plan.datasets[0]?.domain ?? "");
   const [customSources, setCustomSources] = useState<Array<{ name: string; type: SourceType }>>([]);
   const [sourceName, setSourceName] = useState("");
@@ -103,16 +112,14 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
   const [libraryStandard, setLibraryStandard] = useState<"sdtm" | "sdtmig">("sdtmig");
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
-  const client = useQueryClient();
-  const rerunMutation = useMutation({
-    mutationFn: ({ stage, domain }: { stage: "variable_mapping" | "rule_augmentation"; domain: string }) =>
-      api.rerunSdtmDomain(jobId!, stage, domain),
-    onSuccess: (updated) => {
-      client.setQueryData(["job", jobId], updated);
-      client.invalidateQueries({ queryKey: ["jobs"] });
-      client.invalidateQueries({ queryKey: ["agent-progress", jobId] });
-    },
-  });
+  const reviewDraft = useOptionalReviewDraft();
+  const setSdtmRevisionContext = reviewDraft?.setSdtmRevisionContext;
+  const proposalReview = Boolean(reviewJob?.review_patch);
+  const feedbackCounts = useMemo(() => new Map(
+    reviewJob?.review_patch
+      ? groupOperationsByDomain(reviewJob.review_patch.operations, value).map((group) => [group.domain, group.operations.length])
+      : [],
+  ), [reviewJob?.review_patch, value]);
 
   const sourceInventory = useMemo(() => {
     const sources = new Map<string, SourceType>();
@@ -140,6 +147,33 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
   const csdrgJson = artifacts.find((artifact) => artifact.name === "csdrg.json");
   const csdrgPdf = artifacts.find((artifact) => artifact.name === "csdrg.pdf");
   const issues = reviewIssues(plan);
+  const ownedAssumptions = new Set(plan.datasets.flatMap((dataset) => dataset.review_assumptions));
+  const ownedUnresolved = new Set(plan.datasets.flatMap((dataset) => dataset.review_unresolved_mappings));
+  const stageAssumptions = plan.assumptions.filter((item) => !ownedAssumptions.has(item));
+  const stageUnresolved = plan.unresolved_mappings.filter((item) => !ownedUnresolved.has(item));
+  const activeProposalOperations = activeDataset && reviewJob?.review_patch
+    ? reviewJob.review_patch.operations.filter((operation) => operation.path.includes(`/datasets/domain=${encodePatchSelector(activeDataset.domain)}/`))
+    : [];
+
+  useEffect(() => setStage(initialStage), [initialStage, reviewJob?.review_patch?.transaction_id]);
+
+  useEffect(() => {
+    if (!setSdtmRevisionContext) return;
+    if (!jobId) {
+      setSdtmRevisionContext(null);
+      return;
+    }
+    const domain = activeDataset?.domain;
+    if (stage === "domains") setSdtmRevisionContext({ surface: "domain_mapping", label: "Domain Mapping" });
+    else if (stage === "variables" && domain) setSdtmRevisionContext({ surface: "variable_mapping", label: `Variable & VLM · ${domain}`, domain });
+    else if (stage === "rules" && domain) setSdtmRevisionContext({ surface: "rule_augmentation", label: `Rule & Code · ${domain}`, domain });
+    else if (stage === "execution") return;
+    else if (stage === "acrf" && domain) setSdtmRevisionContext({ surface: "acrf", label: `aCRF metadata · ${domain}`, domain });
+    else if (stage === "define" && domain) setSdtmRevisionContext({ surface: "define_xml", label: `Define-XML metadata · ${domain}`, domain });
+    else if (stage === "csdrg") setSdtmRevisionContext({ surface: "csdrg", label: "cSDRG narrative" });
+    else setSdtmRevisionContext(null);
+    return () => setSdtmRevisionContext(null);
+  }, [activeDataset?.domain, jobId, setSdtmRevisionContext, stage]);
 
   const update = (mutate: (next: SDTMPlanDraft) => void) => {
     const next = structuredClone(plan);
@@ -238,13 +272,15 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
 
   return (
     <div className="space-y-5">
-      <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.06] p-4">
+      <div className={`rounded-xl border p-4 ${proposalReview ? "border-amber-500/25 bg-amber-500/[0.08]" : "border-violet-500/20 bg-violet-500/[0.06]"}`}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div><p className="text-xs font-black uppercase tracking-[0.14em] text-violet-300">SDTM review workspace</p><p className="mt-1 text-sm text-zinc-300">Review each mapping stage, then inspect the derived aCRF and Define-XML. Saving revalidates the complete plan and rebuilds every artifact.</p></div>
-          <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-200">Draft · review required</span>
+          <div><p className={`text-xs font-black uppercase tracking-[0.14em] ${proposalReview ? "text-amber-200" : "text-violet-300"}`}>{proposalReview ? "Review gate · agent proposal" : "SDTM review workspace"}</p><p className={`mt-1 text-sm ${proposalReview ? "text-amber-100/80" : "text-zinc-300"}`}>{proposalReview ? "Review the proposed changes, recorded decisions, and assumptions in the same workspace used for stage review. Approved artifacts remain active until you accept this transaction." : "Review each mapping stage, then inspect the derived aCRF and Define-XML. Saving revalidates the complete plan and rebuilds every artifact."}</p></div>
+          <span className="rounded-full border border-amber-500/25 bg-amber-500/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-200">{proposalReview ? "Proposal · review required" : "Draft · review required"}</span>
         </div>
         {workbench && <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{Object.entries(workbench.lifecycle).map(([label, status]) => <div key={label} className="rounded-lg border border-white/10 bg-black/15 px-3 py-2"><p className="text-[9px] font-black uppercase tracking-wider text-zinc-500">{label.replaceAll("_", " ")}</p><p className={`mt-1 text-xs font-bold ${status === "passed" || status === "completed" || status === "ready" ? "text-emerald-300" : status === "failed" || status === "blocked" || status === "unavailable" ? "text-rose-300" : "text-amber-200"}`}>{status.replaceAll("_", " ")}</p></div>)}</div>}
       </div>
+
+      {proposalReview && <RevisionDecisionPanel result={{ assumptions: stageAssumptions, unresolved_mappings: stageUnresolved }} events={feedbackEvents} title="Stage-wide feedback decisions" assumptionsTitle="Stage-wide assumptions" ariaLabel="Stage-wide feedback decisions" onlyMatchedFeedback collapsedByDefault />}
 
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4" role="tablist" aria-label="SDTM review steps">
         <StageButton active={stage === "domains"} icon={<Database size={16} />} number="01" label="Domain mapping" onClick={() => setStage("domains")} />
@@ -287,16 +323,17 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
             <section className="space-y-3">
               <RelationshipGuide />
               {plan.datasets.map((dataset) => (
-                <DomainDropZone key={dataset.domain} dataset={dataset} mappings={plan.domain_mappings.filter((mapping) => mapping.target_domain === dataset.domain)} onDrop={(event) => onDrop(event, dataset.domain)} onUpdate={(mappingIndex, key, nextValue) => update((next) => {
+                <div key={dataset.domain}><DomainDropZone dataset={dataset} mappings={plan.domain_mappings.filter((mapping) => mapping.target_domain === dataset.domain)} onDrop={(event) => onDrop(event, dataset.domain)} onUpdate={(mappingIndex, key, nextValue) => update((next) => {
                   const mapping = next.domain_mappings.filter((item) => item.target_domain === dataset.domain)[mappingIndex];
                   if (mapping) (mapping as unknown as Record<string, unknown>)[key] = nextValue;
                 })} onRemove={(mappingIndex) => update((next) => {
                   const matching = next.domain_mappings.filter((item) => item.target_domain === dataset.domain);
                   const target = matching[mappingIndex];
                   next.domain_mappings = next.domain_mappings.filter((item) => item !== target);
-                })} />
+                })} />{reviewJob?.review_patch && <ReviewPatchPanel job={reviewJob} domain={dataset.domain} />}</div>
               ))}
               {!plan.datasets.length && <p className="rounded-xl border border-dashed border-white/15 p-10 text-center text-sm text-zinc-500">Import a target SDTM domain from CDISC Library to begin mapping.</p>}
+              {reviewJob?.review_patch && <ReviewPatchPanel job={reviewJob} domain="General" />}
             </section>
           </div>
         </div>
@@ -304,16 +341,16 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
 
       {stage === "variables" && (
         <div className="space-y-4">
-          <DomainTabs datasets={plan.datasets} selected={activeDataset?.domain ?? ""} onSelect={setSelectedDomain} />
+          <DomainTabs datasets={plan.datasets} selected={activeDataset?.domain ?? ""} onSelect={setSelectedDomain} feedbackCounts={feedbackCounts} />
           {activeDataset ? (
             <section className="overflow-hidden rounded-xl border border-white/10 bg-[#141416]">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4">
                 <div><p className="text-sm font-bold text-zinc-100">{activeDataset.domain} · {activeDataset.description}</p><p className="mt-1 text-xs text-zinc-500">Use the variable-by-source matrix to edit target metadata, minor derivations, detailed lineage, and VLM rows.</p></div>
-                <div className="flex flex-wrap gap-2">{jobId && <Button type="button" variant="outline" size="sm" disabled={rerunMutation.isPending} onClick={() => rerunMutation.mutate({ stage: "variable_mapping", domain: activeDataset.domain })}><RotateCcw size={14} />Rerun {activeDataset.domain} Variable &amp; VLM</Button>}<Button type="button" variant="outline" size="sm" onClick={() => addVariable(activeDataset.domain)}><Plus size={14} />Variable</Button><Button type="button" variant="outline" size="sm" onClick={() => addSuppQualifier(activeDataset.domain)}><Plus size={14} />SUPP/VLM qualifier</Button></div>
+                <div className="flex flex-wrap gap-2"><Button type="button" variant="outline" size="sm" onClick={() => addVariable(activeDataset.domain)}><Plus size={14} />Variable</Button><Button type="button" variant="outline" size="sm" onClick={() => addSuppQualifier(activeDataset.domain)}><Plus size={14} />SUPP/VLM qualifier</Button></div>
               </div>
+              {(activeDataset.review_assumptions.length > 0 || activeDataset.review_unresolved_mappings.length > 0) && <div className="border-b border-white/10 p-4"><RevisionDecisionPanel result={{ assumptions: activeDataset.review_assumptions, unresolved_mappings: activeDataset.review_unresolved_mappings }} events={feedbackEvents} title={`${activeDataset.domain} feedback decisions`} assumptionsTitle={`${activeDataset.domain} assumptions`} ariaLabel={`${activeDataset.domain} feedback decisions`} onlyMatchedFeedback collapsedByDefault /></div>}
               <div className="space-y-4 p-4">
-                {jobId && <p className="rounded-lg border border-amber-400/15 bg-amber-500/[0.05] px-3 py-2 text-[11px] leading-5 text-amber-100/80">The rerun starts from the last saved approved plan, replaces only {activeDataset.domain}, refreshes its dependent rules, and requires approval before downloads change. Save any manual edits first.</p>}
-                <VariableMappingMatrix variables={activeDataset.variables} inventory={sourceInventory} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} sourceRelationships={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => ({ dataset: mapping.source_dataset, relationship: mapping.relationship }))} onChange={(variables) => update((next) => {
+                <VariableMappingMatrix variables={activeDataset.variables} inventory={sourceInventory} allowedDatasets={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => mapping.source_dataset)} sourceRelationships={plan.domain_mappings.filter((mapping) => mapping.target_domain === activeDataset.domain).map((mapping) => ({ dataset: mapping.source_dataset, relationship: mapping.relationship }))} domain={activeDataset.domain} proposalOperations={activeProposalOperations} onSelectedVariableChange={(variable) => setSdtmRevisionContext?.({ surface: "variable_mapping", label: variable ? `Variable & VLM · ${activeDataset.domain}.${variable}` : `Variable & VLM · ${activeDataset.domain}`, domain: activeDataset.domain, variable: variable ?? undefined })} onChange={(variables) => update((next) => {
                   const dataset = next.datasets.find((item) => item.domain === activeDataset.domain);
                   if (!dataset) return;
                   variables.forEach((variable, index) => {
@@ -324,6 +361,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
                   });
                   dataset.variables = variables;
                 })} />
+                {reviewJob?.review_patch && <ReviewPatchPanel job={reviewJob} domain={activeDataset.domain} />}
               </div>
             </section>
           ) : <EmptyReview text="Import or add an SDTM domain before reviewing variables." />}
@@ -332,15 +370,17 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
 
       {stage === "rules" && (
         <div className="space-y-5">
-          <DomainTabs datasets={plan.datasets} selected={activeRuleDomain} onSelect={setSelectedDomain} />
+          <DomainTabs datasets={plan.datasets} selected={activeRuleDomain} onSelect={setSelectedDomain} feedbackCounts={feedbackCounts} />
           <section className="space-y-3">
-            <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">{activeRuleDomain || "Domain"} program review</p><p className="mt-1 text-xs text-zinc-600">Review the exact generated R and SAS artifacts with syntax highlighting. Programs are read-only here; rerun the domain or revise its mappings to rebuild them.</p></div>{jobId && activeRuleDomain && <Button type="button" variant="outline" size="sm" disabled={rerunMutation.isPending} onClick={() => rerunMutation.mutate({ stage: "rule_augmentation", domain: activeRuleDomain })}><RotateCcw size={14} />Rerun {activeRuleDomain} rules/code</Button>}</div>
-            {activeRuleDomain ? <DomainProgramReview domain={activeRuleDomain} artifacts={artifacts} /> : <EmptyReview text="No SDTM domain is available for program review." />}
+            <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-black uppercase tracking-[0.12em] text-zinc-400">{activeRuleDomain || "Domain"} program review</p><p className="mt-1 text-xs text-zinc-600">Review or manually edit the exact R and SAS artifacts. Saving resets prior execution and validation evidence; use the right-side agent when you want a review-gated mapping or rule revision.</p></div></div>
+            {activeDataset && (activeDataset.review_assumptions.length > 0 || activeDataset.review_unresolved_mappings.length > 0) && <RevisionDecisionPanel result={{ assumptions: activeDataset.review_assumptions, unresolved_mappings: activeDataset.review_unresolved_mappings }} events={feedbackEvents} title={`${activeDataset.domain} feedback decisions`} assumptionsTitle={`${activeDataset.domain} assumptions`} ariaLabel={`${activeDataset.domain} feedback decisions`} onlyMatchedFeedback collapsedByDefault />}
+            {activeRuleDomain ? <DomainProgramReview jobId={jobId} domain={activeRuleDomain} artifacts={artifacts} editable={!proposalReview} /> : <EmptyReview text="No SDTM domain is available for program review." />}
+            {reviewJob?.review_patch && activeRuleDomain && <ReviewPatchPanel job={reviewJob} domain={activeRuleDomain} />}
           </section>
         </div>
       )}
 
-      {stage === "execution" && <ExecutionReview jobId={jobId} workbench={workbench} />}
+      {stage === "execution" && <ExecutionReview jobId={jobId} workbench={workbench} datasets={plan.datasets} domain={activeRuleDomain} onDomainChange={setSelectedDomain} />}
 
       {stage === "acrf" && (
         <DerivedArtifactReview
@@ -350,6 +390,7 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
           missingMessage="No aCRF was generated because this job did not include a blank CRF PDF. Start a new generation with a blank CRF to enable annotation review."
         >
           <ACRFArtifactReview
+            jobId={jobId}
             pdf={acrfArtifact}
             diagnostics={acrfDiagnostics}
             plan={plan}
@@ -387,17 +428,36 @@ export function SDTMReviewEditor({ jobId, workbench, value, artifacts = [], onCh
       {stage === "validation" && <ValidationReview jobId={jobId} workbench={workbench} />}
       {stage === "csdrg" && <CSDRGReview jobId={jobId} source={csdrgJson} pdf={csdrgPdf} />}
 
-      <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-        <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="text-xs font-bold text-emerald-300">All mapping references are ready for schema validation.</p>}{(error || rerunMutation.error) && <p className="mt-1 text-xs text-rose-300">{error ?? rerunMutation.error?.message}</p>}</div>
+      {!proposalReview && <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+        <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="text-xs font-bold text-emerald-300">All mapping references are ready for schema validation.</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div>
         <Button type="button" variant="clinical" onClick={() => onSave(plan)} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Validating and rebuilding…" : "Save reviewed mappings"}</Button>
-      </div>
+      </div>}
     </div>
   );
 }
 
-function ExecutionReview({ jobId, workbench }: { jobId?: string; workbench?: SDTMWorkbenchState | null }) {
+function executionAttemptDomains(attempt: ExecutionAttempt): string[] {
+  return Array.from(new Set([
+    ...attempt.checks.filter((check) => check.status === "failed" && check.domain).map((check) => check.domain!),
+    ...(attempt.repair_proposal?.change.domain ? [attempt.repair_proposal.change.domain] : []),
+  ])).sort();
+}
+
+function isExecutionRepairCandidate(attempt: ExecutionAttempt): boolean {
+  return attempt.status === "failed" || attempt.status === "timed_out" || attempt.status === "review_required";
+}
+
+function ExecutionReview({ jobId, workbench, datasets, domain, onDomainChange }: {
+  jobId?: string;
+  workbench?: SDTMWorkbenchState | null;
+  datasets: SDTMDataset[];
+  domain: string;
+  onDomainChange: (domain: string) => void;
+}) {
   const client = useQueryClient();
+  const revisionContext = useOptionalReviewDraft();
   const [rawFiles, setRawFiles] = useState<File[]>([]);
+  const [selectedAttemptId, setSelectedAttemptId] = useState<string | null>(null);
   const query = useQuery({
     queryKey: ["sdtm-executions", jobId],
     queryFn: () => api.sdtmExecutions(jobId!),
@@ -418,31 +478,79 @@ function ExecutionReview({ jobId, workbench }: { jobId?: string; workbench?: SDT
       client.invalidateQueries({ queryKey: ["job", jobId] });
     },
   });
-  const datasets = workbench?.inputs.raw_datasets ?? [];
+  const rawDatasets = workbench?.inputs.raw_datasets ?? [];
+  const attempts = query.data?.items ?? [];
+  const selectedAttempt = attempts.find((attempt) => attempt.attempt_id === selectedAttemptId && isExecutionRepairCandidate(attempt));
+
+  useEffect(() => {
+    const candidates = attempts.filter(isExecutionRepairCandidate);
+    if (!candidates.length) {
+      setSelectedAttemptId(null);
+      return;
+    }
+    if (!selectedAttemptId || !candidates.some((attempt) => attempt.attempt_id === selectedAttemptId)) {
+      const latest = candidates[candidates.length - 1];
+      setSelectedAttemptId(latest.attempt_id);
+      const implicated = executionAttemptDomains(latest);
+      if (implicated.length && !implicated.includes(domain)) onDomainChange(implicated[0]);
+    }
+  }, [attempts, domain, onDomainChange, selectedAttemptId]);
+
+  useEffect(() => {
+    if (!jobId || !domain || !revisionContext?.setSdtmRevisionContext) return;
+    const implicated = selectedAttempt ? executionAttemptDomains(selectedAttempt) : [];
+    const evidenceMatches = Boolean(selectedAttempt) && (!implicated.length || implicated.includes(domain));
+    const attemptLabel = evidenceMatches ? ` · ${selectedAttempt!.attempt_id}` : "";
+    revisionContext.setSdtmRevisionContext({
+      surface: "execution",
+      label: `Rule & Code repair · ${domain}${attemptLabel}`,
+      domain,
+      executionAttemptId: evidenceMatches ? selectedAttempt?.attempt_id : undefined,
+    });
+  }, [domain, jobId, revisionContext?.setSdtmRevisionContext, selectedAttempt]);
+
+  const selectAttempt = (attempt: ExecutionAttempt) => {
+    setSelectedAttemptId(attempt.attempt_id);
+    const implicated = executionAttemptDomains(attempt);
+    if (implicated.length && !implicated.includes(domain)) onDomainChange(implicated[0]);
+  };
+
   return <div className="space-y-4">
+    <section className="space-y-3 rounded-xl border border-violet-500/20 bg-violet-500/[0.05] p-4">
+      <div><p className="text-xs font-black uppercase tracking-[0.12em] text-violet-300">Rule & Code repair target</p><p className="mt-1 text-xs leading-5 text-zinc-400">Select the failed attempt and affected domain here. Add guidance, voice input, and scope in the right-side agent; its proposed rule/code changes still require full stage review and approval.</p></div>
+      <DomainTabs datasets={datasets} selected={domain} onSelect={onDomainChange} />
+      {selectedAttempt && <p className="rounded-lg border border-violet-500/20 bg-black/20 px-3 py-2 text-xs text-violet-100">Selected evidence: <span className="font-mono font-bold">{selectedAttempt.attempt_id}</span> · sanitized logs, failed checks, and failure classification will be attached to the {domain} Rule & Code agent.</p>}
+      {!selectedAttempt && <p className="text-xs text-zinc-500">Run the reviewed R program first. A failed or timed-out attempt can then be selected as repair evidence.</p>}
+    </section>
     <section className="rounded-xl border border-white/10 bg-[#141416] p-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div><p className="text-sm font-extrabold text-zinc-100">Isolated R execution</p><p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">R runs only in the dedicated network-isolated runner. SAS remains export-only. Output checks confirm readability and expected structure; they are not standards validation.</p></div>
+        <div><p className="text-sm font-extrabold text-zinc-100">Isolated R execution</p><p className="mt-1 max-w-3xl text-xs leading-5 text-zinc-500">Each domain R program runs independently in the dedicated network-isolated runner, so one domain failure does not prevent other domains from completing. SAS remains export-only. Output checks confirm readability and expected structure; they are not standards validation.</p></div>
         <span className="rounded-full border border-white/10 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-zinc-300">{workbench?.lifecycle.execution?.replaceAll("_", " ") ?? "not run"}</span>
       </div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">
-        {datasets.map((dataset) => <div key={dataset.logical_name} className="rounded-lg border border-white/10 bg-white/[0.025] p-3"><p className="font-mono text-xs font-bold text-violet-200">{dataset.logical_name}.{dataset.format}</p><p className="mt-1 text-[11px] text-zinc-500">{dataset.row_count ?? "Unknown"} rows · {dataset.columns.length} columns · SHA-256 {dataset.sha256.slice(0, 12)}…</p></div>)}
-        {!datasets.length && <p className="text-xs text-amber-200">No raw datasets were supplied. Programs are generated but cannot be executed.</p>}
+        {rawDatasets.map((dataset) => <div key={dataset.logical_name} className="rounded-lg border border-white/10 bg-white/[0.025] p-3"><p className="font-mono text-xs font-bold text-violet-200">{dataset.logical_name}.{dataset.format}</p><p className="mt-1 text-[11px] text-zinc-500">{dataset.row_count ?? "Unknown"} rows · {dataset.columns.length} columns · SHA-256 {dataset.sha256.slice(0, 12)}…</p></div>)}
+        {!rawDatasets.length && <p className="text-xs text-amber-200">No raw datasets were supplied. Programs are generated but cannot be executed.</p>}
       </div>
       <label className="mt-4 block rounded-lg border border-dashed border-white/15 p-3 text-xs text-zinc-400"><span className="flex items-center gap-2 font-bold text-zinc-300"><Upload size={14} />Add raw data after mapping approval</span><input className="mt-2 block w-full" type="file" accept=".csv,.xpt" multiple onChange={(event) => setRawFiles(Array.from(event.target.files ?? []))} /></label>
-      <Button type="button" variant="clinical" className="mt-3" disabled={!jobId || mutation.isPending || (!datasets.length && !rawFiles.length)} onClick={() => mutation.mutate()}><Play size={15} />{mutation.isPending ? "Running in isolation…" : "Execute reviewed R"}</Button>
+      <Button type="button" variant="clinical" className="mt-3" disabled={!jobId || mutation.isPending || (!rawDatasets.length && !rawFiles.length)} onClick={() => mutation.mutate()}><Play size={15} />{mutation.isPending ? "Running in isolation…" : "Execute reviewed R"}</Button>
       {mutation.error && <p className="mt-3 text-xs text-rose-300">{mutation.error.message}</p>}
     </section>
     <section className="space-y-3">
       <p className="text-xs font-black uppercase tracking-wider text-zinc-400">Immutable attempt history</p>
-      {query.data?.items.map((attempt) => <article key={attempt.attempt_id} className="rounded-xl border border-white/10 bg-[#141416] p-4">
+      {attempts.map((attempt) => {
+        const candidate = isExecutionRepairCandidate(attempt);
+        const selected = selectedAttemptId === attempt.attempt_id;
+        const implicated = executionAttemptDomains(attempt);
+        return <article key={attempt.attempt_id} className={`rounded-xl border p-4 ${selected ? "border-violet-400/40 bg-violet-500/[0.08]" : "border-white/10 bg-[#141416]"}`}>
         <div className="flex flex-wrap justify-between gap-2"><div><p className="font-mono text-xs font-bold text-violet-200">{attempt.attempt_id}</p><p className="mt-1 text-[11px] text-zinc-500">Program SHA-256 {attempt.program_hash} · exit {attempt.exit_code ?? "not available"}</p></div><span className={`rounded-full px-2 py-1 text-[10px] font-black uppercase ${attempt.status === "passed" ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"}`}>{attempt.status.replaceAll("_", " ")}</span></div>
+        <label className={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${candidate ? "cursor-pointer border-violet-500/20 text-zinc-200" : "border-white/[0.06] text-zinc-600"}`}><input type="radio" name="execution-repair-evidence" className="mt-0.5 accent-violet-500" checked={selected} disabled={!candidate} onChange={() => selectAttempt(attempt)} /><span><span className="font-bold">{candidate ? "Use as Rule & Code evidence" : "Not eligible as repair evidence"}</span>{implicated.length > 0 && <span className="mt-0.5 block text-[11px] text-zinc-500">Implicated {implicated.join(", ")}</span>}</span></label>
+        {attempt.checks.some((check) => check.check_id === "domain-execution") && <div className="mt-3"><p className="text-[10px] font-black uppercase tracking-wider text-zinc-500">Independent domain execution</p><div className="mt-2 flex flex-wrap gap-2">{attempt.checks.filter((check) => check.check_id === "domain-execution").map((check) => <span key={`${attempt.attempt_id}-${check.domain}`} className={`rounded-full border px-2.5 py-1 text-[10px] font-black uppercase ${check.status === "passed" ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-300" : check.status === "not_run" ? "border-zinc-500/20 bg-zinc-500/10 text-zinc-400" : "border-rose-500/20 bg-rose-500/10 text-rose-300"}`}>{check.domain} · {check.status.replaceAll("_", " ")}</span>)}</div></div>}
         {attempt.failure_classification && <p className="mt-3 text-xs text-amber-200">Failure classification: {attempt.failure_classification.replaceAll("_", " ")}</p>}
         {attempt.repair_proposal && <div className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/[0.06] p-3"><p className="text-xs font-bold text-amber-100">Typed repair proposal · {attempt.repair_proposal.status}</p><p className="mt-1 text-xs text-zinc-300">{attempt.repair_proposal.rationale}</p><pre className="mt-2 overflow-auto rounded bg-black/30 p-2 text-[11px] text-cyan-100">{attempt.repair_proposal.diff}</pre>{attempt.repair_proposal.status === "proposed" && <div className="mt-3 flex gap-2"><Button type="button" variant="clinical" size="sm" disabled={repairMutation.isPending} onClick={() => repairMutation.mutate({ attemptId: attempt.attempt_id, proposalId: attempt.repair_proposal!.proposal_id, approved: true })}>Approve and rerun</Button><Button type="button" variant="outline" size="sm" disabled={repairMutation.isPending} onClick={() => repairMutation.mutate({ attemptId: attempt.attempt_id, proposalId: attempt.repair_proposal!.proposal_id, approved: false })}>Reject</Button></div>}</div>}
-        <div className="mt-3 grid gap-2 md:grid-cols-2">{attempt.checks.map((check, index) => <div key={`${check.check_id}-${index}`} className="rounded-lg border border-white/[0.08] p-2 text-xs"><span className={check.status === "passed" ? "text-emerald-300" : check.status === "warning" ? "text-amber-300" : "text-rose-300"}>{check.status.toUpperCase()}</span><span className="ml-2 text-zinc-400">{check.message}</span></div>)}</div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">{attempt.checks.filter((check) => check.check_id !== "domain-execution").map((check, index) => <div key={`${check.check_id}-${index}`} className="rounded-lg border border-white/[0.08] p-2 text-xs"><span className={check.status === "passed" ? "text-emerald-300" : check.status === "warning" || check.status === "not_run" ? "text-amber-300" : "text-rose-300"}>{check.status.toUpperCase()}</span><span className="ml-2 text-zinc-400">{check.message}</span></div>)}</div>
         {(attempt.stdout || attempt.stderr) && <details className="mt-3"><summary className="cursor-pointer text-xs font-bold text-zinc-400">Sanitized runner logs</summary><pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-black/30 p-3 text-[11px] text-zinc-400">{[attempt.stdout, attempt.stderr].filter(Boolean).join("\n")}</pre></details>}
-      </article>)}
-      {!query.isPending && !query.data?.items.length && <EmptyReview text="No R execution attempts have been recorded." />}
+      </article>})}
+      {!query.isPending && !attempts.length && <EmptyReview text="No R execution attempts have been recorded." />}
     </section>
   </div>;
 }
@@ -481,12 +589,16 @@ function FindingReview({ jobId, finding, onSaved }: { jobId?: string; finding: V
 
 function CSDRGReview({ jobId, source, pdf }: { jobId?: string; source?: Artifact; pdf?: Artifact }) {
   const client = useQueryClient();
+  const reviewDraft = useOptionalReviewDraft();
   const query = useQuery({ queryKey: ["csdrg-source", source?.id], queryFn: () => api.artifactText(source!.download_url), enabled: Boolean(source) });
   const [draft, setDraft] = useState("");
-  useEffect(() => { if (query.data) setDraft(query.data); }, [query.data]);
-  const mutation = useMutation({ mutationFn: () => { const parsed: unknown = JSON.parse(draft); if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("cSDRG source must be a JSON object."); return api.updateCsdrg(jobId!, parsed as Record<string, unknown>); }, onSuccess: () => { client.invalidateQueries({ queryKey: ["job", jobId] }); client.invalidateQueries({ queryKey: ["csdrg-source"] }); } });
+  useEffect(() => {
+    if (reviewDraft?.csdrgAgentDraft) setDraft(JSON.stringify(reviewDraft.csdrgAgentDraft, null, 2));
+    else if (query.data) setDraft(query.data);
+  }, [query.data, reviewDraft?.csdrgAgentDraft]);
+  const mutation = useMutation({ mutationFn: () => { const parsed: unknown = JSON.parse(draft); if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("cSDRG source must be a JSON object."); return api.updateCsdrg(jobId!, parsed as Record<string, unknown>); }, onSuccess: () => { reviewDraft?.setCsdrgAgentDraft(null); client.invalidateQueries({ queryKey: ["job", jobId] }); client.invalidateQueries({ queryKey: ["csdrg-source"] }); } });
   if (!source) return <EmptyReview text="cSDRG artifacts will appear after the SDTM plan is generated." />;
-  return <div className="space-y-4"><section className="rounded-xl border border-white/10 bg-[#141416] p-4"><div className="flex flex-wrap justify-between gap-3"><div><p className="text-sm font-extrabold text-zinc-100">Editable cSDRG source</p><p className="mt-1 text-xs leading-5 text-zinc-500">Narrative sections may be edited. Execution, validation, unresolved issues, limitations, and reviewer-approved explanations remain evidence-controlled by the backend.</p></div>{pdf && <Button asChild type="button" variant="outline" size="sm"><a href={api.artifactUrl(pdf.download_url)}><Download size={14} />Download csdrg.pdf</a></Button>}</div><textarea aria-label="Editable cSDRG JSON" value={draft} onChange={(event) => setDraft(event.target.value)} className={`${codeClass} mt-4 min-h-[32rem]`} spellCheck={false} /><Button type="button" variant="clinical" className="mt-3" disabled={!jobId || mutation.isPending} onClick={() => mutation.mutate()}><Save size={15} />Save cSDRG review</Button>{mutation.error && <p className="mt-2 text-xs text-rose-300">{mutation.error.message}</p>}</section>{pdf && <iframe title="cSDRG PDF review" src={api.artifactPreviewUrl(pdf.download_url)} className="h-[48rem] w-full rounded-xl border border-white/10 bg-white" />}</div>;
+  return <div className="space-y-4"><section className="rounded-xl border border-white/10 bg-[#141416] p-4"><div className="flex flex-wrap justify-between gap-3"><div><p className="text-sm font-extrabold text-zinc-100">Editable cSDRG source</p><p className="mt-1 text-xs leading-5 text-zinc-500">Narrative sections may be edited. Use the right-side agent for narrative revisions. Execution, validation, unresolved issues, limitations, and reviewer-approved explanations remain evidence-controlled by the backend.</p></div>{pdf && <Button asChild type="button" variant="outline" size="sm"><a href={api.artifactUrl(pdf.download_url)}><Download size={14} />Download csdrg.pdf</a></Button>}</div><textarea aria-label="Editable cSDRG JSON" value={draft} onChange={(event) => setDraft(event.target.value)} className={`${codeClass} mt-4 min-h-[32rem]`} spellCheck={false} /><Button type="button" variant="clinical" className="mt-3" disabled={!jobId || mutation.isPending} onClick={() => mutation.mutate()}><Save size={15} />Save cSDRG review</Button>{mutation.error && <p className="mt-2 text-xs text-rose-300">{mutation.error.message}</p>}</section>{pdf && <iframe title="cSDRG PDF review" src={api.artifactPreviewUrl(pdf.download_url)} className="h-[48rem] w-full rounded-xl border border-white/10 bg-white" />}</div>;
 }
 
 function StageButton({ active, icon, number, label, onClick }: { active: boolean; icon: ReactNode; number: string; label: string; onClick: () => void }) {
@@ -522,7 +634,8 @@ function acrfEditorKey(annotation: ACRFDiagnosticAnnotation) {
 }
 function newFreeAnnotationId() { return `free-${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 
-function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDomainStyleChange, onDomainAnnotationChange, onFreeAnnotationsChange, onSave, saving, saveDisabled, error }: {
+function ACRFArtifactReview({ jobId, pdf, diagnostics, plan, onAnnotationsChange, onDomainStyleChange, onDomainAnnotationChange, onFreeAnnotationsChange, onSave, saving, saveDisabled, error }: {
+  jobId?: string;
   pdf?: Artifact;
   diagnostics?: Artifact;
   plan: SDTMPlanDraft;
@@ -536,6 +649,7 @@ function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDom
   error?: string | null;
 }) {
   const query = useQuery({ queryKey: ["acrf-diagnostics", diagnostics?.id], queryFn: () => api.artifactText(diagnostics!.download_url), enabled: Boolean(diagnostics) });
+  const revisionContext = useOptionalReviewDraft();
   const [selectedDomain, setSelectedDomain] = useState(plan.datasets[0]?.domain ?? "");
   const [selectedAnnotation, setSelectedAnnotation] = useState<string | null>(null);
   const editorRefs = useRef(new Map<string, HTMLElement>());
@@ -545,6 +659,10 @@ function ACRFArtifactReview({ pdf, diagnostics, plan, onAnnotationsChange, onDom
   useEffect(() => {
     if (!plan.datasets.some((dataset) => dataset.domain === selectedDomain)) setSelectedDomain(plan.datasets[0]?.domain ?? "");
   }, [plan.datasets, selectedDomain]);
+  useEffect(() => {
+    if (!jobId || !selectedDomain || !revisionContext?.setSdtmRevisionContext) return;
+    revisionContext.setSdtmRevisionContext({ surface: "acrf", label: `aCRF metadata · ${selectedDomain}`, domain: selectedDomain });
+  }, [jobId, revisionContext?.setSdtmRevisionContext, selectedDomain]);
   useEffect(() => {
     if (!selectedAnnotation) return;
     const editor = editorRefs.current.get(selectedAnnotation);
@@ -683,8 +801,8 @@ function RelationshipGuide() {
   return <div className="grid gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-[11px] leading-5 text-zinc-500 sm:grid-cols-2 xl:grid-cols-5"><span><strong className="text-emerald-300">Direct</strong> keeps one source&apos;s row structure.</span><span><strong className="text-violet-300">Stack</strong> appends observations as new rows.</span><span><strong className="text-sky-300">Join</strong> adds columns by reviewed keys and cardinality.</span><span><strong className="text-amber-300">Split</strong> routes one source to multiple domains.</span><span><strong className="text-zinc-300">Derived</strong> constructs records without a row-aligned source.</span></div>;
 }
 
-function DomainTabs({ datasets, selected, onSelect }: { datasets: SDTMDataset[]; selected: string; onSelect: (domain: string) => void }) {
-  return <div className="flex flex-wrap gap-2">{datasets.map((dataset) => <button type="button" key={dataset.domain} onClick={() => onSelect(dataset.domain)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${selected === dataset.domain ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 bg-white/[0.02] text-zinc-500"}`}>{dataset.domain}</button>)}</div>;
+function DomainTabs({ datasets, selected, onSelect, feedbackCounts }: { datasets: SDTMDataset[]; selected: string; onSelect: (domain: string) => void; feedbackCounts?: Map<string, number> }) {
+  return <div className="flex flex-wrap gap-2">{datasets.map((dataset) => <button type="button" key={dataset.domain} onClick={() => onSelect(dataset.domain)} className={`focus-ring rounded-lg border px-3 py-2 font-mono text-xs font-bold ${selected === dataset.domain ? "border-violet-500/40 bg-violet-500/10 text-violet-200" : "border-white/10 bg-white/[0.02] text-zinc-500"}`}>{dataset.domain}{feedbackCounts?.has(dataset.domain) && <span className="ml-2 rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[9px] text-amber-200">{feedbackCounts.get(dataset.domain)}</span>}</button>)}</div>;
 }
 
 type ProgramLanguage = "r" | "sas";
@@ -694,47 +812,96 @@ type SyntaxToken = { kind: SyntaxTokenKind; text: string };
 const R_KEYWORDS = new Set(["break", "else", "FALSE", "for", "function", "if", "in", "Inf", "NA", "NaN", "next", "NULL", "repeat", "TRUE", "while"]);
 const SAS_KEYWORDS = new Set(["and", "array", "as", "by", "case", "create", "data", "delete", "do", "drop", "else", "end", "first", "format", "from", "full", "group", "having", "if", "in", "infile", "inner", "input", "join", "keep", "last", "left", "length", "merge", "missing", "not", "on", "or", "order", "otherwise", "output", "proc", "quit", "rename", "retain", "right", "run", "select", "set", "table", "then", "when", "where"]);
 
-function DomainProgramReview({ domain, artifacts }: { domain: string; artifacts: Artifact[] }) {
+function DomainProgramReview({ jobId, domain, artifacts, editable }: { jobId?: string; domain: string; artifacts: Artifact[]; editable: boolean }) {
+  const client = useQueryClient();
   const slug = domain.trim().replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
   const rArtifact = artifacts.find((artifact) => artifact.name.toLowerCase() === `build-${slug}.r`);
   const sasArtifact = artifacts.find((artifact) => artifact.name.toLowerCase() === `build-${slug}.sas`);
   const [language, setLanguage] = useState<ProgramLanguage>(rArtifact ? "r" : "sas");
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
   useEffect(() => setLanguage(rArtifact ? "r" : "sas"), [domain, rArtifact?.id, sasArtifact?.id]);
   const rQuery = useQuery({ queryKey: ["sdtm-program", rArtifact?.id, rArtifact?.sha256], queryFn: () => api.artifactText(rArtifact!.download_url), enabled: Boolean(rArtifact) });
   const sasQuery = useQuery({ queryKey: ["sdtm-program", sasArtifact?.id, sasArtifact?.sha256], queryFn: () => api.artifactText(sasArtifact!.download_url), enabled: Boolean(sasArtifact) });
   const artifact = language === "r" ? rArtifact : sasArtifact;
   const query = language === "r" ? rQuery : sasQuery;
+  useEffect(() => {
+    if (!editing && query.data !== undefined) setDraft(query.data);
+  }, [editing, language, query.data]);
+  const mutation = useMutation({
+    mutationFn: () => api.updateSdtmProgram(jobId!, domain, language, draft, artifact!.sha256),
+    onSuccess: (job) => {
+      client.setQueryData(["job", jobId], job);
+      client.setQueryData(["sdtm-program", artifact?.id, artifact?.sha256], draft);
+      setEditing(false);
+    },
+  });
+  const selectLanguage = (next: ProgramLanguage) => {
+    setEditing(false);
+    mutation.reset();
+    setLanguage(next);
+  };
 
   if (!rArtifact && !sasArtifact) {
     return <EmptyReview text={`Generated R/SAS program artifacts are unavailable for ${domain}. Save or rerun the reviewed mapping to build them.`} />;
   }
   return <article className="overflow-hidden rounded-xl border border-white/10 bg-[#111113]">
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 p-4">
-      <div><p className="font-mono text-sm font-black text-violet-200">{artifact?.name}</p><p className="mt-1 text-[11px] text-zinc-600">Exact generated artifact · read only{artifact ? ` · SHA-256 ${artifact.sha256.slice(0, 12)}…` : ""}</p></div>
+      <div><p className="font-mono text-sm font-black text-violet-200">{artifact?.name}</p><p className="mt-1 text-[11px] text-zinc-600">Exact reviewed artifact{artifact ? ` · SHA-256 ${artifact.sha256.slice(0, 12)}…` : ""}</p></div>
       <div className="flex flex-wrap items-center gap-2">
         <div role="tablist" aria-label={`${domain} program languages`} className="flex rounded-lg border border-white/10 bg-black/20 p-1">
           {(["r", "sas"] as const).map((item) => {
             const available = item === "r" ? Boolean(rArtifact) : Boolean(sasArtifact);
-            return <button key={item} type="button" role="tab" aria-selected={language === item} disabled={!available} onClick={() => setLanguage(item)} className={`rounded-md px-3 py-1.5 text-[10px] font-black uppercase tracking-wider ${language === item ? "bg-violet-500/20 text-violet-200" : available ? "text-zinc-500 hover:text-zinc-300" : "cursor-not-allowed text-zinc-800"}`}>{item === "r" ? "R" : "SAS"}</button>;
+            return <button key={item} type="button" role="tab" aria-selected={language === item} disabled={!available || mutation.isPending} onClick={() => selectLanguage(item)} className={`rounded-md px-3 py-1.5 text-[10px] font-black uppercase tracking-wider ${language === item ? "bg-violet-500/20 text-violet-200" : available ? "text-zinc-500 hover:text-zinc-300" : "cursor-not-allowed text-zinc-800"}`}>{item === "r" ? "R" : "SAS"}</button>;
           })}
         </div>
+        {artifact && jobId && editable && !editing && <Button type="button" variant="outline" size="sm" disabled={query.isPending} onClick={() => { setDraft(query.data ?? ""); setEditing(true); }}><Code2 size={14} />Edit {language.toUpperCase()}</Button>}
+        {artifact && jobId && editable && editing && <><Button type="button" variant="outline" size="sm" disabled={mutation.isPending} onClick={() => { setDraft(query.data ?? ""); setEditing(false); mutation.reset(); }}>Cancel</Button><Button type="button" variant="clinical" size="sm" disabled={mutation.isPending || !draft.trim() || draft === query.data} onClick={() => mutation.mutate()}><Save size={14} />{mutation.isPending ? "Saving…" : `Save ${language.toUpperCase()}`}</Button></>}
         {artifact && <Button asChild type="button" variant="outline" size="sm"><a href={api.artifactUrl(artifact.download_url)}><Download size={14} />Download</a></Button>}
       </div>
     </header>
     <div className="p-4">
-      {query.isPending ? <EmptyReview text={`Loading ${domain} ${language.toUpperCase()} program…`} /> : query.isError ? <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">{query.error.message}</div> : <SyntaxHighlightedProgram code={query.data ?? ""} language={language} label={`${domain} ${language.toUpperCase()} program`} />}
+      {query.isPending ? <EmptyReview text={`Loading ${domain} ${language.toUpperCase()} program…`} /> : query.isError ? <div className="rounded-lg border border-rose-500/20 bg-rose-500/10 p-4 text-sm text-rose-300">{query.error.message}</div> : editing ? <SyntaxHighlightedProgramEditor code={draft} language={language} label={`${domain} ${language.toUpperCase()} code editor`} onChange={setDraft} /> : <SyntaxHighlightedProgram code={query.data ?? ""} language={language} label={`${domain} ${language.toUpperCase()} program`} />}
+      {mutation.error && <p className="mt-3 text-xs text-rose-300">{mutation.error.message}</p>}
+      {editing && <p className="mt-3 text-[11px] leading-5 text-amber-200">Saving replaces this reviewed artifact, records an audit entry, and marks prior execution and validation results as historical. R still runs only in the isolated runner; SAS remains export-only.</p>}
     </div>
   </article>;
 }
 
 function SyntaxHighlightedProgram({ code, language, label }: { code: string; language: ProgramLanguage; label: string }) {
+  const lines = highlightedProgramLines(code, language);
+  return <pre className="max-h-[48rem] overflow-auto rounded-lg border border-white/10 bg-[#08090c] py-3 font-mono text-xs leading-5 text-zinc-300"><code aria-label={label}>{lines.map((tokens, lineIndex) => <span className="block min-w-max px-3" key={lineIndex}><span aria-hidden="true" className="mr-4 inline-block w-9 select-none border-r border-white/[0.07] pr-3 text-right text-zinc-700">{lineIndex + 1}</span>{tokens.length ? tokens.map((token, tokenIndex) => <span data-token={token.kind} className={tokenClass(token.kind)} key={`${lineIndex}-${tokenIndex}`}>{token.text}</span>) : "\u00a0"}</span>)}</code></pre>;
+}
+
+function SyntaxHighlightedProgramEditor({ code, language, label, onChange }: { code: string; language: ProgramLanguage; label: string; onChange: (code: string) => void }) {
+  const highlight = useRef<HTMLPreElement>(null);
+  const lines = highlightedProgramLines(code, language);
+  return <div className="relative h-[36rem] overflow-hidden rounded-lg border border-white/10 bg-[#08090c] focus-within:border-violet-500/50 focus-within:ring-1 focus-within:ring-violet-500/20">
+    <pre ref={highlight} aria-hidden="true" data-testid={`${label} syntax highlighting`} style={{ tabSize: 2, scrollbarWidth: "none" }} className="pointer-events-none absolute inset-0 overflow-auto whitespace-pre p-3 font-mono text-xs leading-5 text-zinc-300 [&::-webkit-scrollbar]:hidden"><code>{lines.map((tokens, lineIndex) => <span key={lineIndex}>{tokens.map((token, tokenIndex) => <span data-token={token.kind} className={tokenClass(token.kind)} key={`${lineIndex}-${tokenIndex}`}>{token.text}</span>)}{lineIndex < lines.length - 1 ? "\n" : null}</span>)}</code></pre>
+    <textarea
+      aria-label={label}
+      value={code}
+      onChange={(event) => onChange(event.target.value)}
+      onScroll={(event) => {
+        if (!highlight.current) return;
+        highlight.current.scrollTop = event.currentTarget.scrollTop;
+        highlight.current.scrollLeft = event.currentTarget.scrollLeft;
+      }}
+      wrap="off"
+      spellCheck={false}
+      style={{ tabSize: 2 }}
+      className="absolute inset-0 h-full w-full resize-none overflow-auto whitespace-pre border-0 bg-transparent p-3 font-mono text-xs leading-5 text-transparent caret-zinc-100 outline-none selection:bg-violet-500/40 selection:text-transparent"
+    />
+  </div>;
+}
+
+function highlightedProgramLines(code: string, language: ProgramLanguage): SyntaxToken[][] {
   let inBlockComment = false;
-  const lines = code.replace(/\r\n?/g, "\n").split("\n").map((line) => {
+  return code.replace(/\r\n?/g, "\n").split("\n").map((line) => {
     const result = tokenizeProgramLine(line, language, inBlockComment);
     inBlockComment = result.inBlockComment;
     return result.tokens;
   });
-  return <pre className="max-h-[48rem] overflow-auto rounded-lg border border-white/10 bg-[#08090c] py-3 font-mono text-xs leading-5 text-zinc-300"><code aria-label={label}>{lines.map((tokens, lineIndex) => <span className="block min-w-max px-3" key={lineIndex}><span aria-hidden="true" className="mr-4 inline-block w-9 select-none border-r border-white/[0.07] pr-3 text-right text-zinc-700">{lineIndex + 1}</span>{tokens.length ? tokens.map((token, tokenIndex) => <span data-token={token.kind} className={tokenClass(token.kind)} key={`${lineIndex}-${tokenIndex}`}>{token.text}</span>) : "\u00a0"}</span>)}</code></pre>;
 }
 
 function tokenizeProgramLine(line: string, language: ProgramLanguage, startsInBlockComment: boolean): { tokens: SyntaxToken[]; inBlockComment: boolean } {
@@ -827,7 +994,7 @@ function normalizePlan(value: Record<string, unknown>): SDTMPlanDraft {
         text: stringValue(rawDomainAnnotation?.text, dataset.domain),
         positions: arrayValue<ACRFPosition>(rawDomainAnnotation?.positions).filter((item) => finiteNumber(item.page) && finiteNumber(item.x) && finiteNumber(item.y)).map((item) => ({ page: item.page, x: item.x, y: item.y })),
       };
-      return { ...dataset, acrf_font_family: dataset.acrf_font_family ?? legacyStyle?.acrf_font_family ?? "Helvetica", acrf_font_size: dataset.acrf_font_size ?? legacyStyle?.acrf_font_size ?? 8, acrf_text_color: dataset.acrf_text_color ?? legacyStyle?.acrf_text_color ?? "#141F3D", acrf_fill_color: dataset.acrf_fill_color ?? legacyStyle?.acrf_fill_color ?? "#EBF2FF", acrf_domain_annotation: domainAnnotation, record_plan: normalizeRecordPlan(dataset.record_plan), variables };
+      return { ...dataset, review_assumptions: arrayValue<string>(dataset.review_assumptions), review_unresolved_mappings: arrayValue<string>(dataset.review_unresolved_mappings), acrf_font_family: dataset.acrf_font_family ?? legacyStyle?.acrf_font_family ?? "Helvetica", acrf_font_size: dataset.acrf_font_size ?? legacyStyle?.acrf_font_size ?? 8, acrf_text_color: dataset.acrf_text_color ?? legacyStyle?.acrf_text_color ?? "#141F3D", acrf_fill_color: dataset.acrf_fill_color ?? legacyStyle?.acrf_fill_color ?? "#EBF2FF", acrf_domain_annotation: domainAnnotation, record_plan: normalizeRecordPlan(dataset.record_plan), variables };
     }),
     rule_augmentations: arrayValue<VariableRule>(value.rule_augmentations),
     acrf_free_annotations: arrayValue<ACRFFreeAnnotation>(value.acrf_free_annotations).map((item, index) => ({ id: stringValue(item.id, `free-${index + 1}`), text: stringValue(item.text, ""), page: finiteNumber(item.page) ? item.page : 1, x: finiteNumber(item.x) ? item.x : 48, y: finiteNumber(item.y) ? item.y : 48, font_family: ACRF_FONT_FAMILIES.includes(item.font_family) ? item.font_family : "Helvetica Bold", font_size: finiteNumber(item.font_size) ? item.font_size : 9, text_color: stringValue(item.text_color, "#7F1D1D").toUpperCase(), fill_color: stringValue(item.fill_color, "#FEE2E2").toUpperCase() })),
@@ -898,6 +1065,8 @@ function datasetFromLibrary(response: CDISCDataset, plan: SDTMPlanDraft): SDTMDa
     description: findString(root, ["label", "description", "definition", "name"]) || `${response.domain} imported from ${response.standard.toUpperCase()} ${response.version}`,
     structure: findString(root, ["structure", "datasetStructure"]) || "TODO: review CDISC dataset structure",
     key_variables: stringList(findValue(root, ["keyVariables", "keys"])) || ["STUDYID", "USUBJID"],
+    review_assumptions: [],
+    review_unresolved_mappings: [],
     record_plan: source ? { steps: [{ step_id: `read_${source.toLowerCase()}`, operation: "read", description: `Read ${source}`, output: `${response.domain.toLowerCase()}_source`, inputs: [], source_dataset: source, column_alignment: [], left: null, right: null, join_type: null, join_keys: [], cardinality: null, id_variables: [], value_variables: [], name_variable: null, value_variable: null, transpose_values: [], condition: null, sas_condition: null, keys: [], order_by: [], keep: "first", group_by: [], aggregations: [], review_notes: [] }], output_step: `read_${source.toLowerCase()}` } : { steps: [], output_step: "" },
     variables: records.map((record): SDTMVariable => {
       const name = findString(record, ["name", "variableName", "submissionValue", "code"]).toUpperCase();
@@ -922,5 +1091,6 @@ function isRecord(value: unknown): value is Record<string, unknown> { return Boo
 function stringValue(value: unknown, fallback: string): string { return typeof value === "string" ? value : fallback; }
 function arrayValue<T>(value: unknown): T[] { return Array.isArray(value) ? value as T[] : []; }
 function finiteNumber(value: unknown): value is number { return typeof value === "number" && Number.isFinite(value); }
+function encodePatchSelector(value: string): string { return value.replaceAll("~", "~0").replaceAll("/", "~1"); }
 function allowsSourcelessOrigin(value: string): boolean { const normalized = value.trim().toLowerCase(); return ["assigned", "derived", "protocol", "system", "sponsor"].some((token) => normalized.includes(token)); }
 function splitLines(value: string): string[] { return value.split("\n").map((item) => item.trim()).filter(Boolean); }

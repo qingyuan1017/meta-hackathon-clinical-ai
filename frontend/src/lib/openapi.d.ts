@@ -386,7 +386,7 @@ export interface paths {
         put?: never;
         /**
          * Rerun Completed Sdtm Domain
-         * @description Propose a variable/VLM or rule refresh for one completed SDTM domain.
+         * @description Propose an agent-assisted mapping or code revision for a completed SDTM job.
          */
         post: operations["rerun_completed_sdtm_domain_api_v1_jobs__job_id__sdtm_domain_reruns_post"];
         delete?: never;
@@ -515,6 +515,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/jobs/{job_id}/csdrg/agent-revision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revise Csdrg With Agent
+         * @description Draft reviewer-editable cSDRG narrative without changing evidence-controlled sections.
+         */
+        post: operations["revise_csdrg_with_agent_api_v1_jobs__job_id__csdrg_agent_revision_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/jobs/{job_id}/tlf-inventory": {
         parameters: {
             query?: never;
@@ -604,6 +624,23 @@ export interface paths {
         };
         /** Download Artifact */
         get: operations["download_artifact_api_v1_jobs__job_id__artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/jobs/{job_id}/artifacts/{artifact_id}/pages/{page_number}.png": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview Pdf Artifact Page */
+        get: operations["preview_pdf_artifact_page_api_v1_jobs__job_id__artifacts__artifact_id__pages__page_number__png_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -749,8 +786,11 @@ export interface components {
             path: string;
             /** Size Bytes */
             size_bytes: number;
-            /** Is Directory */
-            is_directory?: boolean;
+            /**
+             * Is Directory
+             * @default false
+             */
+            is_directory: boolean;
         };
         /** ArtifactRead */
         ArtifactRead: {
@@ -825,6 +865,12 @@ export interface components {
                 [key: string]: unknown;
             } | unknown[];
         };
+        /** CSDRGAgentRevisionRequest */
+        CSDRGAgentRevisionRequest: {
+            /** Guidance */
+            guidance: string;
+            scope?: components["schemas"]["ReviewScope"] | null;
+        };
         /** CSDRGDocument */
         CSDRGDocument: {
             /** Study Name */
@@ -858,7 +904,7 @@ export interface components {
              * Evidence Controlled
              * @default false
              */
-            evidence_controlled?: boolean;
+            evidence_controlled: boolean;
         };
         /** CSDRGTable */
         CSDRGTable: {
@@ -1104,7 +1150,7 @@ export interface components {
             /** Completed At */
             completed_at: string | null;
             /** Review Stage */
-            review_stage?: ("edc_source" | "domain_mapping" | "variable_mapping" | "variable_mapping_domain" | "rule_augmentation_domain" | "tlf_inventory" | "tlf_shell" | "tlf_programming") | null;
+            review_stage?: ("edc_source" | "domain_mapping" | "domain_mapping_completed" | "variable_mapping" | "variable_mapping_domain" | "rule_augmentation_domain" | "tlf_inventory" | "tlf_shell" | "tlf_programming") | null;
             /** Result */
             result?: {
                 [key: string]: unknown;
@@ -1306,6 +1352,64 @@ export interface components {
             /** Fields */
             fields?: string[];
         };
+        /** SDTMACRFAnnotation */
+        SDTMACRFAnnotation: {
+            /**
+             * Source Label
+             * @description Exact blank-CRF question text that receives the annotation
+             * @default
+             */
+            source_label: string;
+            /**
+             * Mapping Text
+             * @description Text rendered in the aCRF mapping box; blank uses DOMAIN.VARIABLE
+             * @default
+             */
+            mapping_text: string;
+            /**
+             * Page
+             * @description Optional manually positioned PDF page
+             */
+            page?: number | null;
+            /**
+             * X
+             * @description Optional manual left coordinate in PDF points
+             */
+            x?: number | null;
+            /**
+             * Y
+             * @description Optional manual top coordinate in PDF points
+             */
+            y?: number | null;
+        };
+        /** SDTMACRFPosition */
+        SDTMACRFPosition: {
+            /** Page */
+            page: number;
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        };
+        /** SDTMDomainACRFAnnotation */
+        SDTMDomainACRFAnnotation: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Text
+             * @description Domain-level annotation text; blank uses the domain code
+             * @default
+             */
+            text: string;
+            /**
+             * Positions
+             * @description Optional per-page dragged positions
+             */
+            positions?: components["schemas"]["SDTMACRFPosition"][];
+        };
         /** SDTMDomainMapping */
         SDTMDomainMapping: {
             /**
@@ -1361,9 +1465,14 @@ export interface components {
              * Stage
              * @enum {string}
              */
-            stage: "variable_mapping" | "rule_augmentation";
+            stage: "domain_mapping" | "variable_mapping" | "rule_augmentation";
             /** Domain */
-            domain: string;
+            domain?: string | null;
+            /** Guidance */
+            guidance?: string | null;
+            /** Execution Attempt Id */
+            execution_attempt_id?: string | null;
+            scope?: components["schemas"]["ReviewScope"] | null;
         };
         /** SDTMInputManifest */
         SDTMInputManifest: {
@@ -1464,31 +1573,6 @@ export interface components {
             controlled_terms?: string[];
         };
         /** SDTMVariable */
-        SDTMACRFAnnotation: {
-            /** Exact blank-CRF question text that receives the annotation */
-            source_label?: string;
-            /** Text rendered in the aCRF mapping box; blank uses DOMAIN.VARIABLE */
-            mapping_text?: string;
-            /** Optional manually positioned PDF page */
-            page?: number | null;
-            /** Optional manual left coordinate in PDF points */
-            x?: number | null;
-            /** Optional manual top coordinate in PDF points */
-            y?: number | null;
-        };
-        SDTMACRFPosition: {
-            page: number;
-            x: number;
-            y: number;
-        };
-        SDTMDomainACRFAnnotation: {
-            /** @default true */
-            enabled?: boolean;
-            /** Domain-level annotation text; blank uses the domain code */
-            text?: string;
-            /** Optional per-page dragged positions */
-            positions?: components["schemas"]["SDTMACRFPosition"][];
-        };
         SDTMVariable: {
             /** Name */
             name: string;
@@ -1524,7 +1608,7 @@ export interface components {
             value_level_metadata?: components["schemas"]["SDTMValueLevelMetadata"][];
             /** Crf Source Label */
             crf_source_label?: string | null;
-            /** aCRF annotations */
+            /** Acrf Annotations */
             acrf_annotations?: components["schemas"]["SDTMACRFAnnotation"][];
             /** Length */
             length?: number | null;
@@ -1560,14 +1644,27 @@ export interface components {
              * @default Tabulation
              */
             purpose: string;
-            /** @default Helvetica */
-            acrf_font_family?: "Helvetica" | "Helvetica Bold" | "Times" | "Times Bold" | "Courier" | "Courier Bold";
-            /** @default 8 */
-            acrf_font_size?: number;
-            /** @default #141F3D */
-            acrf_text_color?: string;
-            /** @default #EBF2FF */
-            acrf_fill_color?: string;
+            /**
+             * Acrf Font Family
+             * @default Helvetica
+             * @enum {string}
+             */
+            acrf_font_family: "Helvetica" | "Helvetica Bold" | "Times" | "Times Bold" | "Courier" | "Courier Bold";
+            /**
+             * Acrf Font Size
+             * @default 8
+             */
+            acrf_font_size: number;
+            /**
+             * Acrf Text Color
+             * @default #141F3D
+             */
+            acrf_text_color: string;
+            /**
+             * Acrf Fill Color
+             * @default #EBF2FF
+             */
+            acrf_fill_color: string;
             acrf_domain_annotation?: components["schemas"]["SDTMDomainACRFAnnotation"];
             /** Variables */
             variables: components["schemas"]["SDTMVariable"][];
@@ -3078,6 +3175,41 @@ export interface operations {
             };
         };
     };
+    revise_csdrg_with_agent_api_v1_jobs__job_id__csdrg_agent_revision_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CSDRGAgentRevisionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CSDRGDocument"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     approve_tlf_inventory_api_v1_jobs__job_id__tlf_inventory_put: {
         parameters: {
             query?: never;
@@ -3227,6 +3359,39 @@ export interface operations {
             path: {
                 job_id: string;
                 artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_pdf_artifact_page_api_v1_jobs__job_id__artifacts__artifact_id__pages__page_number__png_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+                artifact_id: string;
+                page_number: number;
             };
             cookie?: never;
         };

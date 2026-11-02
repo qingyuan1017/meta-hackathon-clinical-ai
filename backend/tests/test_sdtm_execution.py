@@ -68,6 +68,55 @@ def test_execution_preserves_hashes_runtime_outputs_and_checks(tmp_path) -> None
     assert provider.calls[0][1][0][0] == "RAW_DM"
 
 
+def test_domain_failure_does_not_prevent_or_fail_unrelated_domain(tmp_path) -> None:
+    plan = _plan()
+    plan.domain_mappings.append(SDTMDomainMapping(source_dataset="RAW_DM", target_domain="LB", rationale="Synthetic LB source"))
+    plan.datasets.append(SDTMDataset(
+        domain="LB",
+        description="Laboratory Test Results",
+        key_variables=["USUBJID"],
+        record_plan=read_plan("LB", "RAW_DM"),
+        variables=[SDTMVariable(name="USUBJID", label="Unique subject", sources=[source("RAW_DM", "USUBJID")])],
+    ))
+    plan.rule_augmentations.append(SDTMRuleAugmentation(
+        rule_id="LB-USUBJID",
+        target_domain="LB",
+        target_variable="USUBJID",
+        description="Direct",
+        logic="Direct",
+        r_expression='.data[["USUBJID"]]',
+        sas_expression="USUBJID",
+    ))
+    job_dir = _job_dir(tmp_path)
+    (job_dir / "output" / "build-lb.R").write_text("stop('LB source column missing')\n", encoding="utf-8")
+
+    class IsolatedDomainProvider(RExecutionProvider):
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def execute(self, program: Path, inputs: list[tuple[str, Path]], timeout_seconds: int) -> ProviderResult:
+            self.calls.append(program.name)
+            if program.name == "build-lb.R":
+                return ProviderResult(status="failed", exit_code=1, stdout="", stderr="object 'TOTBILI' not found")
+            return ProviderResult(status="passed", exit_code=0, stdout="DM complete", stderr="", outputs={"dm.xpt": _xpt_bytes(tmp_path)})
+
+    provider = IsolatedDomainProvider()
+    attempt = SDTMExecutionService(provider, 30).execute(job_dir, plan)
+
+    assert provider.calls == ["build-dm.R", "build-lb.R"]
+    assert attempt.status == "failed"
+    assert {item.name for item in attempt.outputs} == {"dm.xpt"}
+    assert any(check.check_id == "domain-execution" and check.domain == "DM" and check.status == "passed" for check in attempt.checks)
+    assert any(check.check_id == "domain-execution" and check.domain == "LB" and check.status == "failed" for check in attempt.checks)
+    assert any(check.check_id == "expected-domain" and check.domain == "LB" and check.status == "failed" for check in attempt.checks)
+    assert not any(check.domain == "DM" and check.status == "failed" for check in attempt.checks)
+    assert attempt.runtime["domain.DM.status"] == "passed"
+    assert attempt.runtime["domain.LB.status"] == "failed"
+    assert "[LB]" in attempt.stderr
+    assert (job_dir / "sdtm" / "executions" / attempt.attempt_id / "programs" / "build-dm.R").is_file()
+    assert (job_dir / "sdtm" / "executions" / attempt.attempt_id / "programs" / "build-lb.R").is_file()
+
+
 @pytest.mark.parametrize("provider_status,classification", [("timed_out", "timeout"), ("unavailable", "runner_unavailable")])
 def test_timeout_and_unavailable_are_truthful(tmp_path, provider_status: str, classification: str) -> None:
     provider = FakeProvider(ProviderResult(status=provider_status, exit_code=None, stdout="", stderr="not executed"))

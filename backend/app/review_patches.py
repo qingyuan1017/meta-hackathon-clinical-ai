@@ -133,6 +133,60 @@ def scope_candidate(stage: str, baseline: dict[str, Any], raw_candidate: dict[st
     return proposed
 
 
+def scope_completed_sdtm_candidate(
+    baseline: dict[str, Any],
+    raw_candidate: dict[str, Any],
+    *,
+    rerun_stage: str,
+    target_domain: str | None,
+    scope: ReviewScope,
+) -> dict[str, Any]:
+    """Keep a completed-domain proposal inside an optional variable-level review scope."""
+
+    if rerun_stage == "domain_mapping" or not scope.variables:
+        return raw_candidate
+    domain = (target_domain or "").upper()
+    selections = [item for item in scope.variables if item.domain == domain]
+    if not selections:
+        return raw_candidate
+    proposed = copy.deepcopy(baseline)
+    base_datasets = {str(item.get("domain", "")).upper(): item for item in _records(proposed.get("datasets"))}
+    raw_datasets = {str(item.get("domain", "")).upper(): item for item in _records(raw_candidate.get("datasets"))}
+    if domain not in base_datasets or domain not in raw_datasets:
+        raise ValueError(f"The completed revision omitted target domain {domain}.")
+    base_dataset = base_datasets[domain]
+    raw_dataset = raw_datasets[domain]
+    selected_names = {item.variable for item in selections}
+    if rerun_stage == "variable_mapping":
+        base_variables = _records(base_dataset.get("variables"))
+        raw_variables = {str(item.get("name", "")).upper(): item for item in _records(raw_dataset.get("variables"))}
+        positions = {str(item.get("name", "")).upper(): index for index, item in enumerate(base_variables)}
+        for selection in selections:
+            if selection.variable not in raw_variables or selection.variable not in positions:
+                raise ValueError(f"The completed revision omitted variable {domain}.{selection.variable}.")
+            index = positions[selection.variable]
+            candidate = raw_variables[selection.variable]
+            if selection.fields:
+                for field in selection.fields:
+                    base_variables[index][field] = copy.deepcopy(candidate.get(field))
+            else:
+                base_variables[index] = copy.deepcopy(candidate)
+        base_dataset["variables"] = base_variables
+    base_dataset["record_plan"] = copy.deepcopy(raw_dataset.get("record_plan"))
+    base_rules = [
+        item for item in _records(proposed.get("rule_augmentations"))
+        if str(item.get("target_domain", "")).upper() != domain
+        or str(item.get("target_variable", "")).upper() not in selected_names
+    ]
+    replacement_rules = [
+        copy.deepcopy(item) for item in _records(raw_candidate.get("rule_augmentations"))
+        if str(item.get("target_domain", "")).upper() == domain
+        and str(item.get("target_variable", "")).upper() in selected_names
+    ]
+    proposed["rule_augmentations"] = [*base_rules, *replacement_rules]
+    return proposed
+
+
 def build_patch_record(request: dict[str, Any], baseline: dict[str, Any], proposed: dict[str, Any]) -> dict[str, Any]:
     operations = [item.model_dump(mode="json") for item in diff_operations(baseline, proposed)]
     if not operations:

@@ -33,6 +33,22 @@ PROHIBITED_R = re.compile(
 SECRET = re.compile(r"(?i)(api[_-]?key|authorization|bearer)\s*[:=]\s*\S+")
 
 
+def validate_reviewed_program(code: str, language: str) -> str:
+    """Validate manually reviewed source before it replaces an executable artifact."""
+
+    if language not in {"r", "sas"}:
+        raise ValueError("Program language must be R or SAS.")
+    if not code.strip():
+        raise ValueError("Program source cannot be empty.")
+    if "\x00" in code:
+        raise ValueError("Program source cannot contain null bytes.")
+    if language == "r" and PROHIBITED_R.search(code):
+        raise ValueError(
+            "The reviewed R program contains prohibited shell, network, installation, or external-read behavior."
+        )
+    return code.replace("\r\n", "\n").replace("\r", "\n")
+
+
 @dataclass
 class ProviderResult:
     status: str
@@ -152,29 +168,78 @@ class SDTMExecutionService:
             (item.logical_name, job_dir / "input" / item.stored_name)
             for item in state.inputs.raw_datasets
         ]
-        result = self.provider.execute(immutable_program, inputs, self.timeout_seconds)
+        program_dir = attempt_dir / "programs"
+        program_dir.mkdir()
         output_dir = attempt_dir / "output"
         output_dir.mkdir()
-        for name, content in result.outputs.items():
-            safe_name = Path(name).name
-            if safe_name != name or Path(safe_name).suffix.lower() != ".xpt":
-                continue
-            (output_dir / safe_name).write_bytes(content)
+        domain_results: list[tuple[str, ProviderResult]] = []
+        execution_checks: list[ExecutionCheck] = []
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        runtime: dict[str, str] = {}
+        for domain, reviewed_program in domain_programs:
+            domain_program = program_dir / reviewed_program.name
+            domain_program.write_bytes(reviewed_program.read_bytes())
+            result = self.provider.execute(domain_program, inputs, self.timeout_seconds)
+            domain_results.append((domain, result))
+            runtime[f"domain.{domain}.status"] = result.status
+            for key, value in result.runtime.items():
+                if key not in runtime or runtime[key] == value:
+                    runtime[key] = value
+                else:
+                    runtime[f"domain.{domain}.{key}"] = value
+            if result.stdout:
+                stdout_parts.append(f"[{domain}]\n{result.stdout}")
+            if result.stderr:
+                stderr_parts.append(f"[{domain}]\n{result.stderr}")
 
-        checks, outputs = inspect_outputs(output_dir, plan)
-        provider_passed = result.status == "passed" and result.exit_code == 0
+            executed = result.status == "passed" and result.exit_code == 0
+            if result.status == "unavailable":
+                check_status = "not_run"
+                message = f"{domain} R program was not run because the isolated runner was unavailable."
+            elif executed:
+                check_status = "passed"
+                message = f"{domain} R program completed independently."
+            elif result.status == "timed_out":
+                check_status = "failed"
+                message = f"{domain} R program timed out independently."
+            else:
+                check_status = "failed"
+                message = f"{domain} R program failed independently with exit {result.exit_code if result.exit_code is not None else 'not available'}."
+            execution_checks.append(ExecutionCheck(check_id="domain-execution", domain=domain, status=check_status, message=message))
+
+            expected_name = f"{domain.lower()}.xpt"
+            for name, content in result.outputs.items():
+                safe_name = Path(name).name
+                if safe_name != name or safe_name.casefold() != expected_name.casefold():
+                    execution_checks.append(ExecutionCheck(
+                        check_id="unexpected-domain-output",
+                        domain=domain,
+                        status="warning",
+                        message=f"{domain} execution returned unexpected output {safe_name or name}; it was not accepted.",
+                    ))
+                    continue
+                (output_dir / expected_name).write_bytes(content)
+
+        output_checks, outputs = inspect_outputs(output_dir, plan)
+        checks = [*execution_checks, *output_checks]
+        provider_passed = all(result.status == "passed" and result.exit_code == 0 for _, result in domain_results)
         checks_passed = bool(checks) and not any(item.status in {"failed", "not_run"} for item in checks)
-        final_status = "passed" if provider_passed and checks_passed else result.status
-        if final_status == "passed" and not checks_passed:
-            final_status = "failed"
-        if final_status not in {"passed", "failed", "timed_out", "unavailable"}:
+        statuses = [result.status for _, result in domain_results]
+        if provider_passed and checks_passed:
+            final_status = "passed"
+        elif statuses and all(status == "unavailable" for status in statuses):
+            final_status = "unavailable"
+        elif "timed_out" in statuses and "failed" not in statuses:
+            final_status = "timed_out"
+        else:
             final_status = "failed"
         attempt.status = final_status  # type: ignore[assignment]
         attempt.completed_at = datetime.now(timezone.utc)
-        attempt.exit_code = result.exit_code
-        attempt.stdout = sanitize_log(result.stdout)
-        attempt.stderr = sanitize_log(result.stderr)
-        attempt.runtime = result.runtime
+        attempt.exit_code = next((result.exit_code for _, result in domain_results if result.exit_code not in {None, 0}), None)
+        attempt.stdout = sanitize_log("\n\n".join(stdout_parts))
+        attempt.stderr = sanitize_log("\n\n".join(stderr_parts))
+        attempt.runtime = runtime
         attempt.outputs = outputs
         attempt.checks = checks
         if final_status != "passed":

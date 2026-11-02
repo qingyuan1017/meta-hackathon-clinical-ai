@@ -4,7 +4,8 @@ import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SDTMReviewEditor } from "@/components/sdtm-review-editor";
 import { api } from "@/lib/api";
-import type { Artifact } from "@/lib/types";
+import type { Artifact, Job } from "@/lib/types";
+import { ReviewDraftProvider, useReviewDraft } from "@/lib/review-draft-context";
 
 const plan = {
   study_name: "SYN-101",
@@ -16,6 +17,11 @@ const plan = {
   assumptions: [],
   unresolved_mappings: [],
 };
+
+function RevisionContextProbe() {
+  const { sdtmRevisionContext } = useReviewDraft();
+  return <output aria-label="SDTM revision context">{JSON.stringify(sdtmRevisionContext)}</output>;
+}
 
 describe("SDTMReviewEditor", () => {
   const renderEditor = (value = plan, jobId?: string, artifacts: Artifact[] = []) => {
@@ -59,18 +65,96 @@ describe("SDTMReviewEditor", () => {
     expect(screen.getByText("Define-XML 2.1 review will appear after the SDTM artifacts are generated.")).toBeInTheDocument();
   });
 
-  it("offers independent completed-job reruns for the selected domain", async () => {
-    const rerun = vi.spyOn(api, "rerunSdtmDomain").mockResolvedValue({} as never);
+  it("keeps completed-job agent guidance out of the workspace editor", async () => {
     renderEditor(plan, "job-1");
 
+    expect(screen.queryByLabelText(/agent guidance/i)).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("Variable & VLM"));
-    fireEvent.click(screen.getByRole("button", { name: "Rerun DM Variable & VLM" }));
-    await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "variable_mapping", "DM"));
+    expect(screen.queryByRole("button", { name: /Rerun DM Variable/i })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByText("Rule & code"));
     expect(screen.getByText("Generated R/SAS program artifacts are unavailable for DM. Save or rerun the reviewed mapping to build them.")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Rerun DM rules/code" }));
-    await waitFor(() => expect(rerun).toHaveBeenCalledWith("job-1", "rule_augmentation", "DM"));
+    expect(screen.getByText(/use the right-side agent when you want a review-gated mapping or rule revision/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Rerun DM rules/i })).not.toBeInTheDocument();
+  });
+
+  it("allows a reviewed domain program to be manually edited and saved", async () => {
+    vi.spyOn(api, "artifactText").mockResolvedValue("# Build DM\ndm <- raw_dm");
+    const update = vi.spyOn(api, "updateSdtmProgram").mockResolvedValue({} as Job);
+    const artifacts: Artifact[] = [
+      { id: "dm-r", name: "build-dm.R", media_type: "text/x-r-source", size_bytes: 25, sha256: "a".repeat(64), download_url: "/artifact/dm-r" },
+    ];
+    renderEditor(plan, "job-edit", artifacts);
+
+    fireEvent.click(screen.getByText("Rule & code"));
+    await screen.findByLabelText("DM R program");
+    fireEvent.click(screen.getByRole("button", { name: "Edit R" }));
+    const editor = screen.getByLabelText("DM R code editor");
+    const syntax = screen.getByTestId("DM R code editor syntax highlighting");
+    expect(syntax.querySelector('[data-token="comment"]')).toHaveTextContent("# Build DM");
+    expect(screen.getByText(/marks prior execution and validation results as historical/i)).toBeInTheDocument();
+    fireEvent.change(editor, { target: { value: "# Reviewed DM\ndm <- raw_dm |> dplyr::mutate(AGE = as.numeric(AGE))" } });
+    expect(syntax.querySelector('[data-token="function"]')).toHaveTextContent("mutate");
+    fireEvent.click(screen.getByRole("button", { name: "Save R" }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledWith(
+      "job-edit",
+      "DM",
+      "r",
+      "# Reviewed DM\ndm <- raw_dm |> dplyr::mutate(AGE = as.numeric(AGE))",
+      "a".repeat(64),
+    ));
+  });
+
+  it("makes the failed execution attempt selected for the right-side Rule & Code agent", async () => {
+    vi.spyOn(api, "sdtmExecutions").mockResolvedValue({ items: [{
+      attempt_id: "attempt-abcdef123456", parent_attempt_id: null, status: "failed",
+      created_at: "2026-11-01T12:00:00Z", completed_at: "2026-11-01T12:01:00Z",
+      program_hash: "c".repeat(64), runtime: { r: "4.4.1" }, exit_code: 1,
+      stdout: "", stderr: "object 'AGE' not found", outputs: [],
+      checks: [
+        { check_id: "domain-execution", status: "failed", message: "DM R program failed independently with exit 1.", domain: "DM" },
+        { check_id: "r-exit", status: "failed", message: "R exited with status 1", domain: "DM" },
+      ],
+      failure_classification: "runtime_error", repair_proposal: null,
+    }] });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId="job-execution"><SDTMReviewEditor jobId="job-execution" value={plan} onChange={vi.fn()} onSave={vi.fn()} saving={false} /><RevisionContextProbe /></ReviewDraftProvider></QueryClientProvider>);
+
+    fireEvent.click(screen.getByText("Execution"));
+
+    const evidence = await screen.findByRole("radio", { name: /Use as Rule & Code evidence/i });
+    expect(evidence).toBeChecked();
+    expect(screen.getByText(/Selected evidence:/i)).toHaveTextContent("attempt-abcdef123456");
+    expect(screen.getByText("Independent domain execution")).toBeInTheDocument();
+    expect(screen.getByText("DM · failed")).toBeInTheDocument();
+    expect(screen.getByText(/guidance, voice input, and scope in the right-side agent/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("SDTM revision context")).toHaveTextContent("Rule & Code repair · DM · attempt-abcdef123456"));
+    expect(screen.getByLabelText("SDTM revision context")).toHaveTextContent('"executionAttemptId":"attempt-abcdef123456"');
+  });
+
+  it("uses the full stage-review presentation for completed-job proposals", () => {
+    const proposalPlan = structuredClone(plan) as typeof plan & { datasets: Array<(typeof plan.datasets)[number] & { review_assumptions: string[]; review_unresolved_mappings: string[] }> };
+    proposalPlan.datasets[0].review_assumptions = ["DM.AGE remains numeric after source conversion."];
+    proposalPlan.datasets[0].review_unresolved_mappings = [];
+    proposalPlan.assumptions = ["DM.AGE remains numeric after source conversion."];
+    const reviewJob = {
+      id: "job-proposal", workflow: "sdtm", title: "Completed revision", status: "review_required", review_stage: "variable_mapping_domain",
+      result: proposalPlan, result_revision: "a".repeat(64), review_patch: {
+        transaction_id: "patch-1", status: "proposed", stage: "variable_mapping_domain", message: "Revise DM.AGE.",
+        scope: { paths: [], source_datasets: [], target_domains: [], variables: [{ domain: "DM", variable: "AGE", fields: ["mapping_expression"] }] },
+        baseline_revision: "a".repeat(64), proposed_revision: "b".repeat(64), conflicts: [], submitted_at: "2026-11-01T12:00:00Z", decided_at: null, reviewer: null,
+        operations: [{ path: "/datasets/domain=DM/variables/name=AGE/mapping_expression", before: "Direct", after: "as.numeric(.data[[\"AGE\"]])" }],
+      }, warnings: [], artifacts: [], error: null, created_at: "2026-11-01T12:00:00Z", updated_at: "2026-11-01T12:00:00Z", completed_at: null, sdtm_workbench: null,
+    } as Job;
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(<QueryClientProvider client={client}><ReviewDraftProvider jobId={reviewJob.id}><SDTMReviewEditor jobId={reviewJob.id} value={proposalPlan} onChange={vi.fn()} onSave={vi.fn()} saving={false} reviewJob={reviewJob} initialStage="variables" /></ReviewDraftProvider></QueryClientProvider>);
+
+    expect(screen.getByText("Variable & VLM mapping matrix")).toBeInTheDocument();
+    expect(screen.getByText(/Proposed overlay · 1 changes/i)).toBeInTheDocument();
+    expect(screen.getByText("DM assumptions")).toBeInTheDocument();
+    expect(screen.getByLabelText("DM feedback decision")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save reviewed mappings" })).not.toBeInTheDocument();
   });
 
   it("supports domain filtering, multiple annotations, domain styling, custom text, and click-to-edit", async () => {
