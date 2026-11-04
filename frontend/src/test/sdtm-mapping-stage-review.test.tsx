@@ -49,7 +49,7 @@ describe("SDTM mapping review gates", () => {
     expect(screen.getByText("Value-level metadata")).toBeInTheDocument();
     expect(screen.getAllByDisplayValue("AGE")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Close variable mapping dialog" }));
-    fireEvent.click(screen.getByText("Approve mappings and generate rules/code"));
+    fireEvent.click(screen.getByText("Approve"));
     expect(approve).toHaveBeenCalledWith(expect.objectContaining({
       datasets: [expect.objectContaining({ domain: "DM", variables: variable.datasets[0].variables })],
     }));
@@ -128,7 +128,7 @@ describe("SDTM mapping review gates", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit STUDYID mapping" }));
     expect(screen.getByText("0 source references · assigned")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Approve mappings and generate rules/code"));
+    fireEvent.click(screen.getByText("Approve"));
     expect(approve).toHaveBeenCalledWith(expect.objectContaining({
       datasets: [expect.objectContaining({ domain: "DM", variables: assigned.datasets[0].variables })],
     }));

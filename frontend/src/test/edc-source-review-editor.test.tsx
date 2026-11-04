@@ -43,7 +43,7 @@ describe("EDCSourceReviewEditor", () => {
     expect(screen.getAllByDisplayValue("SUBJID")).toHaveLength(1);
     expect(screen.getByDisplayValue("$.domains[0]")).toHaveAttribute("readonly");
     expect(screen.getByDisplayValue("$.domains[0].variables[0]")).toHaveAttribute("readonly");
-    fireEvent.click(screen.getByText("Approve source and begin SDTM mapping"));
+    fireEvent.click(screen.getByText("Approve"));
     expect(approve).toHaveBeenCalledOnce();
   });
 });

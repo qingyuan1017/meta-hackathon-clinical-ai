@@ -6,7 +6,7 @@ import { mobileApi } from "../api";
 import { StatusPill } from "../components/StatusPill";
 import { colors } from "../theme";
 import type { AgentEvent, AgentProgress, Job } from "../types";
-import { formatDate, getFeedbackDecisionSequence, humanize, isActive, renderValue, relativeTime, workflowIcons, workflowLabels } from "../utils";
+import { formatDate, humanize, isActive, renderValue, relativeTime, workflowIcons, workflowLabels } from "../utils";
 
 export function AgentRunScreen({ apiUrl, initialJob, onBack }: { apiUrl: string; initialJob: Job; onBack: () => void }) {
   const [job, setJob] = useState(initialJob);
@@ -80,8 +80,6 @@ export function AgentRunScreen({ apiUrl, initialJob, onBack }: { apiUrl: string;
 
   const canMessage = job.status === "review_required";
   const canSend = canMessage && message.trim().length > 0 && !sending;
-  const feedbackSequence = getFeedbackDecisionSequence(job.result, job.warnings, progress?.events ?? []);
-  const decisionsByEvent = new Map(feedbackSequence.entries.map((entry) => [entry.eventIndex, entry.decisions]));
 
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom", "left", "right"]}>
@@ -103,7 +101,7 @@ export function AgentRunScreen({ apiUrl, initialJob, onBack }: { apiUrl: string;
           <RunSummary job={job} progress={progress} />
           {error && <Pressable onPress={load} style={styles.errorBanner}><MaterialCommunityIcons name="alert-circle-outline" size={18} color={colors.rose300} /><Text style={styles.errorText}>{error} Tap to retry.</Text></Pressable>}
           {!progress && !error ? <View style={styles.loading}><ActivityIndicator color={colors.violet400} /><Text style={styles.loadingText}>Loading agent history…</Text></View>
-            : progress?.events.length ? <View style={styles.timeline}>{progress.events.map((event, index) => <View key={`${event.turn}-${event.type}-${index}`}><EventBubble event={event} />{(event.actor === "user" || event.type === "user_feedback") && <FeedbackDecisionCard decisions={decisionsByEvent.get(index) ?? []} />}</View>)}{feedbackSequence.unmatched.length > 0 && <FeedbackDecisionCard decisions={feedbackSequence.unmatched} title="Other current constraints" />}</View>
+            : progress?.events.length ? <View style={styles.timeline}>{progress.events.map((event, index) => <EventBubble key={`${event.turn}-${event.type}-${index}`} event={event} />)}</View>
             : progress ? <EmptyTrace /> : null}
 
           {job.status === "failed" && (
@@ -179,15 +177,6 @@ function Metric({ value, label }: { value: string; label: string }) {
   return <View style={styles.metric}><Text style={styles.metricValue}>{value}</Text><Text style={styles.metricLabel}>{label}</Text></View>;
 }
 
-function FeedbackDecisionCard({ decisions, title = "Recorded decision" }: { decisions: string[]; title?: string }) {
-  return (
-    <View accessibilityLabel={title} style={styles.decisionCard}>
-      <Text style={styles.decisionTitle}>{title}</Text>
-      {decisions.length ? decisions.map((item) => <View key={item} style={styles.decisionRow}><View style={styles.decisionBullet} /><Text style={styles.decisionText}>{item}</Text></View>) : <Text style={styles.decisionEmpty}>No unresolved constraint was recorded for this feedback in the current draft.</Text>}
-    </View>
-  );
-}
-
 function EventBubble({ event }: { event: AgentEvent }) {
   const [expanded, setExpanded] = useState(false);
   const isUser = event.actor === "user" || event.type === "user_feedback";
@@ -258,12 +247,6 @@ const styles = StyleSheet.create({
   metric: { flex: 1, alignItems: "center", paddingVertical: 11, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: colors.border },
   metricValue: { color: colors.zinc200, fontSize: 13, fontWeight: "700" },
   metricLabel: { marginTop: 3, color: colors.zinc600, fontSize: 8, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.8 },
-  decisionCard: { marginTop: 8, marginLeft: 42, borderRadius: 13, borderWidth: 1, borderColor: `${colors.amber500}45`, backgroundColor: `${colors.amber500}12`, padding: 12 },
-  decisionTitle: { color: colors.amber300, fontSize: 9, fontWeight: "800", textTransform: "uppercase", letterSpacing: 0.8 },
-  decisionRow: { marginTop: 8, flexDirection: "row", alignItems: "flex-start", gap: 8 },
-  decisionBullet: { width: 5, height: 5, marginTop: 6, borderRadius: 3, backgroundColor: colors.amber300 },
-  decisionText: { flex: 1, color: colors.zinc200, fontSize: 11, lineHeight: 17 },
-  decisionEmpty: { marginTop: 6, color: colors.zinc500, fontSize: 10, lineHeight: 15 },
   errorBanner: { marginTop: 14, flexDirection: "row", alignItems: "center", gap: 9, padding: 12, borderRadius: 14, borderWidth: 1, borderColor: `${colors.rose500}38`, backgroundColor: `${colors.rose500}12` },
   errorText: { flex: 1, color: colors.rose300, fontSize: 11, lineHeight: 16 },
   loading: { minHeight: 190, alignItems: "center", justifyContent: "center", gap: 9, padding: 26 },

@@ -211,7 +211,7 @@ export function SDTMVariableMappingReview({ value, onChange, onApprove, saving, 
         <VariableMappingMatrix variables={active.variables} inventory={envelope.source_spec.datasets} allowedDatasets={allowedSources} sourceRelationships={envelope.domain_mapping.domain_mappings.filter((item) => item.target_domain === active.domain).map((item) => ({ dataset: item.source_dataset, relationship: item.relationship }))} domain={active.domain} proposalOperations={activeProposalOperations} onChange={(variables) => updateDataset(plan, active.domain, update, "variables", variables)} />
       </div>
     </section>}
-    <ApprovalBar issues={issues} error={error} saving={saving} readyText="Every approved domain has a reviewable variable matrix." actionText="Approve mappings and generate rules/code" onApprove={() => onApprove(plan)} />
+    <ApprovalBar issues={issues} error={error} saving={saving} readyText="Every approved domain has a reviewable variable matrix." actionText="Approve" onApprove={() => onApprove(plan)} />
   </div>;
 }
 

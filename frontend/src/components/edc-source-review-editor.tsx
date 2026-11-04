@@ -184,7 +184,7 @@ export function EDCSourceReviewEditor({ value, onChange, onApprove, saving, erro
 
       <div className="sticky bottom-3 z-20 flex flex-col gap-3 rounded-xl border border-white/15 bg-[#161619]/95 p-4 shadow-2xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
         <div>{issues.length ? <p className="flex items-center gap-2 text-xs font-bold text-amber-200"><AlertTriangle size={15} />{issues[0]}{issues.length > 1 ? ` (+${issues.length - 1} more)` : ""}</p> : <p className="flex items-center gap-2 text-xs font-bold text-emerald-300"><Database size={15} />Source references are ready for backend validation.</p>}{error && <p className="mt-1 text-xs text-rose-300">{error}</p>}</div>
-        <Button type="button" variant="clinical" onClick={() => onApprove(specification)} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Approving and resuming…" : "Approve source and begin SDTM mapping"}</Button>
+        <Button type="button" variant="clinical" onClick={() => onApprove(specification)} disabled={saving || issues.length > 0}><Save size={16} />{saving ? "Approving and resuming…" : "Approve"}</Button>
       </div>
     </div>
   );
