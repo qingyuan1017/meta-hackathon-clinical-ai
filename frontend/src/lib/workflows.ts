@@ -54,7 +54,7 @@ export const workflows: WorkflowDefinition[] = [
     description: "Generate reviewed SDTM mappings and programs, then execute R against synthetic raw data and review validation evidence.",
     eyebrow: "04 · STANDARDIZE",
     experimental: false,
-    icon: Files,  
+    icon: Files,
     accepts: ".json,.xlsx,.docx,.txt,.md",
     filePrompt: "Select the required EDC JSON/XLSX and any optional protocol context. Raw data, CRF, and validation evidence have separate fields below.",
   },
